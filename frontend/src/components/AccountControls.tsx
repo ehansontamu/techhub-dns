@@ -2,13 +2,13 @@ import { useState } from "react";
 import { LogOut } from "lucide-react";
 
 import { useAuth } from "../contexts/AuthContext";
-import { getUserFirstName } from "../utils/userDisplay";
+import { getUserFirstAndLastName } from "../utils/userDisplay";
 import { Button } from "./ui/button";
 
 export function AccountControls() {
   const { user, logout } = useAuth();
   const [isLoggingOut, setIsLoggingOut] = useState(false);
-  const firstName = getUserFirstName(user, "there");
+  const displayName = getUserFirstAndLastName(user, "there");
 
   const handleLogout = async () => {
     setIsLoggingOut(true);
@@ -17,7 +17,7 @@ export function AccountControls() {
 
   return (
     <div className="ml-auto flex min-w-0 items-center gap-2 sm:gap-3">
-      <p className="truncate text-sm font-medium text-foreground">Hello {firstName}</p>
+      <p className="truncate text-sm font-medium text-foreground">{displayName}</p>
 
       <Button
         type="button"

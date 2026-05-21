@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { getUserDisplayName, getUserFirstName } from "./userDisplay";
+import { getUserDisplayName, getUserFirstAndLastName } from "./userDisplay";
 
 describe("getUserDisplayName", () => {
   it("prefers display_name", () => {
@@ -34,10 +34,10 @@ describe("getUserDisplayName", () => {
   });
 });
 
-describe("getUserFirstName", () => {
-  it("extracts first name from comma-separated display names", () => {
+describe("getUserFirstAndLastName", () => {
+  it("extracts first and last name from comma-separated display names", () => {
     expect(
-      getUserFirstName({
+      getUserFirstAndLastName({
         id: "1",
         email: "tech@example.com",
         display_name: "Cao, Kyler Anh-Khoa",
@@ -45,23 +45,23 @@ describe("getUserFirstName", () => {
         created_at: "2026-01-01T00:00:00Z",
         last_login_at: "2026-01-01T00:00:00Z",
       }),
-    ).toBe("Kyler");
+    ).toBe("Kyler Cao");
   });
 
-  it("falls back to the first token for simple display names", () => {
+  it("uses the first and last token for simple display names", () => {
     expect(
-      getUserFirstName({
+      getUserFirstAndLastName({
         id: "1",
         email: "tech@example.com",
-        display_name: "Kyler Cao",
+        display_name: "Kyler Anh-Khoa Cao",
         department: null,
         created_at: "2026-01-01T00:00:00Z",
         last_login_at: "2026-01-01T00:00:00Z",
       }),
-    ).toBe("Kyler");
+    ).toBe("Kyler Cao");
   });
 
   it("falls back to the provided default when there is no display name", () => {
-    expect(getUserFirstName(null, "there")).toBe("there");
+    expect(getUserFirstAndLastName(null, "there")).toBe("there");
   });
 });
