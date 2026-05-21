@@ -246,8 +246,18 @@ export default function Preparation() {
         [selectedPrepOrders]
     );
 
-    const selectedTagCandidateSet = useMemo(() => new Set(selectedTagCandidates), [selectedTagCandidates]);
     const selectedPrepOrderSet = useMemo(() => new Set(selectedPrepOrders), [selectedPrepOrders]);
+
+    const selectedPrepOrderDisplayIds = useMemo(
+        () =>
+            prepOrders
+                .filter((order) => selectedPrepOrderSet.has(order.id))
+                .map((order) => order.inflow_order_id || order.id)
+                .filter(Boolean),
+        [prepOrders, selectedPrepOrderSet],
+    );
+
+    const selectedTagCandidateSet = useMemo(() => new Set(selectedTagCandidates), [selectedTagCandidates]);
 
     const selectableTagCount = useMemo(() => {
         let count = 0;
@@ -681,14 +691,11 @@ export default function Preparation() {
                                                     <TableHead className="w-10" />
                                                     <TableHead className="whitespace-nowrap">Order</TableHead>
                                                     <TableHead>Recipient</TableHead>
-                                                    <TableHead>Tagging</TableHead>
                                                 </TableRow>
                                             </TableHeader>
                                             <TableBody>
                                                 {prepOrders.map((order) => {
                                                     const checked = selectedPrepOrderSet.has(order.id);
-                                                    const tagLabel = order.tagged_at ? "Tagged" : "Needs tagging";
-                                                    const tagVariant = order.tagged_at ? "secondary" : "outline";
 
                                                     return (
                                                         <TableRow
@@ -735,11 +742,6 @@ export default function Preparation() {
                                                                     ) : null}
                                                                 </div>
                                                             </TableCell>
-                                                            <TableCell>
-                                                                <Badge variant={tagVariant} className="whitespace-nowrap">
-                                                                    {tagLabel}
-                                                                </Badge>
-                                                            </TableCell>
                                                         </TableRow>
                                                     );
                                                 })}
@@ -754,9 +756,9 @@ export default function Preparation() {
                             <div className="space-y-4">
                                 <div className="rounded-lg border bg-muted/30 p-4 text-sm text-muted-foreground">
                                     <p className="text-foreground font-medium">{selectedPrepOrderIds.length} selected</p>
-                                    {selectedPrepOrderIds.length > 0 ? (
+                                    {selectedPrepOrderDisplayIds.length > 0 ? (
                                         <p className="mt-1 text-xs text-muted-foreground break-words">
-                                            {selectedPrepOrderIds.join(", ")}
+                                            {selectedPrepOrderDisplayIds.join(", ")}
                                         </p>
                                     ) : null}
                                 </div>
@@ -841,7 +843,7 @@ export default function Preparation() {
                                         ) : (
                                             <PackageCheck className="mr-2 h-4 w-4" />
                                         )}
-                                        {batchMutation.isPending ? "Preparing..." : "Generate picklists"}
+                                        {batchMutation.isPending ? "Preparing..." : "Generate"}
                                     </Button>
                                 </div>
                             </div>
