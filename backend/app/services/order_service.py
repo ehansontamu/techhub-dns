@@ -94,6 +94,20 @@ class OrderService:
 
         return InflowService().requires_asset_tags(order.inflow_data)
 
+    @staticmethod
+    def _apply_order_search(query, search: str):
+        like = f"%{search}%"
+        return query.filter(
+            or_(
+                Order.inflow_order_id.ilike(like),
+                Order.inflow_sales_order_id.ilike(like),
+                Order.recipient_name.ilike(like),
+                Order.delivery_location.ilike(like),
+                Order.po_number.ilike(like),
+                Order.assigned_deliverer.ilike(like),
+            )
+        )
+
     def _apply_delivery_location_overrides(
         self, inflow_data: Dict[str, Any], delivery_location: str
     ) -> str:
@@ -865,9 +879,7 @@ class OrderService:
             query = query.filter(Order.status == status.value)
 
         if search:
-            query = query.filter(
-                Order.inflow_order_id.ilike(f"%{search}%"),
-            )
+            query = self._apply_order_search(query, search.strip())
 
         total = query.count()
         orders = (

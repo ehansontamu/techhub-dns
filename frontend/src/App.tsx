@@ -8,6 +8,7 @@ import { ProtectedRoute } from "./components/ProtectedRoute";
 import { Sidebar } from "./components/Sidebar";
 import { Skeleton } from "./components/Skeleton";
 import { Breadcrumbs } from "./components/Breadcrumbs";
+import { AccountControls } from "./components/AccountControls";
 import { SyncHealthBanner } from "./components/SyncHealthBanner";
 import { OfflineBanner } from "./components/OfflineBanner";
 
@@ -117,8 +118,11 @@ function AppContent() {
 
             <main className={`transition-[margin] duration-300 lg:ml-[var(--sidebar-width)] ${isOrdersRoute ? "flex h-screen flex-col overflow-hidden" : "min-h-screen"}`}>
                 <div className="sticky top-0 z-30 h-12 border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
-                    <div className="flex h-full items-center px-4 pl-16 sm:px-6 lg:px-8 lg:pl-8">
-                        <Breadcrumbs />
+                    <div className="flex h-full min-w-0 items-center gap-4 px-4 pl-16 sm:px-6 lg:px-8 lg:pl-8">
+                        <div className="min-w-0 flex-1">
+                            <Breadcrumbs />
+                        </div>
+                        <AccountControls />
                     </div>
                 </div>
 

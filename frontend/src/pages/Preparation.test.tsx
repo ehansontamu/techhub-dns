@@ -64,6 +64,18 @@ describe("Preparation", () => {
                     tagged_at: "2026-05-20T12:10:00Z",
                     picklist_generated_at: null,
                 },
+                {
+                    id: "prep-2",
+                    inflow_order_id: "TH2002",
+                    recipient_name: "Blocked User",
+                    delivery_location: "Main Lab",
+                    status: OrderStatus.PICKED,
+                    created_at: "2026-05-20T12:00:00Z",
+                    updated_at: "2026-05-20T12:05:00Z",
+                    tagged_at: null,
+                    asset_tag_required: true,
+                    picklist_generated_at: null,
+                },
             ],
             total: 1,
         });
@@ -103,7 +115,8 @@ describe("Preparation", () => {
         expect(await screen.findByText("Preparation")).toBeInTheDocument();
         expect(await screen.findByText("TH2001")).toBeInTheDocument();
         expect(screen.getByText("Tag Request Actions")).toBeInTheDocument();
-        expect(screen.getByText("Batch Prep Queue")).toBeInTheDocument();
+        expect(screen.getByText("Generate Picklist & Order Details")).toBeInTheDocument();
+        expect(screen.queryByText("TH2002")).not.toBeInTheDocument();
 
         fireEvent.click(screen.getByLabelText("Select TH2001"));
 

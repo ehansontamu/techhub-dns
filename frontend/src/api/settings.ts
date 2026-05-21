@@ -31,6 +31,21 @@ export interface SyncHealthResponse {
     };
 }
 
+export interface SystemFeatureStatus {
+    name: string;
+    enabled: boolean;
+    configured: boolean;
+    status: "active" | "warning" | "disabled" | "error";
+    details: string;
+}
+
+export interface SystemStatusResponse {
+    saml_auth: SystemFeatureStatus;
+    graph_api: SystemFeatureStatus;
+    sharepoint: SystemFeatureStatus;
+    inflow_sync: SystemFeatureStatus;
+}
+
 export interface PrintJobRecord {
     id: string;
     order_id: string;
@@ -108,6 +123,14 @@ export const settingsApi = {
      */
     async getSyncHealth(): Promise<SyncHealthResponse> {
         const response = await apiClient.get("/system/sync-health");
+        return response.data;
+    },
+
+    /**
+     * Get backend feature status diagnostics.
+     */
+    async getSystemStatus(): Promise<SystemStatusResponse> {
+        const response = await apiClient.get("/system/status");
         return response.data;
     },
 
