@@ -31,7 +31,7 @@ This application powers the `/login` button and should show Microsoft's account 
 
 1. Copy the Application (client) ID, Directory (tenant) ID, and a client secret into the backend environment.
 2. The backend will use the Entra authorization endpoint with `prompt=select_account`.
-3. The same client credentials can also be used for Graph-backed backend features if you want one app registration for both.
+3. Keep this app separate from the Graph/SharePoint service principal so login and backend storage permissions do not collide.
 
 ## 2. Legacy SAML Application (Fallback)
 
@@ -134,7 +134,12 @@ SAML_IDP_CERT_PATH=certs/saml_idp_cert.crt
 SAML_SP_ENTITY_ID=https://techhub.pythonanywhere.com
 SAML_ACS_URL=https://techhub.pythonanywhere.com/auth/saml/callback
 
-# OIDC App Registration / Service Principal Configuration (Backend)
+# OIDC app registration
+OIDC_TENANT_ID=<Directory (tenant) ID>
+OIDC_CLIENT_ID=<Application (client) ID>
+OIDC_CLIENT_SECRET=<Client Secret Value>
+
+# Graph / SharePoint service principal
 AZURE_TENANT_ID=<Directory (tenant) ID>
 AZURE_CLIENT_ID=<Application (client) ID>
 AZURE_CLIENT_SECRET=<Client Secret Value>
@@ -203,7 +208,7 @@ This bypass is only honored in development mode and should remain disabled in pr
 | Certificate error | Verify certificate path and file exists |
 | Graph API 401 | Check client secret not expired |
 | Graph API 403 | Admin consent not granted for permissions |
-| "App not found in tenant" | Verify AZURE_TENANT_ID is correct |
+| "App not found in tenant" | Verify OIDC_TENANT_ID is correct |
 
 ## Security Notes
 

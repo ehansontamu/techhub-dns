@@ -213,7 +213,7 @@ See `.env.example` for all configuration options. Key sections:
 |---------|-----------|
 | **Database** | `DATABASE_URL` |
 | **Inflow** | `INFLOW_API_URL`, `INFLOW_API_KEY`, `INFLOW_COMPANY_ID` |
-| **Authentication** | `SAML_*` (user login), `AZURE_*` (service principal) |
+| **Authentication** | `SAML_*` (legacy fallback login), `OIDC_*` (user login), `AZURE_*` (service principal) |
 | **SharePoint** | `SHAREPOINT_SITE_URL`, `SHAREPOINT_FOLDER_PATH` |
 | **Features** | `TEAMS_RECIPIENT_NOTIFICATIONS_ENABLED`, `SMTP_ENABLED` |
 

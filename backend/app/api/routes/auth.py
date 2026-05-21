@@ -62,9 +62,9 @@ def _sanitize_relay_state(relay_state: str | None, request_host: str | None) -> 
 
 def _oidc_is_configured() -> bool:
     return bool(
-        settings.azure_tenant_id
-        and settings.azure_client_id
-        and settings.azure_client_secret
+        settings.oidc_tenant_id
+        and settings.oidc_client_id
+        and settings.oidc_client_secret
     )
 
 
@@ -102,11 +102,11 @@ def _build_oidc_client() -> msal.ConfidentialClientApplication:
             details={"reason": "missing_required_settings"},
         )
 
-    authority = f"https://login.microsoftonline.com/{settings.azure_tenant_id}"
+    authority = f"https://login.microsoftonline.com/{settings.oidc_tenant_id}"
     return msal.ConfidentialClientApplication(
-        settings.azure_client_id,
+        settings.oidc_client_id,
         authority=authority,
-        client_credential=settings.azure_client_secret,
+        client_credential=settings.oidc_client_secret,
     )
 
 
@@ -147,9 +147,9 @@ def _oidc_login_debug_context() -> dict:
         redirect_uri = None
 
     return {
-        "tenant_configured": bool(settings.azure_tenant_id),
-        "client_configured": bool(settings.azure_client_id),
-        "secret_configured": bool(settings.azure_client_secret),
+        "tenant_configured": bool(settings.oidc_tenant_id),
+        "client_configured": bool(settings.oidc_client_id),
+        "secret_configured": bool(settings.oidc_client_secret),
         "frontend_url": settings.frontend_url,
         "request_host": request.host,
         "request_scheme": request.scheme,
