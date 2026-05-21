@@ -5,7 +5,7 @@ import type { SyncHealthResponse, SystemStatusResponse } from "../../api/setting
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Card, CardContent, CardDescription, CardHeader } from "../ui/card";
-import { formatStatusLabel, getStatusBadgeVariant } from "./utils";
+import { dedupeByName, formatStatusLabel, getStatusBadgeVariant } from "./utils";
 
 interface SettingsHeaderProps {
     syncHealth?: SyncHealthResponse | null;
@@ -14,12 +14,12 @@ interface SettingsHeaderProps {
 
 export function SettingsHeader({ syncHealth, systemStatus }: SettingsHeaderProps) {
     const statusItems = systemStatus
-        ? [
+        ? dedupeByName([
               systemStatus.saml_auth,
               systemStatus.graph_api,
               systemStatus.sharepoint,
               systemStatus.inflow_sync,
-          ]
+          ])
         : [];
 
     const activeCount = statusItems.filter((item) => item.status === "active").length;

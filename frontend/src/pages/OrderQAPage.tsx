@@ -5,10 +5,12 @@ import { useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { useAuth } from "../contexts/AuthContext";
 import { getUserDisplayName } from "../utils/userDisplay";
+import { isLocalDelivery } from "../utils/location";
 import { ordersApi } from "../api/orders";
 import { getOrderDetailQueryOptions, invalidateOrderQueries } from "../queries/orders";
 import type { OrderDetail } from "../types/order";
 import { formatToCentralTime } from "../utils/timezone";
+import { getOrderPickerLabel, isOrderPickedByUser } from "../utils/qaEligibility";
 
 type QAFormState = {
     orderNumber: string;
@@ -108,6 +110,8 @@ export default function OrderQAPage() {
     const order = orderQuery.data ?? null;
     const loading = orderQuery.isPending;
     const isParentPartialLeg = Boolean(order?.remainder_order_id && !order?.parent_order_id);
+    const pickedByCurrentUser = order ? isOrderPickedByUser(order, user) : false;
+    const pickerLabel = order ? getOrderPickerLabel(order) : "Not recorded";
 
     useEffect(() => {
         if (order) {
@@ -176,6 +180,11 @@ export default function OrderQAPage() {
     const submitQA = async () => {
         if (!order) return;
 
+        if (pickedByCurrentUser) {
+            toast.error("You cannot QA an order you picked.");
+            return;
+        }
+
         if (!isFormComplete(form)) {
             toast.error("Please complete all required QA fields before submitting.");
             return;
@@ -217,6 +226,13 @@ export default function OrderQAPage() {
     if (!order) return null;
 
     const hasIncompleteSteps = verificationSteps.some((step) => !form[step.id as keyof QAFormState]);
+    const qaMethod = order.qa_method?.trim().toLowerCase();
+    const routingMethod =
+        qaMethod === "delivery" || qaMethod === "shipping"
+            ? qaMethod.charAt(0).toUpperCase() + qaMethod.slice(1)
+            : isLocalDelivery(order)
+                ? "Delivery"
+                : "Shipping";
 
     return (
         <div className="h-full min-h-0 overflow-y-auto bg-background px-4 py-8">
@@ -232,6 +248,14 @@ export default function OrderQAPage() {
                     {isParentPartialLeg && (
                         <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
                             This is the remainder parent leg. QA can be completed here as a separate delivery order.
+                        </div>
+                    )}
+                    <div className="rounded-2xl border border-border bg-card px-4 py-3 text-sm text-foreground">
+                        Picked by <span className="font-semibold">{pickerLabel}</span>.
+                    </div>
+                    {pickedByCurrentUser && (
+                        <div className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+                            You picked this order, so QA must be completed by another logged-in user.
                         </div>
                     )}
                 </div>
@@ -276,6 +300,7 @@ export default function OrderQAPage() {
                                                 type="checkbox"
                                                 id={step.id}
                                                 checked={checked}
+                                                disabled={pickedByCurrentUser}
                                                 onChange={() => setForm((prev) => ({ ...prev, [step.id]: !checked }))}
                                                 className="mt-1 h-5 w-5 rounded border-border/70 text-accent focus:ring-accent"
                                             />
@@ -300,8 +325,8 @@ export default function OrderQAPage() {
                             <label className="text-sm font-medium text-muted-foreground">
                                 Routing
                             </label>
-                            <div className="rounded-xl border border-border bg-muted px-3 py-2 text-sm text-muted-foreground">
-                                Determined automatically from the order's Inflow shipping data.
+                            <div className="rounded-xl border border-border bg-muted px-3 py-2 text-sm text-foreground">
+                                <span className="font-semibold">{routingMethod}</span>
                             </div>
                         </div>
                     </div>
@@ -322,14 +347,14 @@ export default function OrderQAPage() {
                             <button
                                 type="button"
                                 onClick={submitQA}
-                                disabled={submitQaMutation.isPending || !isFormComplete(form)}
+                                disabled={submitQaMutation.isPending || pickedByCurrentUser || !isFormComplete(form)}
                                 className={`rounded-2xl px-5 py-2 text-sm font-semibold transition-colors ${
-                                    submitQaMutation.isPending || !isFormComplete(form)
+                                    submitQaMutation.isPending || pickedByCurrentUser || !isFormComplete(form)
                                         ? "bg-muted text-muted-foreground/70 cursor-not-allowed"
                                         : "bg-primary text-primary-foreground hover:bg-maroon-800 hover:text-white"
                                 }`}
                             >
-                                {submitQaMutation.isPending ? "Submitting..." : "Submit QA Checklist"}
+                                {pickedByCurrentUser ? "QA unavailable" : submitQaMutation.isPending ? "Submitting..." : "Submit QA Checklist"}
                             </button>
                         </div>
                     </div>

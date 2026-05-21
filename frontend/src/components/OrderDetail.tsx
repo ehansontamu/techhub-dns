@@ -542,8 +542,8 @@ export default function OrderDetail({
             <h3 className="text-lg font-semibold tracking-tight">{productTableView.title}</h3>
             <p className="text-sm text-muted-foreground">{productTableView.description}</p>
           </div>
-          <div className="mt-4 rounded-lg border border-border">
-            <Table>
+          <div className="mt-4 overflow-x-auto rounded-lg border border-border">
+            <Table className="min-w-[720px]">
               <TableHeader>
                 <TableRow>
                   <TableHead className="w-[60px]">#</TableHead>

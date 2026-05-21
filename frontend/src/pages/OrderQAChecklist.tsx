@@ -3,6 +3,8 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { Order, OrderStatus } from "../types/order";
 import { ordersApi } from "../api/orders";
+import { useAuth } from "../contexts/AuthContext";
+import { getOrderPickerLabel, isOrderPickedByUser } from "../utils/qaEligibility";
 import { isValidOrderId } from "../utils/orderIds";
 
 function safeArray<T>(value: unknown): T[] {
@@ -26,6 +28,7 @@ const storageKey = (orderId: string) => `order-qa-checklist-v3:${orderId}`;
 export default function OrderQAChecklist() {
     const navigate = useNavigate();
     const location = useLocation();
+    const { user } = useAuth();
 
     const openOrder = (orderId?: string) => {
         if (!isValidOrderId(orderId)) {
@@ -87,6 +90,13 @@ export default function OrderQAChecklist() {
     }, [orders]);
 
     const displayOrders = useMemo(() => safeArray<Order>(orders), [orders]);
+    const qaCandidateOrders = useMemo(
+        () =>
+            displayOrders
+                .filter((o) => !completedMap.has(o.id))
+                .filter((o) => ![OrderStatus.DELIVERED, OrderStatus.IN_DELIVERY, OrderStatus.SHIPPING].includes(o.status)),
+        [completedMap, displayOrders],
+    );
 
     return (
         <div className="container mx-auto p-4 sm:p-6">
@@ -127,18 +137,16 @@ export default function OrderQAChecklist() {
                                     <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground">Order</th>
                                     <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground">Recipient</th>
                                     <th className="hidden px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground lg:table-cell">Location</th>
+                                    <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground">Picked By</th>
                                     <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground">QA</th>
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-border/70">
-                                {displayOrders
-                                    .filter((o) => !completedMap.has(o.id))
-                                    .filter((o) => {
-                                        return ![OrderStatus.DELIVERED, OrderStatus.IN_DELIVERY, OrderStatus.SHIPPING].includes(o.status);
-                                    })
-                                    .map((o) => {
+                                {qaCandidateOrders.map((o) => {
                                         const submittedAt = completedMap.get(o.id) || null;
                                         const qaButtonLabel = submittedAt ? "Edit QA" : "Perform QA"; // clearer label
+                                        const pickedByCurrentUser = isOrderPickedByUser(o, user);
+                                        const pickerLabel = getOrderPickerLabel(o);
 
                                         return (
                                         <tr key={o.id} className="transition-colors hover:bg-muted/30">
@@ -154,29 +162,38 @@ export default function OrderQAChecklist() {
                                             </td>
                                             <td className="px-3 py-2 text-sm text-foreground">{o.recipient_name || "N/A"}</td>
                                             <td className="hidden px-3 py-2 text-sm text-foreground lg:table-cell">{o.delivery_location || "N/A"}</td>
+                                            <td className="px-3 py-2 text-sm text-foreground">
+                                                <div className="max-w-[12rem] truncate" title={pickerLabel}>
+                                                    {pickerLabel}
+                                                </div>
+                                            </td>
                                             <td className="px-3 py-2 text-sm">
                                                 <button
                                                     type="button"
                                                     onClick={() => openQa(o.inflow_order_id || o.id)}
-                                                    disabled={loadingOrders}
-                                                    className={`flex min-h-[44px] items-center gap-2 rounded-md bg-accent px-3 py-2 text-sm text-accent-foreground transition-colors hover:bg-accent/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ${loadingOrders ? "opacity-75 cursor-not-allowed" : ""}`}
+                                                    disabled={loadingOrders || pickedByCurrentUser}
+                                                    title={pickedByCurrentUser ? "You cannot QA an order you picked." : undefined}
+                                                    className={`flex min-h-[44px] items-center gap-2 rounded-md px-3 py-2 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ${
+                                                        loadingOrders || pickedByCurrentUser
+                                                            ? "cursor-not-allowed bg-muted text-muted-foreground opacity-80"
+                                                            : "bg-accent text-accent-foreground hover:bg-accent/90"
+                                                    }`}
                                                 >
-                                                    {qaButtonLabel}
-                                                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
-                                                        <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3" />
-                                                    </svg>
+                                                    {pickedByCurrentUser ? "Picked by you" : qaButtonLabel}
+                                                    {!pickedByCurrentUser && (
+                                                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
+                                                            <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3" />
+                                                        </svg>
+                                                    )}
                                                 </button>
                                             </td>
                                         </tr>
                                     );
                                 })}
 
-                                {displayOrders
-                                    .filter((o) => !completedMap.has(o.id))
-                                    .filter((o) => ![OrderStatus.DELIVERED, OrderStatus.IN_DELIVERY, OrderStatus.SHIPPING].includes(o.status))
-                                    .length === 0 && (
+                                {qaCandidateOrders.length === 0 && (
                                         <tr>
-                                            <td className="px-3 py-6 text-center text-sm text-muted-foreground" colSpan={4}>
+                                            <td className="px-3 py-6 text-center text-sm text-muted-foreground" colSpan={5}>
                                                 {displayOrders.length === 0
                                                     ? "No orders need QA at this time."
                                                     : "All eligible orders have completed QA."}

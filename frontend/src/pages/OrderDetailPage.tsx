@@ -357,7 +357,7 @@ export default function OrderDetailPage() {
     }
 
     return (
-        <div className="h-full">
+        <div className="h-full min-h-0 overflow-y-auto lg:overflow-hidden">
             <div className="lg:flex lg:h-full lg:items-stretch lg:overflow-hidden">
                 <aside className="hidden lg:block lg:h-full lg:w-80 lg:shrink-0 lg:border-r lg:border-border/60">
                     <OrdersRail
@@ -370,7 +370,7 @@ export default function OrderDetailPage() {
                         />
                 </aside>
 
-                <div className="min-w-0 flex-1 px-4 pt-4 sm:px-6 sm:pt-6 lg:px-8 lg:pt-6 lg:h-full lg:min-h-0 lg:overflow-y-auto">
+                <div className="min-w-0 flex-1 px-4 pt-4 pb-6 sm:px-6 sm:pt-6 lg:px-8 lg:pt-6 lg:h-full lg:min-h-0 lg:overflow-y-auto">
                     <div className="lg:hidden space-y-3">
                         <Button
                             type="button"
@@ -402,39 +402,39 @@ export default function OrderDetailPage() {
                         </Button>
                     </div>
 
-                <div className="lg:hidden">
-                    <Button type="button" variant="outline" className="min-h-11 gap-2 px-4" onClick={handleBack} disabled={detailLoading}>
-                        <ArrowLeft className="h-4 w-4" />
-                        Back
-                    </Button>
-                </div>
-                {order ? (
-                    <OrderDetailComponent
-                        order={order}
-                        auditLogs={auditLogs}
-                        notifications={notifications}
-                        onStatusChange={handleStatusChange}
-                        onRollbackStatus={handleRollbackStatus}
-                        onTagOrder={handleTagOrder}
-                        onRequestTags={handleRequestTags}
-                        onGeneratePicklist={handleGeneratePicklist}
-                        generatingPicklist={generatePicklistMutation.isPending}
-                    />
-                ) : (
-                    <SkeletonCard lines={4} />
-                )}
-                {order && transitioningStatus && (
-                    <StatusTransition
-                        currentStatus={order.status}
-                        newStatus={transitioningStatus.newStatus}
-                        requireReason={transitioningStatus.requireReason}
-                        title={transitioningStatus.title}
-                        confirmLabel={transitioningStatus.confirmLabel}
-                        onConfirm={(reason) => performTransition(transitioningStatus.action, transitioningStatus.newStatus, reason)}
-                        onCancel={() => setTransitioningStatus(null)}
-                        submitting={updateStatusMutation.isPending || rollbackStatusMutation.isPending}
-                    />
-                )}
+                    <div className="lg:hidden">
+                        <Button type="button" variant="outline" className="min-h-11 gap-2 px-4" onClick={handleBack} disabled={detailLoading}>
+                            <ArrowLeft className="h-4 w-4" />
+                            Back
+                        </Button>
+                    </div>
+                    {order ? (
+                        <OrderDetailComponent
+                            order={order}
+                            auditLogs={auditLogs}
+                            notifications={notifications}
+                            onStatusChange={handleStatusChange}
+                            onRollbackStatus={handleRollbackStatus}
+                            onTagOrder={handleTagOrder}
+                            onRequestTags={handleRequestTags}
+                            onGeneratePicklist={handleGeneratePicklist}
+                            generatingPicklist={generatePicklistMutation.isPending}
+                        />
+                    ) : (
+                        <SkeletonCard lines={4} />
+                    )}
+                    {order && transitioningStatus && (
+                        <StatusTransition
+                            currentStatus={order.status}
+                            newStatus={transitioningStatus.newStatus}
+                            requireReason={transitioningStatus.requireReason}
+                            title={transitioningStatus.title}
+                            confirmLabel={transitioningStatus.confirmLabel}
+                            onConfirm={(reason) => performTransition(transitioningStatus.action, transitioningStatus.newStatus, reason)}
+                            onCancel={() => setTransitioningStatus(null)}
+                            submitting={updateStatusMutation.isPending || rollbackStatusMutation.isPending}
+                        />
+                    )}
                 </div>
             </div>
         </div>
