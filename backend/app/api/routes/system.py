@@ -1574,12 +1574,17 @@ def get_sync_health():
     """Get webhook health signals safe for non-admin users."""
 
     now = datetime.now(timezone.utc)
+    stale_threshold_minutes = 120
     inflow = {
         "webhook_enabled": bool(settings.inflow_webhook_enabled),
         "webhook_failed": False,
         "last_webhook_received_at": None,
+        "webhook_last_received_age_minutes": None,
         "webhook_registered": False,
         "webhook_matches_config": False,
+        "webhook_secret_matches_config": False,
+        "webhook_stale": False,
+        "webhook_stale_reason": None,
     }
 
     if settings.inflow_webhook_enabled:
@@ -1599,15 +1604,44 @@ def get_sync_health():
             inflow["webhook_failed"] = bool(
                 webhook and webhook.status == WebhookStatus.failed
             )
-            inflow["last_webhook_received_at"] = _to_utc_iso_z(
-                getattr(webhook, "last_received_at", None)
-            )
             inflow["webhook_registered"] = bool(webhook)
-            if webhook and settings.inflow_webhook_url:
-                inflow["webhook_matches_config"] = (
-                    webhook.url.strip().rstrip("/")
-                    == settings.inflow_webhook_url.strip().rstrip("/")
+            if webhook:
+                inflow["last_webhook_received_at"] = _to_utc_iso_z(
+                    getattr(webhook, "last_received_at", None)
                 )
+                if webhook.last_received_at:
+                    age_minutes = int(
+                        (now - webhook.last_received_at.replace(tzinfo=timezone.utc))
+                        .total_seconds()
+                        // 60
+                    )
+                    inflow["webhook_last_received_age_minutes"] = age_minutes
+                    if age_minutes >= stale_threshold_minutes:
+                        inflow["webhook_stale"] = True
+                        inflow["webhook_stale_reason"] = "stale_receipts"
+                else:
+                    inflow["webhook_stale"] = True
+                    inflow["webhook_stale_reason"] = "never_received"
+
+                if settings.inflow_webhook_url:
+                    inflow["webhook_matches_config"] = (
+                        webhook.url.strip().rstrip("/")
+                        == settings.inflow_webhook_url.strip().rstrip("/")
+                    )
+                    if not inflow["webhook_matches_config"]:
+                        inflow["webhook_stale"] = True
+                        inflow["webhook_stale_reason"] = "url_mismatch"
+
+                if settings.inflow_webhook_secret and webhook.secret:
+                    inflow["webhook_secret_matches_config"] = (
+                        webhook.secret == settings.inflow_webhook_secret
+                    )
+                    if not inflow["webhook_secret_matches_config"]:
+                        inflow["webhook_stale"] = True
+                        inflow["webhook_stale_reason"] = "secret_mismatch"
+                elif settings.inflow_webhook_secret and not webhook.secret:
+                    inflow["webhook_stale"] = True
+                    inflow["webhook_stale_reason"] = "missing_secret"
         finally:
             db.close()
 

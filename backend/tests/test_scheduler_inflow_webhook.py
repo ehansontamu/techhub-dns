@@ -1,6 +1,7 @@
 import os
 import sys
 from types import SimpleNamespace
+from datetime import datetime, timedelta
 from unittest.mock import Mock, patch
 
 os.environ.setdefault("DATABASE_URL", "sqlite:///./test.db")
@@ -20,6 +21,9 @@ class _FakeQuery:
 
     def all(self):
         return self._records
+
+    def first(self):
+        return self._records[0] if self._records else None
 
     def update(self, values):
         self.update_calls.append(values)
@@ -59,6 +63,8 @@ class _FakeInflowService:
         }
         self.list_called = 0
         self.register_called = 0
+        self.delete_called = 0
+        self.deleted_args = []
 
     async def list_webhooks(self):
         self.list_called += 1
@@ -69,11 +75,20 @@ class _FakeInflowService:
         self.register_args = (webhook_url, events)
         return self.register_result
 
+    async def delete_webhook(self, webhook_id):
+        self.delete_called += 1
+        self.deleted_args.append(webhook_id)
+        return True
+
 
 def test_auto_register_recreates_missing_remote_webhook():
     target_url = "https://example.com/webhook"
     local_db = _FakeDb(
-        records=[SimpleNamespace(url=target_url, webhook_id="local-webhook-1")]
+        records=[
+            SimpleNamespace(
+                url=target_url, webhook_id="local-webhook-1", secret="secret-1"
+            )
+        ]
     )
     update_db = _FakeDb()
     service = _FakeInflowService(remote_webhooks=[])
@@ -97,10 +112,15 @@ def test_auto_register_recreates_missing_remote_webhook():
 
 def test_auto_register_skips_duplicate_remote_webhook():
     target_url = "https://example.com/webhook"
-    local_db = _FakeDb(records=[])
+    local_db = _FakeDb(
+        records=[SimpleNamespace(url=target_url, webhook_id="local-webhook-1", secret="secret-1")]
+    )
     update_db = _FakeDb()
     service = _FakeInflowService(
-        remote_webhooks=[{"id": "remote-webhook-1", "url": target_url}]
+        remote_webhooks=[
+            {"id": "remote-webhook-1", "url": target_url, "events": ["salesOrder.updated"]},
+            {"id": "remote-webhook-2", "url": target_url, "events": ["salesOrder.updated"]},
+        ]
     )
     get_db_session = Mock(side_effect=[local_db, update_db])
 
@@ -115,7 +135,40 @@ def test_auto_register_skips_duplicate_remote_webhook():
 
     assert service.list_called == 1
     assert service.register_called == 0
+    assert service.delete_called == 1
+    assert service.deleted_args == ["remote-webhook-2"]
     assert update_db.added, "expected the existing remote webhook to be recorded locally"
+    assert update_db.commits == 1
+
+
+def test_auto_register_reconciles_secret_drift():
+    target_url = "https://example.com/webhook"
+    local_db = _FakeDb(
+        records=[SimpleNamespace(url=target_url, webhook_id="local-webhook-1", secret="stale-secret")]
+    )
+    update_db = _FakeDb()
+    service = _FakeInflowService(
+        remote_webhooks=[
+            {"id": "remote-webhook-1", "url": target_url, "events": ["salesOrder.updated"]}
+        ],
+        register_result={"webHookSubscriptionId": "remote-webhook-2", "url": target_url},
+    )
+    get_db_session = Mock(side_effect=[local_db, update_db])
+
+    with (
+        patch("app.scheduler.get_db_session", get_db_session),
+        patch("app.scheduler.InflowService", return_value=service),
+        patch("app.scheduler.settings.inflow_webhook_url", target_url),
+        patch("app.scheduler.settings.inflow_webhook_events", ["orderUpdated"]),
+        patch("app.scheduler.settings.inflow_webhook_secret", "secret-1"),
+    ):
+        auto_register_inflow_webhook()
+
+    assert service.list_called == 1
+    assert service.delete_called == 1
+    assert service.register_called == 1
+    assert service.register_args == (target_url, ["orderUpdated"])
+    assert update_db.added, "expected a refreshed local webhook row after secret drift"
     assert update_db.commits == 1
 
 
