@@ -2,21 +2,13 @@ import { useState } from "react";
 import { LogOut } from "lucide-react";
 
 import { useAuth } from "../contexts/AuthContext";
-import { getUserDisplayName } from "../utils/userDisplay";
+import { getUserFirstName } from "../utils/userDisplay";
 import { Button } from "./ui/button";
-
-function getNetId(email: string | null | undefined): string {
-  const trimmed = email?.trim();
-  if (!trimmed) return "";
-
-  return trimmed.split("@")[0] ?? "";
-}
 
 export function AccountControls() {
   const { user, logout } = useAuth();
   const [isLoggingOut, setIsLoggingOut] = useState(false);
-  const displayName = getUserDisplayName(user, "there");
-  const netId = getNetId(user?.email);
+  const firstName = getUserFirstName(user, "there");
 
   const handleLogout = async () => {
     setIsLoggingOut(true);
@@ -25,14 +17,7 @@ export function AccountControls() {
 
   return (
     <div className="ml-auto flex min-w-0 items-center gap-2 sm:gap-3">
-      <div className="hidden min-w-0 text-right leading-tight sm:block">
-        <p className="truncate text-sm font-medium text-foreground">Hello {displayName}</p>
-        {netId && <p className="truncate text-xs text-muted-foreground">{netId}</p>}
-      </div>
-
-      <span className="max-w-[8rem] truncate text-sm font-medium text-foreground sm:hidden">
-        {displayName}
-      </span>
+      <p className="truncate text-sm font-medium text-foreground">Hello {firstName}</p>
 
       <Button
         type="button"
