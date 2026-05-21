@@ -5,6 +5,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { useAuth } from "../contexts/AuthContext";
 import { getUserDisplayName } from "../utils/userDisplay";
+import { isLocalDelivery } from "../utils/location";
 import { ordersApi } from "../api/orders";
 import { getOrderDetailQueryOptions, invalidateOrderQueries } from "../queries/orders";
 import type { OrderDetail } from "../types/order";
@@ -217,6 +218,13 @@ export default function OrderQAPage() {
     if (!order) return null;
 
     const hasIncompleteSteps = verificationSteps.some((step) => !form[step.id as keyof QAFormState]);
+    const qaMethod = order.qa_method?.trim().toLowerCase();
+    const routingMethod =
+        qaMethod === "delivery" || qaMethod === "shipping"
+            ? qaMethod.charAt(0).toUpperCase() + qaMethod.slice(1)
+            : isLocalDelivery(order)
+                ? "Delivery"
+                : "Shipping";
 
     return (
         <div className="h-full min-h-0 overflow-y-auto bg-background px-4 py-8">
@@ -300,8 +308,8 @@ export default function OrderQAPage() {
                             <label className="text-sm font-medium text-muted-foreground">
                                 Routing
                             </label>
-                            <div className="rounded-xl border border-border bg-muted px-3 py-2 text-sm text-muted-foreground">
-                                Determined automatically from the order's Inflow shipping data.
+                            <div className="rounded-xl border border-border bg-muted px-3 py-2 text-sm text-foreground">
+                                <span className="font-semibold">{routingMethod}</span>
                             </div>
                         </div>
                     </div>
