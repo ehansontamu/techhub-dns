@@ -141,6 +141,7 @@ def auto_register_inflow_webhook() -> None:
 
     target_url = settings.inflow_webhook_url.strip().rstrip("/")
     db = get_db_session()
+    local_active_webhook = None
     try:
         existing = (
             db.query(InflowWebhook)
@@ -150,32 +151,52 @@ def auto_register_inflow_webhook() -> None:
 
         for webhook in existing:
             if webhook.url.strip().rstrip("/") == target_url:
-                logger.info(
-                    "Webhook already registered for %s (ID: %s)",
-                    target_url,
-                    webhook.webhook_id,
-                )
-                return
+                local_active_webhook = webhook
+                break
     finally:
         db.close()
 
-    logger.info("Auto-registering Inflow webhook: %s", target_url)
-
     async def register():
         service = InflowService()
+        remote_webhooks = []
         try:
             remote_webhooks = await service.list_webhooks()
-            for item in remote_webhooks:
-                remote_url = (item.get("url") or "").strip().rstrip("/")
-                if remote_url == target_url:
-                    webhook_id = item.get("webHookSubscriptionId") or item.get("id")
-                    if webhook_id:
-                        logger.info(
-                            "Cleaning up existing remote webhook: %s", webhook_id
-                        )
-                        await service.delete_webhook(webhook_id)
         except Exception as exc:
-            logger.warning("Could not clean up remote webhooks: %s", exc)
+            logger.warning("Could not list remote webhooks: %s", exc)
+
+        for item in remote_webhooks:
+            remote_url = (item.get("url") or "").strip().rstrip("/")
+            if remote_url == target_url:
+                remote_webhook_id = (
+                    item.get("webHookSubscriptionId")
+                    or item.get("id")
+                    or item.get("webhookId")
+                )
+                if local_active_webhook:
+                    logger.info(
+                        "Webhook already registered for %s (local ID: %s, remote ID: %s)",
+                        target_url,
+                        local_active_webhook.webhook_id,
+                        remote_webhook_id or "unknown",
+                    )
+                else:
+                    logger.info(
+                        "Webhook already registered remotely for %s (ID: %s)",
+                        target_url,
+                        remote_webhook_id or "unknown",
+                    )
+                return {
+                    "webHookSubscriptionId": remote_webhook_id,
+                    "url": remote_url,
+                }
+
+        if local_active_webhook:
+            logger.warning(
+                "Local webhook record exists for %s but remote subscription is missing; re-registering",
+                target_url,
+            )
+        else:
+            logger.info("Auto-registering Inflow webhook: %s", target_url)
 
         return await service.register_webhook(
             target_url, settings.inflow_webhook_events

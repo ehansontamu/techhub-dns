@@ -1578,6 +1578,8 @@ def get_sync_health():
         "webhook_enabled": bool(settings.inflow_webhook_enabled),
         "webhook_failed": False,
         "last_webhook_received_at": None,
+        "webhook_registered": False,
+        "webhook_matches_config": False,
     }
 
     if settings.inflow_webhook_enabled:
@@ -1600,6 +1602,12 @@ def get_sync_health():
             inflow["last_webhook_received_at"] = _to_utc_iso_z(
                 getattr(webhook, "last_received_at", None)
             )
+            inflow["webhook_registered"] = bool(webhook)
+            if webhook and settings.inflow_webhook_url:
+                inflow["webhook_matches_config"] = (
+                    webhook.url.strip().rstrip("/")
+                    == settings.inflow_webhook_url.strip().rstrip("/")
+                )
         finally:
             db.close()
 
