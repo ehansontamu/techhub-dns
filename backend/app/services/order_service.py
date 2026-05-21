@@ -575,7 +575,7 @@ class OrderService:
                 raise
 
             order.picklist_generated_at = datetime.utcnow()
-            order.picklist_generated_by = generated_by_display or generated_by
+            order.picklist_generated_by = generated_by or generated_by_display
             order.picklist_path = sp_url or str(local_path)
             order.updated_at = datetime.utcnow()
         finally:
@@ -663,6 +663,7 @@ class OrderService:
         order_id: Union[UUID, str],
         qa_data: Dict[str, Any],
         technician: Optional[str] = None,
+        technician_identifier: Optional[str] = None,
         expected_updated_at: Optional[datetime] = None,
     ) -> Order:
         order_id_str = str(order_id)
@@ -681,6 +682,20 @@ class OrderService:
         if not order.picklist_generated_at:
             raise ValidationError(
                 "Picklist must be generated before QA can be completed"
+            )
+
+        if self._is_same_actor(
+            order.picklist_generated_by,
+            technician_identifier,
+            technician,
+        ):
+            raise ValidationError(
+                "QA must be completed by someone other than the person who picked the order.",
+                field="technician",
+                details={
+                    "picklist_generated_by": order.picklist_generated_by,
+                    "technician": technician,
+                },
             )
 
         # Inject authenticated technician into QA data if provided
@@ -830,6 +845,39 @@ class OrderService:
         self.db.commit()
         self.db.refresh(order)
         return order
+
+    @staticmethod
+    def _identity_candidates(*values: Optional[str]) -> set[str]:
+        candidates: set[str] = set()
+        for value in values:
+            if not isinstance(value, str):
+                continue
+
+            normalized = value.strip().lower()
+            if not normalized:
+                continue
+
+            candidates.add(normalized)
+            if "@" in normalized:
+                local_part = normalized.split("@", 1)[0].strip()
+                if local_part:
+                    candidates.add(local_part)
+
+        return candidates
+
+    @classmethod
+    def _is_same_actor(
+        cls,
+        stored_actor: Optional[str],
+        current_identifier: Optional[str],
+        current_display: Optional[str],
+    ) -> bool:
+        stored_candidates = cls._identity_candidates(stored_actor)
+        current_candidates = cls._identity_candidates(current_identifier, current_display)
+        if not stored_candidates or not current_candidates:
+            return False
+
+        return not stored_candidates.isdisjoint(current_candidates)
 
     def get_orders(
         self,

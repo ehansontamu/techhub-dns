@@ -633,6 +633,7 @@ def submit_qa(order_id):
             order_id=order_id,
             qa_data=submission.responses,
             technician=technician,
+            technician_identifier=current_user,
             expected_updated_at=submission.expected_updated_at,
         )
 

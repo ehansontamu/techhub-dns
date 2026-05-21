@@ -35,6 +35,7 @@ def test_submit_qa_sets_completed_at_and_transitions_to_pre_delivery(tmp_path, m
     order.status = OrderStatus.QA.value
     order.tagged_at = datetime.utcnow()
     order.picklist_generated_at = datetime.utcnow()
+    order.picklist_generated_by = "picker@example.com"
     order.qa_completed_at = None
     order.qa_method = None
 
@@ -53,7 +54,12 @@ def test_submit_qa_sets_completed_at_and_transitions_to_pre_delivery(tmp_path, m
         "verifyBoxesLabeledCorrectly": True,
     }
 
-    result = service.submit_qa(order.id, qa_data, technician="Test Tech")
+    result = service.submit_qa(
+        order.id,
+        qa_data,
+        technician="Test Tech",
+        technician_identifier="qa-tech@example.com",
+    )
 
     assert order.qa_completed_at is not None
     assert order.qa_method == "Delivery"
@@ -78,6 +84,7 @@ def test_submit_qa_allows_parent_partial_leg(tmp_path, monkeypatch):
     order.status = OrderStatus.QA.value
     order.tagged_at = datetime.utcnow()
     order.picklist_generated_at = datetime.utcnow()
+    order.picklist_generated_by = "picker@example.com"
     order.qa_completed_at = None
     order.qa_method = None
     order.parent_order_id = None
@@ -100,9 +107,59 @@ def test_submit_qa_allows_parent_partial_leg(tmp_path, monkeypatch):
         "verifyBoxesLabeledCorrectly": True,
     }
 
-    result = service.submit_qa(order.id, qa_data, technician="Test Tech")
+    result = service.submit_qa(
+        order.id,
+        qa_data,
+        technician="Test Tech",
+        technician_identifier="qa-tech@example.com",
+    )
 
     assert order.qa_completed_at is not None
     assert order.qa_method == "Delivery"
     assert result.status == OrderStatus.PRE_DELIVERY.value
     assert Path(tmp_path / "qa" / "TH123.json").exists()
+
+
+def test_submit_qa_blocks_picker_from_qcing_own_order(tmp_path, monkeypatch):
+    mock_db = MagicMock()
+    service = OrderService(mock_db)
+
+    monkeypatch.setattr("app.services.order_service.settings.local_document_storage", str(tmp_path))
+
+    order = MagicMock(spec=Order)
+    order.id = "test-order-id"
+    order.inflow_order_id = "TH123"
+    order.status = OrderStatus.QA.value
+    order.tagged_at = datetime.utcnow()
+    order.picklist_generated_at = datetime.utcnow()
+    order.picklist_generated_by = "picker@example.com"
+    order.qa_completed_at = None
+    order.qa_method = None
+
+    mock_db.query.return_value.filter.return_value.with_for_update.return_value.first.return_value = order
+
+    qa_data = {
+        "method": "Delivery",
+        "orderNumber": order.inflow_order_id,
+        "technician": "Picker Person",
+        "qaSignature": "Sig",
+        "verifyAssetTagSerialMatch": True,
+        "verifyOrderDetailsTemplateSentAndElectronicPackingSlipSaved": True,
+        "verifyPackagedProperly": True,
+        "verifyPackingSlipSerialsMatch": True,
+        "verifyBoxesLabeledCorrectly": True,
+    }
+
+    from app.utils.exceptions import ValidationError
+
+    try:
+        service.submit_qa(
+            order.id,
+            qa_data,
+            technician="Picker Person",
+            technician_identifier="picker@example.com",
+        )
+    except ValidationError as exc:
+        assert "someone other than the person who picked" in str(exc)
+    else:
+        raise AssertionError("Expected picker to be blocked from QA")
