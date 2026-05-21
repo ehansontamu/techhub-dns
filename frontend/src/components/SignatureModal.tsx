@@ -14,12 +14,13 @@ export function SignatureModal({ open, onOpenChange, onSave }: SignatureModalPro
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const drawingRef = useRef(false);
     const [hasSignature, setHasSignature] = useState(false);
-    const [requirePenInput, setRequirePenInput] = useState(false);
+    const [requirePenInput, setRequirePenInput] = useState(true);
     const [debugInfo, setDebugInfo] = useState<string>("");
 
     // Reset canvas when opening
     useEffect(() => {
         if (open) {
+            setRequirePenInput(true);
             setTimeout(() => {
                 resizeCanvas();
                 clearCanvas();

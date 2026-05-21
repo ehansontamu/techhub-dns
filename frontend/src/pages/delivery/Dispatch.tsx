@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type DragEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type PointerEvent } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import axios from "axios";
 import { AlertTriangle, ChevronDown, ChevronUp, Truck } from "lucide-react";
@@ -123,6 +123,9 @@ export default function Dispatch() {
   const [selectedOrderIds, setSelectedOrderIds] = useState<string[]>([]);
   const [draggingOrderId, setDraggingOrderId] = useState<string | null>(null);
   const [dragOverOrderId, setDragOverOrderId] = useState<string | null>(null);
+  const touchDragStateRef = useRef<
+    { orderId: string; pointerId: number; startClientX: number; startClientY: number; hasMoved: boolean } | null
+  >(null);
   const [activeVehicleAction, setActiveVehicleAction] = useState<Vehicle | null>(null);
   const [selectedVehicleId, setSelectedVehicleId] = useState<Vehicle | null>(null);
   const [selectedPurpose, setSelectedPurpose] = useState<DeliveryRunPriorityPurpose | null>(null);
@@ -318,11 +321,98 @@ export default function Dispatch() {
     });
   };
 
-  const handleDragStartOrder = (orderId: string, event: DragEvent<HTMLDivElement>) => {
+  const handleDragStartOrder = (orderId: string, event: DragEvent<HTMLElement>) => {
     event.dataTransfer.effectAllowed = "move";
     event.dataTransfer.setData("text/plain", orderId);
     setDraggingOrderId(orderId);
     setDragOverOrderId(orderId);
+  };
+
+  const resolveDropTargetOrderId = useCallback((clientX: number, clientY: number): string | null => {
+    const element = document.elementFromPoint(clientX, clientY);
+    const orderElement = element?.closest<HTMLElement>("[data-order-id]");
+    return orderElement?.dataset.orderId ?? null;
+  }, []);
+
+  const clearDragState = useCallback(() => {
+    touchDragStateRef.current = null;
+    setDraggingOrderId(null);
+    setDragOverOrderId(null);
+  }, []);
+
+  const handleTouchReorderStart = (orderId: string, event: PointerEvent<HTMLButtonElement>) => {
+    if (event.pointerType !== "touch") return;
+
+    event.preventDefault();
+    touchDragStateRef.current = {
+      orderId,
+      pointerId: event.pointerId,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      hasMoved: false,
+    };
+    setDraggingOrderId(orderId);
+    setDragOverOrderId(orderId);
+
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  const handleTouchReorderMove = (event: PointerEvent<HTMLButtonElement>) => {
+    const touchDragState = touchDragStateRef.current;
+    if (!touchDragState || touchDragState.pointerId !== event.pointerId) return;
+
+    const deltaX = event.clientX - touchDragState.startClientX;
+    const deltaY = event.clientY - touchDragState.startClientY;
+    if (!touchDragState.hasMoved) {
+      const distance = Math.hypot(deltaX, deltaY);
+      if (distance < 8) {
+        return;
+      }
+      touchDragStateRef.current = { ...touchDragState, hasMoved: true };
+    }
+
+    const targetOrderId = resolveDropTargetOrderId(event.clientX, event.clientY);
+    setDragOverOrderId(targetOrderId);
+  };
+
+  const handleTouchReorderEnd = (event: PointerEvent<HTMLButtonElement>) => {
+    const touchDragState = touchDragStateRef.current;
+    if (!touchDragState || touchDragState.pointerId !== event.pointerId) return;
+
+    if (!touchDragState.hasMoved) {
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+      clearDragState();
+      return;
+    }
+
+    const targetOrderId = resolveDropTargetOrderId(event.clientX, event.clientY);
+    if (targetOrderId === touchDragState.orderId) {
+      clearDragState();
+    } else if (targetOrderId) {
+      handleDropOrderBefore(targetOrderId);
+    } else {
+      handleDropOrderToEnd();
+    }
+
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    clearDragState();
+  };
+
+  const handleTouchReorderCancel = (event: PointerEvent<HTMLButtonElement>) => {
+    const touchDragState = touchDragStateRef.current;
+    if (!touchDragState || touchDragState.pointerId !== event.pointerId) return;
+
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    clearDragState();
   };
 
   const handleDropOrderBefore = (targetOrderId: string) => {
@@ -776,11 +866,11 @@ export default function Dispatch() {
               return (
                 <div
                   key={order.id}
+                  data-order-id={order.id}
                   draggable
                   onDragStart={(event) => handleDragStartOrder(order.id, event)}
                   onDragEnd={() => {
-                    setDraggingOrderId(null);
-                    setDragOverOrderId(null);
+                    clearDragState();
                   }}
                   onDragOver={(event) => {
                     event.preventDefault();
@@ -803,9 +893,23 @@ export default function Dispatch() {
                 >
                   <div className="min-w-0 space-y-1">
                     <div className="flex items-center gap-2">
-                      <span className="cursor-grab select-none text-muted-foreground" aria-hidden="true">
-                        ⋮⋮
-                      </span>
+                      <button
+                        type="button"
+                        aria-label={`Reorder stop ${index + 1}`}
+                        className="inline-flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground active:cursor-grabbing"
+                        draggable
+                        onDragStart={(event) => handleDragStartOrder(order.id, event)}
+                        onDragEnd={clearDragState}
+                        onPointerDown={(event) => handleTouchReorderStart(order.id, event)}
+                        onPointerMove={handleTouchReorderMove}
+                        onPointerUp={handleTouchReorderEnd}
+                        onPointerCancel={handleTouchReorderCancel}
+                        style={{ touchAction: "none" }}
+                      >
+                        <span aria-hidden="true" className="cursor-grab select-none text-lg leading-none">
+                          ⋮⋮
+                        </span>
+                      </button>
                       <Badge variant="secondary">Stop {index + 1}</Badge>
                       <button
                         type="button"

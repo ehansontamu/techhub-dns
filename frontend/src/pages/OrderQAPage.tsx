@@ -10,8 +10,6 @@ import { getOrderDetailQueryOptions, invalidateOrderQueries } from "../queries/o
 import type { OrderDetail } from "../types/order";
 import { formatToCentralTime } from "../utils/timezone";
 
-type QAMethod = "Delivery" | "Shipping";
-
 type QAFormState = {
     orderNumber: string;
     technician: string;
@@ -21,14 +19,17 @@ type QAFormState = {
     verifyPackingSlipSerialsMatch: boolean;
     verifyBoxesLabeledCorrectly: boolean;
     qaSignature: string;
-    method: QAMethod | "";
+};
+
+type LegacyQAFormState = QAFormState & {
+    method?: string;
 };
 
 type SavedQAChecklist = {
     orderId: string;
     inflowOrderId: string;
     submittedAt: string;
-    form: QAFormState;
+    form: LegacyQAFormState;
 };
 
 const defaultForm = (orderNumber: string): QAFormState => ({
@@ -40,8 +41,15 @@ const defaultForm = (orderNumber: string): QAFormState => ({
     verifyPackingSlipSerialsMatch: false,
     verifyBoxesLabeledCorrectly: false,
     qaSignature: "",
-    method: "",
 });
+
+const normalizeSavedForm = (form: LegacyQAFormState, orderNumber: string): QAFormState => {
+    const { method: _method, ...rest } = form;
+    return {
+        ...defaultForm(orderNumber),
+        ...rest,
+    };
+};
 
 const storageKey = (orderId: string) => `order-qa-checklist-v3:${orderId}`;
 
@@ -77,8 +85,7 @@ function isFormComplete(form: QAFormState) {
         form.verifyOrderDetailsTemplateSentAndElectronicPackingSlipSaved &&
         form.verifyPackagedProperly &&
         form.verifyPackingSlipSerialsMatch &&
-        form.verifyBoxesLabeledCorrectly &&
-        (form.method === "Delivery" || form.method === "Shipping")
+        form.verifyBoxesLabeledCorrectly
     );
 }
 
@@ -123,7 +130,7 @@ export default function OrderQAPage() {
         if (savedRaw) {
             try {
                 const parsed = JSON.parse(savedRaw) as SavedQAChecklist;
-                setForm(parsed.form);
+                setForm(normalizeSavedForm(parsed.form, orderNumber));
                 setLastSavedAt(parsed.submittedAt);
             } catch {
                 setupDefaults(orderNumber);
@@ -291,29 +298,10 @@ export default function OrderQAPage() {
 
                         <div className="space-y-2">
                             <label className="text-sm font-medium text-muted-foreground">
-                                Method <span className="text-red-600">*</span>
+                                Routing
                             </label>
-                            <div className="grid grid-cols-2 gap-3">
-                                {(["Delivery", "Shipping"] as QAMethod[]).map((method) => (
-                                    <label
-                                        key={method}
-                                        className={`flex items-center justify-center gap-2 rounded-2xl border px-4 py-3 text-sm font-medium transition-colors ${
-                                            form.method === method
-                                                ? "border-primary bg-primary text-primary-foreground"
-                                                : "border-border bg-card text-foreground hover:border-accent"
-                                        }`}
-                                    >
-                                        <input
-                                            type="radio"
-                                            name="qa-method"
-                                            value={method}
-                                            checked={form.method === method}
-                                            onChange={() => setForm((prev) => ({ ...prev, method }))}
-                                            className="sr-only"
-                                        />
-                                        {method}
-                                    </label>
-                                ))}
+                            <div className="rounded-xl border border-border bg-muted px-3 py-2 text-sm text-muted-foreground">
+                                Determined automatically from the order's Inflow shipping data.
                             </div>
                         </div>
                     </div>
