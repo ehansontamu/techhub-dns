@@ -30,11 +30,9 @@ export function AccountControls() {
         {netId && <p className="truncate text-xs text-muted-foreground">{netId}</p>}
       </div>
 
-      {netId && (
-        <span className="max-w-[8rem] truncate text-sm font-medium text-foreground sm:hidden">
-          {netId}
-        </span>
-      )}
+      <span className="max-w-[8rem] truncate text-sm font-medium text-foreground sm:hidden">
+        {displayName}
+      </span>
 
       <Button
         type="button"
