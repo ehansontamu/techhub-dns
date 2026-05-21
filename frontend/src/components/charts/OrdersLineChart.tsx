@@ -29,7 +29,7 @@ export default function OrdersLineChart({ data, loading }: OrdersLineChartProps)
   }
 
   return (
-    <div className={CHART_HEIGHT_CLASS}>
+    <div className={`${CHART_HEIGHT_CLASS} w-full min-w-0 min-h-0 overflow-hidden`}>
       <ResponsiveContainer width="100%" height="100%">
       <LineChart data={data} margin={{ top: 10, right: 24, left: 0, bottom: 5 }}>
         <defs>

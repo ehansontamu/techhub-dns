@@ -67,6 +67,18 @@ describe("Preparation", () => {
                 {
                     id: "prep-2",
                     inflow_order_id: "TH2002",
+                    recipient_name: "No Tag Required",
+                    delivery_location: "Annex",
+                    status: OrderStatus.PICKED,
+                    created_at: "2026-05-20T12:00:00Z",
+                    updated_at: "2026-05-20T12:05:00Z",
+                    tagged_at: null,
+                    asset_tag_required: false,
+                    picklist_generated_at: null,
+                },
+                {
+                    id: "prep-3",
+                    inflow_order_id: "TH2003",
                     recipient_name: "Blocked User",
                     delivery_location: "Main Lab",
                     status: OrderStatus.PICKED,
@@ -77,7 +89,7 @@ describe("Preparation", () => {
                     picklist_generated_at: null,
                 },
             ],
-            total: 1,
+            total: 3,
         });
 
         mockedOrdersApi.getOrder.mockResolvedValue({
@@ -114,9 +126,10 @@ describe("Preparation", () => {
 
         expect(await screen.findByText("Preparation")).toBeInTheDocument();
         expect(await screen.findByText("TH2001")).toBeInTheDocument();
+        expect(await screen.findByText("TH2002")).toBeInTheDocument();
         expect(screen.getByText("Tag Request Actions")).toBeInTheDocument();
         expect(screen.getByText("Generate Picklist & Order Details")).toBeInTheDocument();
-        expect(screen.queryByText("TH2002")).not.toBeInTheDocument();
+        expect(screen.queryByText("TH2003")).not.toBeInTheDocument();
 
         fireEvent.click(screen.getByLabelText("Select TH2001"));
 

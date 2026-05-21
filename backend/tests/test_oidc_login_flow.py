@@ -69,17 +69,17 @@ def _make_app() -> Flask:
     return app
 
 
-def _configure_oidc_settings() -> tuple[str | None, str | None, str | None, str | None]:
+def _configure_oidc_settings() -> tuple[str | None, str | None, str | None, str | None, str | None]:
     previous = (
-        settings.azure_tenant_id,
-        settings.azure_client_id,
-        settings.azure_client_secret,
+        settings.oidc_tenant_id,
+        settings.oidc_client_id,
+        settings.oidc_client_secret,
         settings.frontend_url,
         settings.flask_env,
     )
-    settings.azure_tenant_id = "tenant-id"
-    settings.azure_client_id = "client-id"
-    settings.azure_client_secret = "client-secret"
+    settings.oidc_tenant_id = "tenant-id"
+    settings.oidc_client_id = "client-id"
+    settings.oidc_client_secret = "client-secret"
     settings.frontend_url = "https://dev-techhub.pythonanywhere.com"
     settings.flask_env = "development"
     return previous
@@ -112,9 +112,9 @@ def test_login_prefers_oidc_and_requests_account_selection(monkeypatch):
             assert sess["oidc_login_flow"]["state"] == client_instance.authorization_request_kwargs["state"]
     finally:
         (
-            settings.azure_tenant_id,
-            settings.azure_client_id,
-            settings.azure_client_secret,
+            settings.oidc_tenant_id,
+            settings.oidc_client_id,
+            settings.oidc_client_secret,
             settings.frontend_url,
             settings.flask_env,
         ) = previous
@@ -169,9 +169,9 @@ def test_oidc_callback_creates_session_cookie_and_redirects(monkeypatch):
         assert captured["user_agent"] == "pytest"
     finally:
         (
-            settings.azure_tenant_id,
-            settings.azure_client_id,
-            settings.azure_client_secret,
+            settings.oidc_tenant_id,
+            settings.oidc_client_id,
+            settings.oidc_client_secret,
             settings.frontend_url,
             settings.flask_env,
         ) = previous
@@ -200,9 +200,9 @@ def test_login_surfaces_oidc_initiation_failure_details(monkeypatch):
         assert body["details"]["context"]["client_configured"] is True
     finally:
         (
-            settings.azure_tenant_id,
-            settings.azure_client_id,
-            settings.azure_client_secret,
+            settings.oidc_tenant_id,
+            settings.oidc_client_id,
+            settings.oidc_client_secret,
             settings.frontend_url,
             settings.flask_env,
         ) = previous

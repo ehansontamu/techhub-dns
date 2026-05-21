@@ -2,7 +2,7 @@ import os
 import json
 from typing import Optional, List, Any
 
-from pydantic import field_validator
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -99,6 +99,20 @@ class Settings(BaseSettings):
     saml_idp_cert_path: Optional[str] = None  # Path to downloaded certificate file
     saml_sp_entity_id: str = "https://techhub.pythonanywhere.com"
     saml_acs_url: str = "https://techhub.pythonanywhere.com/auth/saml/callback"
+
+    # OIDC Configuration (User Authentication)
+    oidc_tenant_id: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("OIDC_TENANT_ID", "AZURE_TENANT_ID"),
+    )
+    oidc_client_id: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("OIDC_CLIENT_ID", "AZURE_CLIENT_ID"),
+    )
+    oidc_client_secret: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("OIDC_CLIENT_SECRET", "AZURE_CLIENT_SECRET"),
+    )
 
     # Service Principal Configuration (Backend Graph API)
     azure_tenant_id: Optional[str] = None

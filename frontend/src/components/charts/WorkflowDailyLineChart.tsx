@@ -39,7 +39,7 @@ export default function WorkflowDailyLineChart({ data, loading }: WorkflowDailyL
   }
 
   return (
-    <div className={`${CHART_HEIGHT_CLASS} min-w-0 overflow-hidden`}>
+    <div className={`${CHART_HEIGHT_CLASS} w-full min-w-0 min-h-0 overflow-hidden`}>
       <ResponsiveContainer width="100%" height="100%">
         <LineChart data={data} margin={{ top: 10, right: 16, left: 0, bottom: 8 }}>
           <CartesianGrid strokeDasharray="4 6" className="stroke-muted/40" />

@@ -79,9 +79,9 @@ INFLOW_COMPANY_ID=your_company_id
 FRONTEND_URL=https://username.pythonanywhere.com
 
 # OIDC login app registration
-AZURE_TENANT_ID=<from Azure>
-AZURE_CLIENT_ID=<from Azure>
-AZURE_CLIENT_SECRET=<from Azure>
+OIDC_TENANT_ID=<from Azure>
+OIDC_CLIENT_ID=<from Azure>
+OIDC_CLIENT_SECRET=<from Azure>
 
 # Legacy SAML app registration
 SAML_ENABLED=true
@@ -109,7 +109,7 @@ Create a separate Microsoft Entra app registration for the interactive login flo
 2. Set the redirect URI to:
    - Production: `https://username.pythonanywhere.com/auth/oidc/callback`
    - Local dev: `http://localhost:5173/auth/oidc/callback`
-3. Copy the app's tenant ID, client ID, and client secret into the `AZURE_*` variables above.
+3. Copy the app's tenant ID, client ID, and client secret into the `OIDC_*` variables above.
 4. Keep the SAML app in place if you still want the legacy fallback path.
 
 ## Database Setup
@@ -240,7 +240,7 @@ bash scripts/deploy.sh
 To test the OIDC chooser flow locally:
 
 1. Set `FRONTEND_URL=http://localhost:5173`
-2. Set `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, and `AZURE_CLIENT_SECRET` for the OIDC app registration
+2. Set `OIDC_TENANT_ID`, `OIDC_CLIENT_ID`, and `OIDC_CLIENT_SECRET` for the OIDC app registration
 3. Start the backend on port `8000`
 4. Start the frontend on port `5173`
 5. Click the login button and confirm the browser goes through `/auth/login` and returns to `/auth/oidc/callback`

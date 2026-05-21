@@ -24,9 +24,12 @@
 | `DEV_AUTH_EMAIL` | Email for the synthetic local dev user |
 | `DEV_AUTH_DISPLAY_NAME` | Display name for the synthetic local dev user |
 | `DEV_AUTH_DEPARTMENT` | Optional department label for the synthetic local dev user |
-| `AZURE_TENANT_ID` | Azure AD tenant ID used for Graph access and interactive login |
-| `AZURE_CLIENT_ID` | Azure app client ID used for Graph access and interactive login |
-| `AZURE_CLIENT_SECRET` | Azure app client secret used for Graph access and interactive login |
+| `OIDC_TENANT_ID` | Azure AD tenant ID used for interactive login |
+| `OIDC_CLIENT_ID` | Azure app client ID used for interactive login |
+| `OIDC_CLIENT_SECRET` | Azure app client secret used for interactive login |
+| `AZURE_TENANT_ID` | Azure AD tenant ID used for Graph access, SharePoint, and email |
+| `AZURE_CLIENT_ID` | Azure app client ID used for Graph access, SharePoint, and email |
+| `AZURE_CLIENT_SECRET` | Azure app client secret used for Graph access, SharePoint, and email |
 
 ## Admin Authorization
 

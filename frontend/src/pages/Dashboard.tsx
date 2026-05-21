@@ -342,8 +342,8 @@ export default function Dashboard() {
         </div>
       )}
 
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 items-stretch">
-        <section className="rounded-2xl border border-border/70 bg-card/80 p-5 shadow-none xl:col-span-2 h-full">
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 items-stretch min-w-0">
+        <section className="rounded-2xl border border-border/70 bg-card/80 p-5 shadow-none xl:col-span-2 h-full min-w-0">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <h2 className="text-base">Live Status</h2>
             <div className="flex flex-col items-end gap-1 text-right">
@@ -371,7 +371,7 @@ export default function Dashboard() {
           </div>
         </section>
 
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 h-full">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 h-full min-w-0">
           <StatCard
             title="Picked"
             value={statusCounts.picked ?? 0}
@@ -403,13 +403,13 @@ export default function Dashboard() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <section className="rounded-2xl border border-border/70 bg-card/80 p-5 shadow-none">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 min-w-0">
+        <section className="rounded-2xl border border-border/70 bg-card/80 p-5 shadow-none min-w-0">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <h2 className="text-base">Completed Today</h2>
             <span className="text-xs text-muted-foreground">Last 24h</span>
           </div>
-          <div className="mt-4">
+          <div className="mt-4 min-w-0">
             {completedLoading ? (
               <div className="space-y-3">
                 <Skeleton className="h-4 w-40" />
@@ -442,7 +442,7 @@ export default function Dashboard() {
           </div>
         </section>
 
-        <section className="rounded-2xl border border-border/70 bg-card/80 p-5 shadow-none">
+        <section className="rounded-2xl border border-border/70 bg-card/80 p-5 shadow-none min-w-0">
           <div className="flex flex-row items-center justify-between gap-3">
             <div>
               <h2 className="text-base">Orders Daily Workflow</h2>
@@ -471,7 +471,7 @@ export default function Dashboard() {
                 </Button>
             </div>
           </div>
-          <div className="mt-4">
+          <div className="mt-4 min-w-0">
             <SectionErrorBoundary
               title="Workflow chart failed"
               message="Try reloading this chart. The rest of the dashboard data is still available."
@@ -486,12 +486,12 @@ export default function Dashboard() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <section className="rounded-2xl border border-border/70 bg-card/80 p-5 shadow-none">
+        <section className="rounded-2xl border border-border/70 bg-card/80 p-5 shadow-none min-w-0">
           <div>
             <h2 className="text-base">Monthly Fulfilled Totals</h2>
             <p className="text-xs text-muted-foreground">Last 12 months</p>
           </div>
-          <div className="mt-4">
+          <div className="mt-4 min-w-0">
             <SectionErrorBoundary
               title="Monthly totals chart failed"
               message="Try reloading the monthly fulfilled totals chart."
