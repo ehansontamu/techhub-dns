@@ -269,12 +269,12 @@ def inflow_webhook():
             if not inflow_service.is_started_and_picked(inflow_order):
                 identifier = order_number or sales_order_id or "unknown"
                 logger.info(
-                    f"Order {identifier} skipped (no pickLines)"
+                    f"Order {identifier} skipped (not started or no pickLines)"
                 )
                 return jsonify(
                     {
                         "status": "skipped",
-                        "message": "Order has no pickLines",
+                        "message": "Order is not eligible for sync",
                     }
                 )
 

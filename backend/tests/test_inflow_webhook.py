@@ -61,11 +61,16 @@ class _FakeInflowService:
         return verify_webhook_signature(payload, signature, secret)
 
     def get_order_by_number_sync(self, order_number):
-        return {"orderNumber": order_number, "pickLines": [{"id": "line-1"}]}
+        return {
+            "orderNumber": order_number,
+            "inventoryStatus": "started",
+            "pickLines": [{"id": "line-1"}],
+        }
 
     def get_order_by_id_sync(self, sales_order_id):
         return {
             "orderNumber": f"ORDER-{sales_order_id}",
+            "inventoryStatus": "started",
             "pickLines": [{"id": "line-1"}],
         }
 
@@ -134,10 +139,10 @@ def test_webhook_returns_validation_status_code():
     }
 
 
-def test_ingest_predicate_accepts_picked_orders_even_after_status_changes():
+def test_ingest_predicate_rejects_fulfilled_orders():
     service = InflowService()
 
-    assert service.is_started_and_picked(
+    assert not service.is_started_and_picked(
         {
             "inventoryStatus": "fulfilled",
             "pickLines": [{"id": "line-1"}],
@@ -149,9 +154,15 @@ def test_ingest_predicate_accepts_picked_orders_even_after_status_changes():
             "pickLines": [],
         }
     )
+    assert service.is_started_and_picked(
+        {
+            "inventoryStatus": "started",
+            "pickLines": [{"id": "line-1"}],
+        }
+    )
 
 
-def test_sync_recent_orders_scans_without_inventory_status_gate():
+def test_sync_recent_orders_filters_for_started_inventory_status():
     service = InflowService()
     fetched_orders = [
         {"orderNumber": "TH-1", "inventoryStatus": "started", "pickLines": [{"id": "a"}]},
@@ -166,8 +177,12 @@ def test_sync_recent_orders_scans_without_inventory_status_gate():
         )
 
     assert fetch_mock.call_count == 1
-    assert fetch_mock.call_args.kwargs == {"count": 3, "skip": 0}
-    assert [order["orderNumber"] for order in matches] == ["TH-1", "TH-2"]
+    assert fetch_mock.call_args.kwargs == {
+        "inventory_status": "started",
+        "count": 3,
+        "skip": 0,
+    }
+    assert [order["orderNumber"] for order in matches] == ["TH-1"]
 
 
 def test_webhook_accepts_env_secret_when_db_secret_is_stale():
