@@ -1,6 +1,10 @@
 import apiClient from "./client";
 import { normalizeExpectedUpdatedAt } from "./expectedUpdatedAt";
 
+function safeArray<T>(value: unknown): T[] {
+  return Array.isArray(value) ? value : [];
+}
+
 export interface CreateDeliveryRunRequest {
   order_ids: string[];
   vehicle: "van" | "golf_cart";
@@ -38,7 +42,7 @@ export interface DeliveryRunDetailResponse extends DeliveryRunResponse {
 export const deliveryRunsApi = {
   getActiveRuns: async (): Promise<Array<DeliveryRunResponse & { order_ids: string[] }>> => {
     const response = await apiClient.get<Array<DeliveryRunResponse & { order_ids: string[] }>>("/delivery-runs/active");
-    return response.data;
+    return safeArray<DeliveryRunResponse & { order_ids: string[] }>(response.data);
   },
 
   createRun: async (request: CreateDeliveryRunRequest): Promise<DeliveryRunResponse> => {

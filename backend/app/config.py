@@ -1,7 +1,8 @@
+import os
 import json
 from typing import Optional, List, Any
 
-from pydantic import field_validator
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -28,6 +29,9 @@ class Settings(BaseSettings):
 
     # Storage
     storage_root: str = "storage"
+
+    # Local document storage (set TECHUB_DNS_LOCAL_STORAGE to override)
+    local_document_storage: str = os.getenv("TECHUB_DNS_LOCAL_STORAGE", "/tmp/techhub-dns")
     picklist_template_path: str = "frontend/public/pdfs/sample.pdf"
 
     # SharePoint Storage
@@ -48,7 +52,7 @@ class Settings(BaseSettings):
     cors_allowed_origins: Optional[str] = None
 
     # Auth (structure only)
-    secret_key: str = "change-me-in-production"
+    secret_key: Optional[str] = None
 
     # Admin authorization
     # Allowlist of admin emails. See ADMIN_EMAILS env var.
@@ -82,6 +86,12 @@ class Settings(BaseSettings):
     # TAMU Entra ID Authentication (SAML + Service Principal)
     # ===========================================
 
+    # Local development auth bypass
+    dev_auth_bypass: bool = False
+    dev_auth_email: str = "dev.user@example.com"
+    dev_auth_display_name: str = "Local Dev User"
+    dev_auth_department: Optional[str] = "Development"
+
     # SAML Configuration (User Authentication)
     saml_enabled: bool = False
     saml_idp_entity_id: Optional[str] = None  # From Azure: Microsoft Entra Identifier
@@ -89,6 +99,20 @@ class Settings(BaseSettings):
     saml_idp_cert_path: Optional[str] = None  # Path to downloaded certificate file
     saml_sp_entity_id: str = "https://techhub.pythonanywhere.com"
     saml_acs_url: str = "https://techhub.pythonanywhere.com/auth/saml/callback"
+
+    # OIDC Configuration (User Authentication)
+    oidc_tenant_id: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("OIDC_TENANT_ID", "AZURE_TENANT_ID"),
+    )
+    oidc_client_id: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("OIDC_CLIENT_ID", "AZURE_CLIENT_ID"),
+    )
+    oidc_client_secret: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("OIDC_CLIENT_SECRET", "AZURE_CLIENT_SECRET"),
+    )
 
     # Service Principal Configuration (Backend Graph API)
     azure_tenant_id: Optional[str] = None
@@ -208,8 +232,10 @@ class Settings(BaseSettings):
     # Vetting Editor (env-only, no Key Vault integration)
     vetting_editor_download_url: Optional[str] = None
     vetting_editor_upload_url: Optional[str] = None
-    vetting_editor_webdav_username: Optional[str] = None
-    vetting_editor_webdav_password: Optional[str] = None
+
+    # Compatibility Editor Staging (env-only, no Key Vault integration)
+    compatibility_editor_staging_download_url: Optional[str] = None
+    compatibility_editor_staging_upload_url: Optional[str] = None
 
     model_config = SettingsConfigDict(
         env_file=".env", case_sensitive=False, extra="ignore"

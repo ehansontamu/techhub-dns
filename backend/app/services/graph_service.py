@@ -318,6 +318,45 @@ class GraphService:
         logger.warning(f"[DEPRECATED] send_teams_message called for {recipient_email}. This method is no longer supported.")
         return False
 
+    # =====================================================================
+    # USER PROFILE LOOKUP
+    # =====================================================================
+
+    def get_user_profile(self, user_oid: str) -> Optional[dict]:
+        """
+        Fetch a user profile from Microsoft Graph by Entra ID object ID.
+
+        Args:
+            user_oid: The Entra ID object identifier (from SAML oid claim)
+
+        Returns:
+            Dict with user properties (displayName, givenName, surname, mail, etc.)
+            or None if the user is not found or Graph API is unavailable.
+        """
+        if not self.is_configured():
+            logger.debug("Graph API not configured; skipping user profile lookup.")
+            return None
+
+        try:
+            # $select keeps the response small
+            endpoint = f"/users/{user_oid}?$select=displayName,givenName,surname,mail,department,employeeId"
+            result = self._graph_request("GET", endpoint)
+            logger.info(f"Graph user profile fetched for OID {user_oid}: displayName={result.get('displayName')}")
+            return result
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                logger.warning(f"Graph user not found for OID {user_oid}")
+            elif exc.response.status_code in (401, 403):
+                logger.warning(
+                    f"Graph API permission denied ({exc.response.status_code}) for user lookup. "
+                    "Ensure the Service Principal has User.Read.All application permission and admin consent."
+                )
+            else:
+                logger.error(f"Graph API error fetching user profile: {exc.response.status_code} - {exc.response.text}")
+            return None
+        except Exception as exc:
+            logger.error(f"Unexpected error fetching user profile from Graph: {exc}")
+            return None
 
 
 # Singleton instance

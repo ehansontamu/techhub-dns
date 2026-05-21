@@ -1,5 +1,11 @@
 # frontend/
 
+### Test Infrastructure
+- `vitest.config.ts`: Vitest test runner configuration (jsdom environment, globals, setup files)
+- `src/test/setup.ts`: Test setup importing @testing-library/jest-dom matchers
+- `src/**/*.test.{ts,tsx}`: Co-located unit tests alongside source files
+
+
 ## Responsibility
 
 - Hosts the Vite-powered React SPA (see `package.json` scripts) that ships the operations workspace: dashboards, orders, delivery schedules, admin tooling, QA flows, and supporting utilities such as the document signing and tagging surfaces.

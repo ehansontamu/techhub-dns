@@ -2,11 +2,13 @@ import re
 import json
 import logging
 import shutil
+from copy import deepcopy
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timezone
 from pathlib import Path
 from sqlalchemy.orm import Session
 from sqlalchemy import or_, and_, func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 from uuid import UUID
 from typing import Union
@@ -20,6 +22,7 @@ from app.models.user import User
 from app.utils.pdf_helpers import wrap_text, check_page_break, filter_picklines
 from app.models.audit_log import AuditLog
 from app.services.audit_service import AuditService
+from app.services.location_resolver_service import location_resolver_service
 
 from app.utils.building_mapper import (
     get_building_abbreviation,
@@ -35,8 +38,12 @@ from app.utils.exceptions import (
 from app.utils.timezone import to_utc_iso_z
 from app.config import settings
 from app.services.print_job_service import PrintJobService, emit_print_job_available
+from app.services.order_splitting import OrderSplittingService
 from app.services.system_setting_service import (
     SETTING_PICKLIST_AUTO_PRINT_ENABLED,
+    SETTING_REQUIRE_ASSET_TAGS_BEFORE_PICKLIST,
+    SETTING_REQUIRE_PARTIAL_PICKLIST_CONFIRMATION,
+    SETTING_REQUIRE_SAME_USER_FOR_TAGGING_AND_PICKLIST,
     SystemSettingService,
 )
 
@@ -44,6 +51,9 @@ logger = logging.getLogger(__name__)
 
 
 class OrderService:
+    VIDI_CUSTOM1_OVERRIDE = "TAMU - College of Veterinary Medicine"
+    ZACH_CONTACT_OVERRIDE = "TAKODA POWELL"
+
     def __init__(self, db: Session):
         self.db = db
 
@@ -51,13 +61,90 @@ class OrderService:
     def _as_dict(value: Any) -> Dict[str, Any]:
         return value if isinstance(value, dict) else {}
 
+    @staticmethod
+    def _preserve_partial_split_inflow_snapshot(
+        existing_order: Order,
+        inflow_data: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Merge a fresh InFlow snapshot without destroying locally split leg item sets."""
+        merged = dict(inflow_data or {})
+        if (
+            existing_order.parent_order_id
+            or existing_order.remainder_order_id
+            or existing_order.has_remainder
+        ):
+            current_snapshot = dict(existing_order.inflow_data or {})
+            # Preserve the split leg item set, but let fresh pick/pack/ship state
+            # flow through so remainder legs can unblock once the remaining items
+            # are actually picked.
+            for field in ("lines", "subtotal", "total"):
+                if field in current_snapshot:
+                    merged[field] = deepcopy(current_snapshot.get(field))
+        return merged
+
     def _requires_asset_tags(self, order: Order) -> bool:
+        if not SystemSettingService.is_setting_enabled(
+            SETTING_REQUIRE_ASSET_TAGS_BEFORE_PICKLIST
+        ):
+            return False
+
         if not order.inflow_data:
             return True
 
         from app.services.inflow_service import InflowService
 
         return InflowService().requires_asset_tags(order.inflow_data)
+
+    @staticmethod
+    def _apply_order_search(query, search: str):
+        like = f"%{search}%"
+        return query.filter(
+            or_(
+                Order.inflow_order_id.ilike(like),
+                Order.inflow_sales_order_id.ilike(like),
+                Order.recipient_name.ilike(like),
+                Order.delivery_location.ilike(like),
+                Order.po_number.ilike(like),
+                Order.assigned_deliverer.ilike(like),
+            )
+        )
+
+    def _apply_delivery_location_overrides(
+        self, inflow_data: Dict[str, Any], delivery_location: str
+    ) -> str:
+        contact_name = inflow_data.get("contactName")
+        shipping_addr_obj = self._as_dict(inflow_data.get("shippingAddress"))
+        address1 = shipping_addr_obj.get("address1", "")
+        address2 = shipping_addr_obj.get("address2", "")
+        shipping_parts = [part for part in [address1, address2] if part]
+        shipping_address = " ".join(shipping_parts) if shipping_parts else address1
+        custom_fields = self._as_dict(inflow_data.get("customFields"))
+        custom1 = custom_fields.get("custom1")
+
+        if (
+            isinstance(contact_name, str)
+            and contact_name.strip().upper() == self.ZACH_CONTACT_OVERRIDE
+            and delivery_location in {address1, address2, shipping_address, ""}
+            and delivery_location != "ZACH"
+        ):
+            logger.info(
+                "Overriding delivery_location to 'ZACH' based on contactName='%s'",
+                contact_name,
+            )
+            return "ZACH"
+
+        if (
+            isinstance(custom1, str)
+            and custom1.strip() == self.VIDI_CUSTOM1_OVERRIDE
+            and delivery_location != "VIDI"
+        ):
+            logger.info(
+                "Overriding delivery_location to 'VIDI' based on customFields.custom1='%s'",
+                custom1,
+            )
+            return "VIDI"
+
+        return delivery_location
 
     @staticmethod
     def _normalize_stale_timestamp(value: datetime) -> datetime:
@@ -116,26 +203,169 @@ class OrderService:
             logger.info(f"Order {order.inflow_order_id} prep steps incomplete: {steps}")
         return complete
 
+    def _get_incomplete_steps(self, order: Order) -> list[str]:
+        """Return human-readable prep steps still required before Pre-Delivery."""
+        missing_steps: list[str] = []
+
+        if self._requires_asset_tags(order) and not order.tagged_at:
+            missing_steps.append("asset_tagging")
+
+        if not order.picklist_generated_at:
+            missing_steps.append("picklist")
+
+        if not order.qa_completed_at:
+            missing_steps.append("qa")
+
+        return missing_steps
+
+    def _parent_remainder_has_unpicked_items(self, order: Order) -> bool:
+        """Return True when a remainder parent leg is still waiting on item pickup."""
+        pick_status = self._get_active_remainder_pick_status(
+            order, warning_context="remainder leg"
+        )
+        if not pick_status:
+            return False
+
+        total_ordered = float(pick_status.get("total_ordered", 0) or 0)
+        total_picked = float(pick_status.get("total_picked", 0) or 0)
+        return total_ordered > 0 and total_picked < total_ordered
+
+    def _parent_remainder_can_generate_picklist(self, order: Order) -> bool:
+        """Return True when an active remainder leg has picked items that can be split off again."""
+        pick_status = self._get_active_remainder_pick_status(
+            order, warning_context="recursive remainder split"
+        )
+        if not pick_status:
+            return False
+
+        total_ordered = float(pick_status.get("total_ordered", 0) or 0)
+        total_picked = float(pick_status.get("total_picked", 0) or 0)
+        return total_ordered > 0 and 0 < total_picked < total_ordered
+
+    def _get_active_remainder_pick_status(
+        self, order: Order, *, warning_context: str
+    ) -> Optional[Dict[str, Any]]:
+        """Return the current pick status for an active remainder leg, if any."""
+        if not getattr(order, "remainder_order_id", None) or getattr(
+            order, "parent_order_id", None
+        ):
+            return None
+
+        if not order.inflow_data:
+            return None
+
+        from app.services.inflow_service import InflowService
+        from app.services.order_splitting import OrderSplittingService
+
+        pick_status_source = OrderSplittingService(
+            self.db
+        ).build_parent_remainder_pick_status_source(order)
+        if not pick_status_source:
+            return None
+
+        try:
+            return InflowService().get_pick_status(pick_status_source)
+        except Exception as exc:
+            logger.warning(
+                "Failed to compute pick status for %s %s: %s",
+                warning_context,
+                order.inflow_order_id,
+                exc,
+            )
+            return None
+
+    def _ensure_remainder_leg_ready(self, order: Order, action: str) -> None:
+        """Block prep actions on remainder parent legs until their items are picked."""
+        if not self._parent_remainder_has_unpicked_items(order):
+            return
+
+        raise ValidationError(
+            "This remainder leg still has items waiting to be picked. "
+            f"Finish picking the remaining items before you can {action}.",
+            details={
+                "order_id": order.inflow_order_id,
+                "remainder_order_id": order.remainder_order_id,
+            },
+        )
+
     def _is_shipping_order(self, order: Order) -> bool:
         """Determine if an order is a shipping order (not local delivery)"""
         if not order.inflow_data:
             return False
 
-        shipping_addr_obj = self._as_dict(order.inflow_data.get("shippingAddress"))
-        city = (
-            shipping_addr_obj.get("city", "").strip()
-            if shipping_addr_obj.get("city")
-            else ""
+        try:
+            resolved_location = location_resolver_service.resolve_location(
+                self._as_dict(order.inflow_data)
+            )
+            return not resolved_location.is_local_delivery
+        except Exception as exc:
+            logger.warning(
+                "Failed to resolve shipping route for %s: %s",
+                order.inflow_order_id,
+                exc,
+            )
+            return False
+
+    def _derive_qa_method(self, order: Order) -> str:
+        """Derive the QA routing method from Inflow data."""
+        if not order.inflow_data:
+            raise ValidationError(
+                "Order is missing inflow data needed to determine QA routing",
+                field="inflow_data",
+                details={"order_id": order.inflow_order_id},
+            )
+
+        resolved_location = location_resolver_service.resolve_location(
+            self._as_dict(order.inflow_data)
         )
-
-        if city:
-            city_upper = city.upper()
-            return city_upper not in ("BRYAN", "COLLEGE STATION")
-
-        return False  # Default to local delivery if no city specified
+        return "Delivery" if resolved_location.is_local_delivery else "Shipping"
 
     def _storage_path(self, *parts: str) -> Path:
         return Path(settings.storage_root).joinpath(*parts)
+
+    def _local_doc_path(self, category: str, filename: str) -> Path:
+        """Return a local filesystem path for a document under configured storage."""
+        base = Path(getattr(settings, 'local_document_storage', '/tmp/techhub-dns'))
+        return base / category / filename
+
+    def _resolve_order(
+        self, order_id: str, lock: bool = False
+    ) -> Optional[Order]:
+        """Resolve an order by UUID, inflow_sales_order_id, or inflow_order_id (in that order).
+
+        Returns the first match or None.
+        """
+        query = self.db.query(Order)
+        if lock:
+            query = query.with_for_update()
+
+        order = query.filter(Order.id == order_id).first()
+        if not order:
+            order = query.filter(Order.inflow_sales_order_id == order_id).first()
+        if not order:
+            order = query.filter(Order.inflow_order_id == order_id).first()
+        return order
+
+    def _cleanup_order_documents(self, order: Order) -> None:
+        """Delete local document files for an order after delivery completion."""
+        paths = [
+            order.picklist_path,
+            order.qa_path,
+            order.signed_picklist_path,
+            order.order_details_path,
+        ]
+        for p_str in paths:
+            if not p_str:
+                continue
+            if isinstance(p_str, str) and not p_str.startswith('http'):
+                try:
+                    p = Path(p_str)
+                    if p.exists():
+                        p.unlink()
+                        logger.info(f"Cleaned up document: {p}")
+                except Exception as e:
+                    logger.warning(f"Failed to cleanup {p_str}: {e}")
+
 
     @staticmethod
     def _append_order_details_sent_marker(existing_remarks: Any) -> Optional[str]:
@@ -201,15 +431,11 @@ class OrderService:
         generated_by: Optional[str] = None,
     ) -> bool:
         order_id_str = str(order_id)
-        order = (
-            self.db.query(Order)
-            .filter(Order.id == order_id_str)
-            .with_for_update()
-            .first()
-        )
+        order = self._resolve_order(order_id_str, lock=True)
         if not order:
             raise NotFoundError("Order", str(order_id))
 
+        self._ensure_remainder_leg_ready(order, "send the order details email")
         return self._send_order_details_email(order, generated_by)
 
     def mark_asset_tagged(
@@ -220,16 +446,12 @@ class OrderService:
         expected_updated_at: Optional[datetime] = None,
     ) -> Order:
         order_id_str = str(order_id)
-        order = (
-            self.db.query(Order)
-            .filter(Order.id == order_id_str)
-            .with_for_update()
-            .first()
-        )
+        order = self._resolve_order(order_id_str, lock=True)
         if not order:
             raise NotFoundError("Order", str(order_id))
 
         self.assert_not_stale(order, expected_updated_at)
+        self._ensure_remainder_leg_ready(order, "tag assets")
 
         tag_data = dict(order.tag_data or {})
         tag_data["tag_ids"] = tag_ids
@@ -252,84 +474,165 @@ class OrderService:
             audit_metadata={"tag_ids": tag_ids, "tagged_by": technician},
         )
 
+        # If this order requires asset tags and is a partial pick,
+        # create the partial leg now so picklist generation can proceed
+        # without requiring a separate confirmation step.
+        if self._requires_asset_tags(order):
+            from app.services.inflow_service import InflowService
+            pick_status = InflowService().get_pick_status(order.inflow_data)
+            is_partial = bool(
+                pick_status
+                and pick_status.get("total_ordered", 0) > 0
+                and pick_status.get("total_picked", 0) > 0
+                and pick_status.get("total_picked", 0) < pick_status.get("total_ordered", 0)
+            )
+            if is_partial:
+                from app.services.order_splitting import OrderSplittingService
+                splitting_service = OrderSplittingService(self.db)
+                splitting_service.create_partial_picklist_leg(order, technician)
+
         return order
 
     def generate_picklist(
         self,
         order_id: Union[UUID, str],
         generated_by: Optional[str] = None,
+        generated_by_display: Optional[str] = None,
         expected_updated_at: Optional[datetime] = None,
+        create_partial_leg: bool = False,
     ) -> Order:
-        order_id_str = str(order_id)
-        order = (
-            self.db.query(Order)
-            .filter(Order.id == order_id_str)
-            .with_for_update()
-            .first()
-        )
+        order_id_str = str(order_id).strip()
+        order = self._resolve_order(order_id_str, lock=True)
         if not order:
             raise NotFoundError("Order", str(order_id))
 
         self.assert_not_stale(order, expected_updated_at)
-
-        if self._requires_asset_tags(order) and not order.tagged_at:
-            raise ValidationError(
-                "Asset tagging must be completed before generating a picklist"
-            )
+        if not self._parent_remainder_can_generate_picklist(order):
+            self._ensure_remainder_leg_ready(order, "generate the picklist")
 
         if not order.inflow_data:
             raise ValidationError("Order must have inFlow data to generate picklist")
 
+        from app.services.inflow_service import InflowService
+
+        pick_status = None
+        if order.inflow_data:
+            try:
+                pick_status = InflowService().get_pick_status(order.inflow_data)
+            except Exception as exc:
+                logger.warning(
+                    "Failed to compute pick status for order %s before picklist generation: %s",
+                    order.inflow_order_id,
+                    exc,
+                )
+
+        is_partial_order = bool(
+            pick_status
+            and pick_status.get("total_ordered", 0) > 0
+            and pick_status.get("total_picked", 0) > 0
+            and pick_status.get("total_picked", 0) < pick_status.get("total_ordered", 0)
+        )
+
+        if is_partial_order and not order.parent_order_id:
+            # For a partially picked parent, create or resolve the child leg first.
+            # The child leg is the one that should receive the generated picklist,
+            # Order Details email, and downstream QA/status timestamps.
+            if not (
+                create_partial_leg
+                or not SystemSettingService.is_setting_enabled(
+                    SETTING_REQUIRE_PARTIAL_PICKLIST_CONFIRMATION
+                )
+            ):
+                raise ValidationError(
+                    "This order is partially picked. Confirm creation of the partial leg before generating the picklist.")
+            else:
+                split_order = OrderSplittingService(self.db).create_partial_picklist_leg(
+                    order, generated_by
+                )
+                if split_order is not None:
+                    order = split_order
+
         # Enforce that the user generating the picklist is the same user who tagged the assets,
-        # unless one of them is missing (legacy data)
-        if order.tagged_by and generated_by and order.tagged_by != generated_by:
-            raise ValidationError(
-                f"Asset tagging and picklist generation must be performed by the same user. "
-                f"Tagged by: {order.tagged_by}, current user: {generated_by}"
+        # unless one of them is missing (legacy data).
+        # tagged_by is stored as email; generated_by is now also email, but we also check
+        # generated_by_display as a fallback for callers that pass a display name.
+        if (
+            SystemSettingService.is_setting_enabled(
+                SETTING_REQUIRE_SAME_USER_FOR_TAGGING_AND_PICKLIST
             )
+            and order.tagged_by
+            and generated_by
+            and order.tagged_by != generated_by
+        ):
+            same_user = False
+            if generated_by_display:
+                if order.tagged_by == generated_by_display:
+                    same_user = True
+                # Strip email domain and compare local parts
+                def _local_part(val: str) -> str:
+                    return val.strip().lower().split('@')[0] if '@' in val else val.strip().lower()
+                if _local_part(order.tagged_by) == _local_part(generated_by_display):
+                    same_user = True
+            if not same_user:
+                raise ValidationError(
+                    f"Asset tagging and picklist generation must be performed by the same user. "
+                    f"Tagged by: {order.tagged_by}, current user: {generated_by_display or generated_by}"
+                )
 
         is_first_picklist = order.picklist_generated_at is None
 
-        picklist_dir = self._storage_path("picklists")
-        picklist_dir.mkdir(parents=True, exist_ok=True)
         filename = f"{order.inflow_order_id or order.id}.pdf"
-        destination = picklist_dir / filename
+        document_inflow_data = order.inflow_data
+        if getattr(order, "remainder_order_id", None) and not getattr(order, "parent_order_id", None):
+            remainder_view = OrderSplittingService(self.db).build_parent_remainder_picklist_view(order)
+            if remainder_view is not None:
+                document_inflow_data = remainder_view
 
-        # Generate the actual picklist PDF from inFlow data using PicklistService
-        from app.services.picklist_service import PicklistService
+        # Generate picklist to a temporary file, upload immediately, store SharePoint URL
+        import tempfile
+        from pathlib import Path
+        
+        temp_pdf = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
+        temp_path = temp_pdf.name
+        temp_pdf.close()
+        
+        try:
+            # Generate the actual picklist PDF from inFlow data using PicklistService
+            from app.services.picklist_service import PicklistService
+            picklist_svc = PicklistService()
+            picklist_svc.generate_picklist_pdf(document_inflow_data, temp_path)
 
-        picklist_svc = PicklistService()
-        picklist_svc.generate_picklist_pdf(order.inflow_data, str(destination))
+            # Save picklist to local storage
+            local_dir = self._local_doc_path("picklists", filename).parent
+            local_dir.mkdir(parents=True, exist_ok=True)
+            local_path = self._local_doc_path("picklists", filename)
+            shutil.copy2(temp_path, local_path)
+            logger.info(f"Picklist saved locally: {local_path}")
 
-        # Upload to SharePoint asynchronously (non-blocking)
-        picklist_path = str(destination)  # Use local path immediately
-
-        def async_sharepoint_upload():
-            """Background task for SharePoint upload"""
+            # Upload to SharePoint immediately; this is required.
+            sp_url = None
             try:
                 from app.services.sharepoint_service import get_sharepoint_service
 
                 sp_service = get_sharepoint_service()
-                if sp_service.is_enabled:
-                    sp_service.upload_pdf(str(destination), "picklists", filename)
-                    logger.info(
-                        f"[Background] Picklist uploaded to SharePoint: {filename}"
-                    )
+                if not sp_service.is_enabled:
+                    raise RuntimeError("SharePoint storage is not enabled")
+                sp_url = sp_service.upload_pdf(temp_path, "picklists", filename)
+                logger.info(f"Picklist uploaded to SharePoint: {sp_url}")
             except Exception as e:
-                logger.warning(
-                    f"[Background] SharePoint upload failed for picklist: {e}"
-                )
+                logger.error("SharePoint upload failed for picklist: %s", e)
+                raise
 
-        from app.services.background_tasks import run_in_background
-
-        run_in_background(
-            async_sharepoint_upload, task_name=f"upload_picklist_{filename}"
-        )
-
-        order.picklist_generated_at = datetime.utcnow()
-        order.picklist_generated_by = generated_by
-        order.picklist_path = picklist_path
-        order.updated_at = datetime.utcnow()
+            order.picklist_generated_at = datetime.utcnow()
+            order.picklist_generated_by = generated_by_display or generated_by
+            order.picklist_path = sp_url or str(local_path)
+            order.updated_at = datetime.utcnow()
+        finally:
+            # Clean up temporary file
+            try:
+                Path(temp_path).unlink(missing_ok=True)
+            except Exception as e:
+                logger.warning(f"Failed to delete temp picklist {temp_path}: {e}")
 
         queued_print_job = None
         if is_first_picklist and SystemSettingService.get_setting(
@@ -338,7 +641,7 @@ class OrderService:
             queued_print_job = PrintJobService(self.db).enqueue_picklist_print(
                 order,
                 trigger_source="automatic",
-                requested_by=generated_by,
+                requested_by=generated_by_display or generated_by,
             )
 
         self.db.commit()
@@ -347,16 +650,17 @@ class OrderService:
             emit_print_job_available(queued_print_job)
 
         # Audit logging for picklist generation
+        display_name = generated_by_display or generated_by
         audit_service = AuditService(self.db)
         audit_service.log_order_action(
             order_id=str(order_id),
             action="picklist_generated",
-            user_id=generated_by or "unknown",
+            user_id=display_name,
             description=f"Picklist PDF generated",
             audit_metadata={
                 "filename": filename,
-                "generated_by": generated_by,
-                "file_path": str(destination),
+                "generated_by": display_name,
+                "sharepoint_url": sp_url,
             },
         )
 
@@ -421,6 +725,7 @@ class OrderService:
             raise NotFoundError("Order", str(order_id))
 
         self.assert_not_stale(order, expected_updated_at)
+        self._ensure_remainder_leg_ready(order, "complete QA")
 
         if not order.picklist_generated_at:
             raise ValidationError(
@@ -437,12 +742,10 @@ class OrderService:
             "orderNumber",
             "technician",
             "qaSignature",
-            "method",
             "verifyAssetTagSerialMatch",
-            "verifyOrderDetailsTemplateSent",
+            "verifyOrderDetailsTemplateSentAndElectronicPackingSlipSaved",
             "verifyPackagedProperly",
             "verifyPackingSlipSerialsMatch",
-            "verifyElectronicPackingSlipSaved",
             "verifyBoxesLabeledCorrectly",
         ]
 
@@ -453,21 +756,12 @@ class OrderService:
                 details={"missing_fields": missing_fields},
             )
 
-        # Validate method is either "Delivery" or "Shipping"
-        if qa_data.get("method") not in ["Delivery", "Shipping"]:
-            raise ValidationError(
-                "QA method must be either 'Delivery' or 'Shipping'",
-                field="method",
-                details={"provided_method": qa_data.get("method")},
-            )
-
         # Validate boolean fields are boolean
         boolean_fields = [
             "verifyAssetTagSerialMatch",
-            "verifyOrderDetailsTemplateSent",
+            "verifyOrderDetailsTemplateSentAndElectronicPackingSlipSaved",
             "verifyPackagedProperly",
             "verifyPackingSlipSerialsMatch",
-            "verifyElectronicPackingSlipSaved",
             "verifyBoxesLabeledCorrectly",
         ]
         for field in boolean_fields:
@@ -478,10 +772,7 @@ class OrderService:
                     details={"field_type": type(qa_data.get(field)).__name__},
                 )
 
-        qa_dir = self._storage_path("qa")
-        qa_dir.mkdir(parents=True, exist_ok=True)
         qa_filename = f"{order.inflow_order_id or order.id}.json"
-        qa_file = qa_dir / qa_filename
         qa_payload = {
             "order_id": str(order.id),
             "inflow_order_id": order.inflow_order_id,
@@ -489,31 +780,45 @@ class OrderService:
             "submitted_by": technician,
             "responses": qa_data,
         }
-        qa_file.write_text(
-            json.dumps(qa_payload, indent=2, sort_keys=True), encoding="utf-8"
-        )
 
-        # Upload to SharePoint if enabled
-        qa_path = str(qa_file)
+        # Upload QA JSON directly to SharePoint (source of truth)
+        try:
+            # Save QA JSON to local storage
+            local_qadir = self._local_doc_path("qa", qa_filename).parent
+            local_qadir.mkdir(parents=True, exist_ok=True)
+            local_qapath = self._local_doc_path("qa", qa_filename)
+            with open(local_qapath, "w") as fp:
+                json.dump(qa_payload, fp)
+            logger.info(f"QA data saved locally: {local_qapath}")
+            qa_path = str(local_qapath)
+        except Exception as e:
+            logger.error(f"Failed to save QA data locally: {e}")
+            raise
+
+        # Upload QA JSON to SharePoint (source of truth) — synchronous
         try:
             from app.services.sharepoint_service import get_sharepoint_service
-
             sp_service = get_sharepoint_service()
-            if sp_service.is_enabled:
-                sp_url = sp_service.upload_json(qa_payload, "qa", qa_filename)
-                qa_path = sp_url
-                logger.info(f"QA data uploaded to SharePoint: {sp_url}")
+            if not sp_service.is_enabled:
+                raise RuntimeError("SharePoint storage is not enabled")
+            with open(local_qapath, "rb") as fp:
+                qa_bytes = fp.read()
+            sp_url = sp_service.upload_file(qa_bytes, "qa", qa_filename)
+            logger.info(f"QA data uploaded to SharePoint: {sp_url}")
+            order.qa_path = sp_url  # Source of truth
         except Exception as e:
-            logger.warning(
-                f"SharePoint upload failed for QA data, using local path: {e}"
-            )
+            logger.error(f"SharePoint upload failed for QA: {e}")
+            raise  # Fail fast
+
+        qa_method = self._derive_qa_method(order)
+        qa_data["method"] = qa_method
 
         # Update order object (BUT DO NOT COMMIT YET to keep transition atomic)
         order.qa_completed_at = datetime.utcnow()
         order.qa_completed_by = technician
         order.qa_data = qa_data
-        order.qa_path = qa_path
-        order.qa_method = qa_data.get("method")  # "Delivery" or "Shipping"
+        # order.qa_path already set to SharePoint sp_url above
+        order.qa_method = qa_method
         order.updated_at = datetime.utcnow()
 
         # Audit logging for QA completion
@@ -522,17 +827,17 @@ class OrderService:
             order_id=str(order_id),
             action="qa_completed",
             user_id=technician or "unknown",
-            description=f"QA completed using {qa_data.get('method', 'unknown')} method",
+            description=f"QA completed using {qa_method} routing",
             audit_metadata={
-                "qa_method": qa_data.get("method"),
+                "qa_method": qa_method,
                 "completed_by": technician,
-                "qa_file_path": str(qa_file),
+                "sharepoint_url": sp_url,
             },
         )
 
         # Automatically transition status based on QA method
         target_status = None
-        method = qa_data.get("method")
+        method = qa_method
 
         logger.info(f"Checking for auto-transition. Method: '{method}'")
 
@@ -583,13 +888,7 @@ class OrderService:
             query = query.filter(Order.status == status.value)
 
         if search:
-            search_filter = or_(
-                Order.inflow_order_id.ilike(f"%{search}%"),
-                Order.recipient_name.ilike(f"%{search}%"),
-                Order.delivery_location.ilike(f"%{search}%"),
-                Order.po_number.ilike(f"%{search}%"),
-            )
-            query = query.filter(search_filter)
+            query = self._apply_order_search(query, search.strip())
 
         total = query.count()
         orders = (
@@ -606,20 +905,38 @@ class OrderService:
         return orders, total
 
     def get_order_by_id(self, order_id: Union[UUID, str]) -> Optional[Order]:
-        """Get a single order by ID"""
-        order_id_str = str(order_id)
-        return self.db.query(Order).filter(Order.id == order_id_str).first()
+        """Get a single order by ID or order number."""
+        order_id_str = str(order_id).strip()
+        # Try UUID first for backward compatibility
+        order = self.db.query(Order).filter(Order.id == order_id_str).first()
+        if order is not None:
+            return order
+        # Fall back to order number
+        return self.db.query(Order).filter(Order.inflow_order_id == order_id_str).first()
 
     def get_order_detail(self, order_id: Union[UUID, str]) -> Optional[Order]:
-        """Get order with related data (audit logs, notifications)"""
-        order_id_str = str(order_id)
-        return (
+        """Get order with related data (audit logs, notifications) by ID or order number."""
+        order_id_str = str(order_id).strip()
+        # Try UUID first for backward compatibility
+        order = (
             self.db.query(Order)
             .options(
                 selectinload(Order.audit_logs),
                 selectinload(Order.print_jobs),
             )
             .filter(Order.id == order_id_str)
+            .first()
+        )
+        if order is not None:
+            return order
+        # Fall back to order number
+        return (
+            self.db.query(Order)
+            .options(
+                selectinload(Order.audit_logs),
+                selectinload(Order.print_jobs),
+            )
+            .filter(Order.inflow_order_id == order_id_str)
             .first()
         )
 
@@ -663,13 +980,20 @@ class OrderService:
     ) -> Order:
         """Transition order status with validation and audit logging"""
         order_id_str = str(order_id)
+        # Try UUID first, fall back to inflow_order_id (TH-number)
         order = (
             self.db.query(Order)
             .filter(Order.id == order_id_str)
             .with_for_update()
             .first()
         )
-
+        if order is None:
+            order = (
+                self.db.query(Order)
+                .filter(Order.inflow_order_id == order_id_str)
+                .with_for_update()
+                .first()
+            )
         if not order:
             raise NotFoundError("Order", str(order_id))
 
@@ -751,6 +1075,8 @@ class OrderService:
 
         if new_status == OrderStatus.ISSUE:
             order.issue_reason = reason
+            # Detach from any delivery run when raising an issue
+            order.delivery_run_id = None
 
         # Create audit log
         audit_log = AuditLog(
@@ -772,6 +1098,134 @@ class OrderService:
 
         # Note: Teams notification should be sent via BackgroundTasks in the route handler
         # This service method doesn't send notifications directly to avoid blocking
+
+        self.db.commit()
+        self.db.refresh(order)
+
+        return order
+
+    def _rollback_targets_for_status(self, current_status: str) -> set[str]:
+        """Return the statuses an order can be rolled back to from the current status."""
+        # Rollback is only permitted from ISSUE status (quarantine-first workflow)
+        if current_status == OrderStatus.ISSUE.value:
+            return {
+                OrderStatus.PICKED.value,
+                OrderStatus.QA.value,
+                OrderStatus.PRE_DELIVERY.value,
+            }
+        return set()
+
+    def rollback_status(
+        self,
+        order_id: Union[UUID, str],
+        target_status: OrderStatus,
+        changed_by: Optional[str] = None,
+        reason: Optional[str] = None,
+        expected_updated_at: Optional[datetime] = None,
+    ) -> Order:
+        """Roll an order back to an earlier workflow status and clear downstream state."""
+        order_id_str = str(order_id)
+        order = (
+            self.db.query(Order)
+            .filter(Order.id == order_id_str)
+            .with_for_update()
+            .first()
+        )
+        if order is None:
+            order = (
+                self.db.query(Order)
+                .filter(Order.inflow_order_id == order_id_str)
+                .with_for_update()
+                .first()
+            )
+        if not order:
+            raise NotFoundError("Order", str(order_id))
+
+        self.assert_not_stale(order, expected_updated_at)
+
+        current_status = order.status
+        allowed_targets = self._rollback_targets_for_status(current_status)
+        if target_status.value not in allowed_targets:
+            raise ValidationError(
+                f"Cannot rollback order from {current_status} to {target_status.value}",
+                details={
+                    "order_id": order.inflow_order_id,
+                    "current_status": current_status,
+                    "target_status": target_status.value,
+                    "allowed_targets": sorted(allowed_targets),
+                },
+            )
+
+        if current_status == target_status.value:
+            raise ValidationError("Order is already in the requested status")
+
+        cleared_fields: Dict[str, Any] = {}
+
+        def clear(field_name: str) -> None:
+            cleared_fields[field_name] = getattr(order, field_name)
+            setattr(order, field_name, None)
+
+        clear("issue_reason")
+        clear("delivery_run_id")
+        clear("delivery_sequence")
+        clear("shipping_workflow_status_updated_at")
+        clear("shipping_workflow_status_updated_by")
+        clear("shipped_to_carrier_at")
+        clear("shipped_to_carrier_by")
+        clear("carrier_name")
+        clear("tracking_number")
+        clear("signature_captured_at")
+        clear("signed_picklist_path")
+        order.shipping_workflow_status = ShippingWorkflowStatus.WORK_AREA.value
+
+        if target_status in (OrderStatus.QA, OrderStatus.PICKED):
+            clear("assigned_deliverer")
+
+        if target_status == OrderStatus.QA:
+            clear("qa_completed_at")
+            clear("qa_completed_by")
+            clear("qa_data")
+            clear("qa_path")
+            clear("qa_method")
+
+        if target_status == OrderStatus.PICKED:
+            clear("tagged_at")
+            clear("tagged_by")
+            clear("tag_data")
+            clear("picklist_generated_at")
+            clear("picklist_generated_by")
+            clear("picklist_path")
+            clear("order_details_path")
+            clear("order_details_generated_at")
+            clear("qa_completed_at")
+            clear("qa_completed_by")
+            clear("qa_data")
+            clear("qa_path")
+            clear("qa_method")
+
+        order.status = target_status.value
+        order.updated_at = datetime.utcnow()
+
+        audit_log = AuditLog(
+            order_id=order.id,
+            changed_by=changed_by,
+            from_status=current_status,
+            to_status=target_status.value,
+            reason=reason,
+            timestamp=datetime.utcnow(),
+        )
+        self.db.add(audit_log)
+        self._record_status_history(
+            order=order,
+            from_status=current_status,
+            to_status=target_status.value,
+            actor_identifier=changed_by,
+            metadata={
+                "reason": reason,
+                "rollback": True,
+                "cleared_fields": sorted(cleared_fields.keys()),
+            },
+        )
 
         self.db.commit()
         self.db.refresh(order)
@@ -821,16 +1275,39 @@ class OrderService:
         new_status: OrderStatus,
         changed_by: Optional[str] = None,
         reason: Optional[str] = None,
+        expected_updated_at: Optional[datetime] = None,
     ) -> List[Order]:
-        """Bulk transition multiple orders with logging."""
+        """Bulk transition multiple orders with locking and logging."""
+        # Lock all orders up front to prevent concurrent modifications
+        order_id_strs = [str(oid) for oid in order_ids]
+        orders = (
+            self.db.query(Order)
+            .filter(Order.id.in_(order_id_strs))
+            .with_for_update()
+            .all()
+        )
+
+        # Validate we found all requested orders
+        if len(orders) != len(order_id_strs):
+            found_ids = {str(o.id) for o in orders}
+            missing = [oid for oid in order_id_strs if oid not in found_ids]
+            raise NotFoundError("Order(s)", ", ".join(missing[:5]))
+
+        # Validate staleness for all orders before making any changes
+        if expected_updated_at is not None:
+            for order in orders:
+                self.assert_not_stale(order, expected_updated_at)
+
+        # Transition each order directly (already locked above).
+        # transition_status() will re-acquire FOR UPDATE on the same row,
+        # which is a no-op within the same transaction.
         successful_orders = []
-        for order_id in order_ids:
+        for order in orders:
             try:
-                order = self.transition_status(order_id, new_status, changed_by, reason)
-                successful_orders.append(order)
+                transitioned = self.transition_status(order.id, new_status, changed_by, reason)
+                successful_orders.append(transitioned)
             except Exception as e:
-                # Log error but continue with other orders
-                logger.warning(f"Failed to transition order {order_id}: {e}")
+                logger.warning("Failed to transition order %s: %s", order.id, e)
                 continue
 
         return successful_orders
@@ -1134,7 +1611,10 @@ class OrderService:
         shipping_address_obj = self._as_dict(inflow_data.get("shippingAddress"))
         email = inflow_data.get("email", "")
 
-        existing_order.inflow_data = inflow_data
+        existing_order.inflow_data = self._preserve_partial_split_inflow_snapshot(
+            existing_order,
+            inflow_data,
+        )
         existing_order.delivery_location = delivery_location
         existing_order.order_remarks = order_remarks
         existing_order.shipping_address = shipping_address_obj.get("address1", "")
@@ -1460,10 +1940,23 @@ class OrderService:
                 f"Using city as delivery_location for shipping order {order_number}: '{delivery_location}'"
             )
 
-        # Check if order exists
+        delivery_location = self._apply_delivery_location_overrides(
+            inflow_data, delivery_location
+        )
+
+        # Check if order exists.
+        # Prefer an exact inFlow order number match first so split parent/child
+        # legs that share the same salesOrderId do not get updated ambiguously.
+        sales_order_id = inflow_data.get("salesOrderId")
         existing = (
             self.db.query(Order).filter(Order.inflow_order_id == order_number).first()
         )
+        if not existing and sales_order_id:
+            existing = (
+                self.db.query(Order)
+                .filter(Order.inflow_sales_order_id == sales_order_id)
+                .first()
+            )
 
         if existing:
             # Update existing order - only update timestamp if data actually changed
@@ -1495,7 +1988,21 @@ class OrderService:
             if data_changed:
                 existing.updated_at = datetime.utcnow()
 
-            existing.inflow_data = inflow_data  # Always update to keep latest data
+            merged_inflow_data = self._preserve_partial_split_inflow_snapshot(
+                existing,
+                inflow_data,
+            )  # Always update to keep latest data without clobbering partial splits
+            if getattr(existing, "remainder_order_id", None) and not getattr(
+                existing, "parent_order_id", None
+            ):
+                merged_inflow_data = OrderSplittingService(self.db).normalize_partial_remainder_snapshot(
+                    existing,
+                    merged_inflow_data,
+                )
+
+            if existing.inflow_data != merged_inflow_data:
+                existing.inflow_data = merged_inflow_data
+                data_changed = True
 
             # Don't overwrite manual status changes - keep existing status
 
@@ -1503,88 +2010,111 @@ class OrderService:
             self.db.refresh(existing)
             return existing
         else:
-            # Create new order - try to use Inflow orderDate if available, otherwise use current time
-            order_date = None
-            if "orderDate" in inflow_data and inflow_data.get("orderDate"):
-                try:
-                    # Parse Inflow date string (format may vary)
-                    order_date_str = inflow_data.get("orderDate")
-                    if isinstance(order_date_str, str):
-                        # Try common date formats
-                        for fmt in [
-                            "%Y-%m-%dT%H:%M:%S",
-                            "%Y-%m-%dT%H:%M:%S.%f",
-                            "%Y-%m-%d %H:%M:%S",
-                            "%Y-%m-%d",
-                        ]:
-                            try:
-                                order_date = datetime.strptime(
-                                    order_date_str.split("+")[0].split("Z")[0], fmt
-                                )
-                                break
-                            except ValueError:
-                                continue
-                except Exception as e:
-                    logger.debug(
-                        f"Could not parse orderDate '{inflow_data.get('orderDate')}' for order {order_number}: {e}"
+            # Create new order with IntegrityError handling for duplicate webhooks (Issue #40)
+            try:
+                order_date = None
+                if "orderDate" in inflow_data and inflow_data.get("orderDate"):
+                    try:
+                        # Parse Inflow date string (format may vary)
+                        order_date_str = inflow_data.get("orderDate")
+                        if isinstance(order_date_str, str):
+                            # Try common date formats
+                            for fmt in [
+                                "%Y-%m-%dT%H:%M:%S",
+                                "%Y-%m-%dT%H:%M:%S.%f",
+                                "%Y-%m-%d %H:%M:%S",
+                                "%Y-%m-%d",
+                            ]:
+                                try:
+                                    order_date = datetime.strptime(
+                                        order_date_str.split("+")[0].split("Z")[0], fmt
+                                    )
+                                    break
+                                except ValueError:
+                                    continue
+                    except Exception as e:
+                        logger.debug(
+                            f"Could not parse orderDate '{inflow_data.get('orderDate')}' for order {order_number}: {e}"
+                        )
+
+                # Use orderDate if available, otherwise use current time
+                created_time = order_date if order_date else datetime.utcnow()
+
+                order = Order(
+                    inflow_order_id=order_number,
+                    inflow_sales_order_id=inflow_data.get("salesOrderId"),
+                    recipient_name=inflow_data.get("contactName"),
+                    recipient_contact=inflow_data.get("email"),
+                    delivery_location=delivery_location,
+                    po_number=inflow_data.get("poNumber"),
+                    status=OrderStatus.PICKED.value,
+                    inflow_data=inflow_data,
+                    created_at=created_time,
+                    updated_at=created_time,  # Set to same as created_at initially
+                )
+                self.db.add(order)
+                self.db.commit()
+                self.db.refresh(order)
+
+                # Create AuditLog entry for initial 'picked' status in timeline
+                audit_log = AuditLog(
+                    order_id=order.id,
+                    changed_by="system",
+                    from_status=None,  # No previous status - order was just created
+                    to_status=OrderStatus.PICKED.value,
+                    reason="Order ingested from inFlow",
+                    timestamp=datetime.utcnow(),  # Use ingestion time (not orderDate) for audit trail
+                )
+                self.db.add(audit_log)
+                self._record_status_history(
+                    order=order,
+                    from_status=None,
+                    to_status=OrderStatus.PICKED.value,
+                    actor_identifier="system",
+                    metadata={"reason": "Order ingested from inFlow"},
+                )
+                self.db.commit()
+
+                # Also log to system audit log for full traceability
+                audit_service = AuditService(self.db)
+                audit_service.log_order_action(
+                    order_id=str(order.id),
+                    action="imported_from_inflow",
+                    user_id="system",  # Automated import
+                    description=f"Order imported from inFlow",
+                    audit_metadata={
+                        "inflow_order_id": order_number,
+                        "inflow_sales_order_id": inflow_data.get("salesOrderId"),
+                        "source": "inflow_webhook",
+                        "order_type": "shipping"
+                        if self._is_shipping_order(order)
+                        else "delivery",
+                    },
+                )
+
+                return order
+            except IntegrityError:
+                self.db.rollback()
+                # Another request created it — fetch and update instead
+                existing = self.db.query(Order).filter(Order.inflow_order_id == order_number).first()
+                if existing:
+                    merged_inflow_data = self._preserve_partial_split_inflow_snapshot(
+                        existing,
+                        inflow_data,
                     )
-
-            # Use orderDate if available, otherwise use current time
-            created_time = order_date if order_date else datetime.utcnow()
-
-            order = Order(
-                inflow_order_id=order_number,
-                inflow_sales_order_id=inflow_data.get("salesOrderId"),
-                recipient_name=inflow_data.get("contactName"),
-                recipient_contact=inflow_data.get("email"),
-                delivery_location=delivery_location,
-                po_number=inflow_data.get("poNumber"),
-                status=OrderStatus.PICKED.value,
-                inflow_data=inflow_data,
-                created_at=created_time,
-                updated_at=created_time,  # Set to same as created_at initially
-            )
-            self.db.add(order)
-            self.db.commit()
-            self.db.refresh(order)
-
-            # Create AuditLog entry for initial 'picked' status in timeline
-            audit_log = AuditLog(
-                order_id=order.id,
-                changed_by="system",
-                from_status=None,  # No previous status - order was just created
-                to_status=OrderStatus.PICKED.value,
-                reason="Order ingested from inFlow",
-                timestamp=datetime.utcnow(),  # Use ingestion time (not orderDate) for audit trail
-            )
-            self.db.add(audit_log)
-            self._record_status_history(
-                order=order,
-                from_status=None,
-                to_status=OrderStatus.PICKED.value,
-                actor_identifier="system",
-                metadata={"reason": "Order ingested from inFlow"},
-            )
-            self.db.commit()
-
-            # Also log to system audit log for full traceability
-            audit_service = AuditService(self.db)
-            audit_service.log_order_action(
-                order_id=str(order.id),
-                action="imported_from_inflow",
-                user_id="system",  # Automated import
-                description=f"Order imported from inFlow",
-                audit_metadata={
-                    "inflow_order_id": order_number,
-                    "inflow_sales_order_id": inflow_data.get("salesOrderId"),
-                    "source": "inflow_webhook",
-                    "order_type": "shipping"
-                    if self._is_shipping_order(order)
-                    else "delivery",
-                },
-            )
-
-            return order
+                    if getattr(existing, "remainder_order_id", None) and not getattr(
+                        existing, "parent_order_id", None
+                    ):
+                        merged_inflow_data = OrderSplittingService(self.db).normalize_partial_remainder_snapshot(
+                            existing,
+                            merged_inflow_data,
+                        )
+                    existing.inflow_data = merged_inflow_data
+                    existing.updated_at = datetime.utcnow()
+                    self.db.commit()
+                    self.db.refresh(existing)
+                    return existing
+                raise
 
     def _send_order_details_email(
         self, order: Order, generated_by: Optional[str] = None
@@ -1619,16 +2149,23 @@ class OrderService:
             order_details_data = inflow_service.build_remaining_order_view(
                 order.inflow_data
             )
+            remainder_mode = bool(
+                getattr(order, "remainder_order_id", None) and not getattr(order, "parent_order_id", None)
+            )
+            force_regenerate_pdf = remainder_mode
+            if remainder_mode:
+                remainder_view = OrderSplittingService(self.db).build_parent_remainder_document_view(order)
+                if remainder_view is not None:
+                    order_details_data = remainder_view
             has_partial_remaining = bool(order_details_data.get("lines")) and (
                 order_details_data.get("lines") != order.inflow_data.get("lines", [])
             )
-            pdf_source_data = (
-                order_details_data if has_partial_remaining else order.inflow_data
-            )
-            force_regenerate_pdf = has_partial_remaining
+            force_regenerate_pdf = force_regenerate_pdf or has_partial_remaining
+            pdf_source_data = order_details_data if (has_partial_remaining or force_regenerate_pdf) else order.inflow_data
 
             pdf_bytes = None
             order_details_path = None
+            pdf_content = None
 
             # Step 1: Check SharePoint first for existing PDF
             if not force_regenerate_pdf:
@@ -1661,31 +2198,30 @@ class OrderService:
                 logger.info(f"Generating Order Details PDF for order {order_number}")
                 pdf_bytes = pdf_service.generate_order_details_pdf(pdf_source_data)
 
-                # Save locally first
-                order_details_dir = self._storage_path("order_details")
-                order_details_dir.mkdir(parents=True, exist_ok=True)
-                pdf_path = order_details_dir / pdf_filename
-                pdf_path.write_bytes(pdf_bytes)
-                logger.info(f"Order Details PDF saved to {pdf_path}")
-                order_details_path = str(pdf_path)
+            # Normalize PDF content to raw bytes for storage/email.
+            pdf_content = pdf_bytes.getvalue() if hasattr(pdf_bytes, "getvalue") else pdf_bytes
 
-                # Upload to SharePoint if enabled
-                try:
-                    from app.services.sharepoint_service import get_sharepoint_service
+            # Save Order Details PDF locally first, then upload to SharePoint if available.
+            od_dir = self._local_doc_path("orders", pdf_filename).parent
+            od_dir.mkdir(parents=True, exist_ok=True)
+            od_path = self._local_doc_path("orders", pdf_filename)
+            od_path.write_bytes(pdf_content)
+            logger.info(f"Order Details PDF saved locally: {od_path}")
+            order_details_path = str(od_path)
 
-                    sp_service = get_sharepoint_service()
-                    if sp_service.is_enabled:
-                        sp_url = sp_service.upload_file(
-                            pdf_bytes, "order-details", pdf_filename
-                        )
-                        order_details_path = sp_url
-                        logger.info(
-                            f"Order Details PDF uploaded to SharePoint: {sp_url}"
-                        )
-                except Exception as e:
-                    logger.warning(
-                        f"SharePoint upload failed for Order Details, using local path: {e}"
-                    )
+            try:
+                from app.services.sharepoint_service import get_sharepoint_service
+
+                sp_service = get_sharepoint_service()
+                if not sp_service.is_enabled:
+                    raise RuntimeError("SharePoint storage is not enabled")
+
+                uploaded_url = sp_service.upload_file(pdf_content, "order-details", pdf_filename)
+                logger.info(f"Order Details PDF uploaded to SharePoint: {uploaded_url}")
+                order_details_path = uploaded_url
+            except Exception as e:
+                logger.error("SharePoint upload failed for Order Details: %s", e)
+                raise
 
             # Update order with Order Details path
             order.order_details_path = order_details_path
@@ -1712,7 +2248,7 @@ class OrderService:
                 to_address=recipient_email,
                 order_number=order_number,
                 customer_name=customer_name,
-                pdf_content=pdf_bytes,
+                pdf_content=pdf_content,
             )
 
             if success:
@@ -1747,11 +2283,12 @@ class OrderService:
                 return False
 
         except Exception as e:
-            # Log error but don't fail the picklist generation
+            # Log error and re-raise so required SharePoint/upload/email failures
+            # surface to the caller instead of being masked as success.
             logger.error(
                 f"Error generating/sending Order Details for order {order.inflow_order_id}: {e}"
             )
-            return False
+            raise
 
     def transition_shipping_workflow(
         self,
@@ -1814,6 +2351,30 @@ class OrderService:
             # Auto-transition to Delivered status when shipped
             old_status = order.status
             order.status = OrderStatus.DELIVERED.value
+            # Clean up local document files now that delivery is complete
+            self._cleanup_order_documents(order)
+
+            # Create AuditLog entry for timeline display
+            audit_log = AuditLog(
+                order_id=order.id,
+                changed_by=updated_by or "system",
+                from_status=old_status,
+                to_status=OrderStatus.DELIVERED.value,
+                reason=f"Shipped via {carrier_name or 'carrier'}"
+                + (f" (Tracking: {tracking_number})" if tracking_number else ""),
+                timestamp=datetime.utcnow(),
+            )
+            self.db.add(audit_log)
+            self._record_status_history(
+                order=order,
+                from_status=old_status,
+                to_status=OrderStatus.DELIVERED.value,
+                actor_identifier=updated_by,
+                metadata={
+                    "reason": f"Shipped via {carrier_name or 'carrier'}"
+                    + (f" (Tracking: {tracking_number})" if tracking_number else ""),
+                },
+            )
 
             # Create AuditLog entry for timeline display
             audit_log = AuditLog(
@@ -1857,8 +2418,9 @@ class OrderService:
 
     def generate_bundled_documents(
         self, order_id: Union[UUID, str], signature_data: dict
-    ) -> str:
-        """Generate bundled documents: create folder with signed picklist and QA form"""
+    ) -> tuple[str, str]:
+        """Generate bundled documents directly in SharePoint (no local storage).
+        Returns (signed_picklist_sp_url, bundle_sp_url)."""
         order_id_str = str(order_id)
         order = self.db.query(Order).filter(Order.id == order_id_str).first()
         if not order:
@@ -1873,34 +2435,107 @@ class OrderService:
                 },
             )
 
-        # Create completed documents directory structure
-        completed_dir = self._storage_path("completed")
-        completed_dir.mkdir(parents=True, exist_ok=True)
+        import tempfile
+        from pathlib import Path
 
-        order_dir = completed_dir / (order.inflow_order_id or str(order.id))
-        order_dir.mkdir(parents=True, exist_ok=True)
+        base_filename = f"{order.inflow_order_id or order.id}"
+        
+        # Ensure picklist is locally available (download if it's a SharePoint URL)
+        picklist_temp_to_delete = None
+        if order.picklist_path.startswith("http"):
+            from app.services.sharepoint_service import get_sharepoint_service
+            sp = get_sharepoint_service()
+            picklist_bytes = sp.download_file("picklists", f"{base_filename}.pdf")
+            if not picklist_bytes:
+                raise NotFoundError("Picklist", base_filename)
+            tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
+            tmp.write(picklist_bytes)
+            tmp.close()
+            local_picklist_path = tmp.name
+            picklist_temp_to_delete = local_picklist_path
+        else:
+            local_picklist_path = order.picklist_path
 
-        # Generate individual PDFs
-        signed_picklist_path = self._apply_signature_to_pdf(
-            order.picklist_path, signature_data
-        )
+        # Apply signature to get signed picklist (returns temp file path)
+        logger.info("SIG_BUNDLE calling _apply_signature_to_pdf with page_width=%s page_height=%s",
+                     signature_data.get("page_width"), signature_data.get("page_height"))
+        signed_temp = self._apply_signature_to_pdf(local_picklist_path, signature_data)
 
-        qa_pdf_path = self._generate_qa_pdf(order.qa_data, order)
+        # Generate QA PDF (returns temp file path)
+        qa_temp = self._generate_qa_pdf(order.qa_data, order)
 
-        # Copy files to completed folder
-        import shutil
+        # Save signed picklist to local storage
+        signed_local_dir = self._local_doc_path("signed", f"{base_filename}_signed.pdf").parent
+        signed_local_dir.mkdir(parents=True, exist_ok=True)
+        signed_local_path = self._local_doc_path("signed", f"{base_filename}_signed.pdf")
+        shutil.copy2(signed_temp, signed_local_path)
+        logger.info(f"Signed picklist saved locally: {signed_local_path}")
 
-        signed_picklist_dest = order_dir / "signed_picklist.pdf"
-        qa_form_dest = order_dir / "qa_form.pdf"
+        # Save QA PDF to local storage
+        qa_local_dir = self._local_doc_path("qa", f"{base_filename}_qa.pdf").parent
+        qa_local_dir.mkdir(parents=True, exist_ok=True)
+        qa_local_path = self._local_doc_path("qa", f"{base_filename}_qa.pdf")
+        shutil.copy2(qa_temp, qa_local_path)
+        logger.info(f"QA PDF saved locally: {qa_local_path}")
 
-        shutil.copy2(signed_picklist_path, signed_picklist_dest)
-        shutil.copy2(qa_pdf_path, qa_form_dest)
+        # Create bundle from signed + QA PDFs
+        tmp_bundle = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
+        bundle_temp = tmp_bundle.name
+        tmp_bundle.close()
+        self._bundle_pdfs([signed_temp, qa_temp], bundle_temp)
+        bundle_local_dir = self._local_doc_path("bundles", f"{base_filename}_bundle.pdf").parent
+        bundle_local_dir.mkdir(parents=True, exist_ok=True)
+        bundle_local_path = self._local_doc_path("bundles", f"{base_filename}_bundle.pdf")
+        shutil.copy2(bundle_temp, bundle_local_path)
+        logger.info(f"Bundle saved locally: {bundle_local_path}")
 
-        # Clean up temporary files
-        Path(signed_picklist_path).unlink(missing_ok=True)
-        Path(qa_pdf_path).unlink(missing_ok=True)
+        # All documents saved locally — now upload to SharePoint
+        try:
+            from app.services.sharepoint_service import get_sharepoint_service
+            sp_service = get_sharepoint_service()
+            if not sp_service.is_enabled:
+                raise RuntimeError("SharePoint storage is not enabled")
 
-        return str(order_dir)
+            # Upload signed picklist
+            with open(signed_local_path, "rb") as f:
+                signed_bytes = f.read()
+            signed_sp_url = sp_service.upload_file(signed_bytes, "signed", f"{base_filename}_signed.pdf")
+            logger.info(f"Signed picklist uploaded to SharePoint: {signed_sp_url}")
+
+            # Upload QA PDF
+            with open(qa_local_path, "rb") as f:
+                qa_bytes = f.read()
+            qa_sp_url = sp_service.upload_file(qa_bytes, "qa", f"{base_filename}_qa.pdf")
+            logger.info(f"QA PDF uploaded to SharePoint: {qa_sp_url}")
+
+            # Upload bundle
+            with open(bundle_local_path, "rb") as f:
+                bundle_bytes = f.read()
+            bundle_sp_url = sp_service.upload_file(bundle_bytes, "bundles", f"{base_filename}_bundle.pdf")
+            logger.info(f"Bundle uploaded to SharePoint: {bundle_sp_url}")
+
+            # Persist SharePoint URLs on order (source of truth)
+            order.signed_picklist_path = signed_sp_url
+            if hasattr(order, 'bundle_path'):
+                order.bundle_path = bundle_sp_url
+        except Exception as e:
+            logger.error(f"SharePoint upload failed in generate_bundled_documents: {e}")
+            raise  # No local fallback
+
+        # Clean up temp files
+        for p in [signed_temp, qa_temp, bundle_temp]:
+            try:
+                Path(p).unlink(missing_ok=True)
+            except Exception as e:
+                logger.warning(f"Failed to delete temp file {p}: {e}")
+        if picklist_temp_to_delete:
+            try:
+                Path(picklist_temp_to_delete).unlink(missing_ok=True)
+            except Exception as e:
+                logger.warning(f"Failed to delete temp picklist {picklist_temp_to_delete}: {e}")
+
+        return signed_sp_url, bundle_sp_url
+
 
     def _apply_signature_to_pdf(self, pdf_path: str, signature_data: dict) -> str:
         """Apply signature overlay to existing PDF"""
@@ -1982,8 +2617,31 @@ class OrderService:
 
                 page_idx = page_num - 1
                 page = reader.pages[page_idx]
-                page_width = float(page.mediabox.width)
-                page_height = float(page.mediabox.height)
+
+                # Use frontend-provided page dimensions when available.
+                # This eliminates coordinate mismatches between PDF.js (which
+                # may use CropBox, rotation, etc.) and pypdf/Reportlab.
+                import logging as _l
+                _logger = _l.getLogger(__name__)
+                from_frontend_w = signature_data.get("page_width")
+                from_frontend_h = signature_data.get("page_height")
+                _logger.info("SIG_BACKEND page_width=%s page_height=%s from_frontend_w=%s from_frontend_h=%s",
+                             signature_data.get("page_width"), signature_data.get("page_height"),
+                             from_frontend_w, from_frontend_h)
+                if from_frontend_w and from_frontend_h:
+                    page_width = float(from_frontend_w)
+                    page_height = float(from_frontend_h)
+                    origin_x = 0.0
+                    origin_y = 0.0
+                else:
+                    visible = page.cropbox
+                    page_width = float(visible.width)
+                    page_height = float(visible.height)
+                    origin_x = float(visible.left)
+                    origin_y = float(visible.bottom)
+                    rotation = page.get("/Rotate", 0) or 0
+                    if rotation in (90, 270):
+                        page_width, page_height = page_height, page_width
 
                 with tempfile.NamedTemporaryFile(
                     suffix=".pdf", delete=False
@@ -1993,13 +2651,16 @@ class OrderService:
 
                 c = canvas.Canvas(overlay_path, pagesize=(page_width, page_height))
 
+                _logger.info("SIG_BACKEND overlay pagesize=%sx%s origin=%s,%s",
+                             page_width, page_height, origin_x, origin_y)
+
                 for placement in page_placements:
                     # Check for legacy full page flag
                     if placement.get("legacy_full_page"):
                         c.drawImage(
                             ImageReader(signature_image),
-                            0,
-                            0,
+                            0 + origin_x,
+                            0 + origin_y,
                             width=page_width,
                             height=page_height,
                             mask="auto",
@@ -2011,13 +2672,16 @@ class OrderService:
                         w = placement.get("width", 100)
                         h = placement.get("height", 50)
 
+                        _logger.info("SIG_BACKEND draw placement placement_x=%s placement_y=%s w=%s h=%s origin=%s,%s draw_x=%s draw_y=%s",
+                                     x, y, w, h, origin_x, origin_y, x + origin_x, y + origin_y)
+
                         # Inverting Y is handled by frontend (sending PDF coords).
                         # We just draw at (x, y). Use preserveAspectRatio=True?
                         # Design doc implies w/h are explicit.
                         c.drawImage(
                             ImageReader(signature_image),
-                            x,
-                            y,
+                            x + origin_x,
+                            y + origin_y,
                             width=w,
                             height=h,
                             mask="auto",
@@ -2031,7 +2695,9 @@ class OrderService:
                 if i in overlay_map:
                     overlay_reader = PdfReader(overlay_map[i])
                     overlay_page = overlay_reader.pages[0]
-                    page.merge_page(overlay_page)
+                    # Use merge_transformed_page with identity transform to avoid
+                    # any implicit coordinate transformations that merge_page may apply
+                    page.merge_transformed_page(overlay_page, (1, 0, 0, 1, 0, 0), over=True, expand=False)
                 writer.add_page(page)
 
             # Save signed PDF
@@ -2053,11 +2719,14 @@ class OrderService:
 
     def _generate_qa_pdf(self, qa_data: dict, order: Order) -> str:
         """Generate QA checklist PDF from JSON data"""
-        qa_dir = self._storage_path("temp")
-        qa_dir.mkdir(parents=True, exist_ok=True)
+        import tempfile
+        from pathlib import Path
 
         filename = f"{order.inflow_order_id or order.id}-qa.pdf"
-        output_path = qa_dir / filename
+        # Create temporary file; caller will upload and then delete
+        tmp_file = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
+        output_path = Path(tmp_file.name)
+        tmp_file.close()  # Allow reportlab to write
 
         pdf = canvas.Canvas(str(output_path), pagesize=letter)
         width, height = letter
@@ -2106,8 +2775,8 @@ class OrderService:
                     "Asset tags applied and serial numbers match on device, sticker, and pick list",
                 ),
                 (
-                    "verifyOrderDetailsTemplateSent",
-                    "Order details template sent to customer before delivery",
+                    "verifyOrderDetailsTemplateSentAndElectronicPackingSlipSaved",
+                    "Order details template sent and electronic packing slip saved",
                 ),
                 (
                     "verifyPackagedProperly",
@@ -2116,10 +2785,6 @@ class OrderService:
                 (
                     "verifyPackingSlipSerialsMatch",
                     "Packing slip and picked items serial numbers match",
-                ),
-                (
-                    "verifyElectronicPackingSlipSaved",
-                    "Electronic packing slip saved on shipping/receiving computer",
                 ),
                 (
                     "verifyBoxesLabeledCorrectly",
@@ -2143,13 +2808,13 @@ class OrderService:
         return str(output_path)
 
     def _bundle_pdfs(self, pdf_paths: list[str], output_path: str) -> None:
-        """Combine multiple PDFs into single document"""
+        """Combine multiple PDFs into a single document."""
 
-        from pypdf import PdfMerger
+        from pypdf import PdfWriter
 
-        merger = PdfMerger()
+        writer = PdfWriter()
         for pdf_path in pdf_paths:
-            merger.append(pdf_path)
+            writer.append(pdf_path)
 
-        merger.write(output_path)
-        merger.close()
+        with open(output_path, "wb") as output_file:
+            writer.write(output_file)

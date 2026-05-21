@@ -14,7 +14,36 @@ export interface SystemSettingValue {
 export interface SystemSettings {
     email_notifications_enabled: SystemSettingValue;
     teams_recipient_notifications_enabled: SystemSettingValue;
+    document_signing_enabled: SystemSettingValue;
     picklist_auto_print_enabled: SystemSettingValue;
+    require_asset_tags_before_picklist: SystemSettingValue;
+    require_same_user_for_tagging_and_picklist: SystemSettingValue;
+    require_partial_picklist_confirmation: SystemSettingValue;
+    picklist_print_claim_timeout_seconds: SystemSettingValue;
+}
+
+export interface SyncHealthResponse {
+    server_time: string;
+    inflow: {
+        webhook_enabled: boolean;
+        webhook_failed: boolean;
+        last_webhook_received_at: string | null;
+    };
+}
+
+export interface SystemFeatureStatus {
+    name: string;
+    enabled: boolean;
+    configured: boolean;
+    status: "active" | "warning" | "disabled" | "error";
+    details: string;
+}
+
+export interface SystemStatusResponse {
+    saml_auth: SystemFeatureStatus;
+    graph_api: SystemFeatureStatus;
+    sharepoint: SystemFeatureStatus;
+    inflow_sync: SystemFeatureStatus;
 }
 
 export interface PrintJobRecord {
@@ -34,7 +63,6 @@ export interface PrintJobRecord {
     created_at?: string | null;
     updated_at?: string | null;
 }
-
 
 export interface TestResult {
     success: boolean;
@@ -90,6 +118,22 @@ export const settingsApi = {
         return response.data;
     },
 
+    /**
+     * Get sync health for operator recovery.
+     */
+    async getSyncHealth(): Promise<SyncHealthResponse> {
+        const response = await apiClient.get("/system/sync-health");
+        return response.data;
+    },
+
+    /**
+     * Get backend feature status diagnostics.
+     */
+    async getSystemStatus(): Promise<SystemStatusResponse> {
+        const response = await apiClient.get("/system/status");
+        return response.data;
+    },
+
     // ========== Testing Endpoints ==========
 
     /**
@@ -107,7 +151,6 @@ export const settingsApi = {
         const response = await apiClient.post("/system/test/teams-recipient", { recipient_email: recipientEmail });
         return response.data;
     },
-
 
     /**
      * Test Inflow API connection.

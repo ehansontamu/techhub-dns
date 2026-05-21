@@ -5,7 +5,7 @@
  */
 
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import axios from 'axios';
+import apiClient from '../api/client';
 
 export interface User {
     id: string;
@@ -47,8 +47,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     const refreshAuth = async () => {
         try {
-            // Auth endpoints are at /auth, not /api/auth
-            const response = await axios.get('/auth/me', { withCredentials: true });
+            // Auth endpoints are at /api/auth
+            const response = await apiClient.get('/auth/me', { withCredentials: true });
             setUser(response.data.user);
             setSession(response.data.session);
             setIsAdmin(Boolean(response.data.is_admin));
@@ -67,15 +67,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }, []);
 
     const login = () => {
-        // Redirect to SAML login endpoint
-        // The backend will redirect to TAMU SSO
-        window.location.href = '/auth/saml/login?next=' + encodeURIComponent(window.location.pathname);
+        const returnTo = (() => {
+            if (typeof window === 'undefined') {
+                return '/';
+            }
+
+            try {
+                const storedReturnTo = window.sessionStorage.getItem('auth:returnTo') ?? '';
+                if (storedReturnTo) {
+                    return storedReturnTo;
+                }
+            } catch (_error) {
+                // Ignore storage access failures and fall back to the current URL.
+            }
+
+            return `${window.location.pathname}${window.location.search}${window.location.hash}` || '/';
+        })();
+
+        // Redirect to the backend login endpoint.
+        window.location.href = '/auth/login?next=' + encodeURIComponent(returnTo);
     };
 
     const logout = async () => {
         try {
-            // Auth endpoints are at /auth, not /api/auth
-            await axios.post('/auth/logout', {}, { withCredentials: true });
+            // Auth endpoints are at /api/auth
+            await apiClient.post('/auth/logout', {}, { withCredentials: true });
         } catch (error) {
             console.error('Logout error:', error);
         } finally {

@@ -59,7 +59,9 @@
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/auth/me` | Get current user |
-| GET | `/auth/saml/login` | Initiate SAML login |
+| GET | `/auth/login` | Initiate Microsoft Entra login with account selection; falls back to SAML when needed |
+| GET | `/auth/oidc/callback` | Microsoft Entra OIDC callback |
+| GET | `/auth/saml/login` | Legacy SAML login fallback |
 | POST | `/auth/saml/callback` | SAML assertion consumer |
 | POST | `/auth/logout` | Logout |
 | GET | `/auth/sessions` | List user sessions |

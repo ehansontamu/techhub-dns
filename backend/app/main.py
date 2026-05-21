@@ -35,7 +35,13 @@ mimetypes.add_type("application/wasm", ".wasm")
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+if settings.secret_key is None:
+    import secrets
+    settings.secret_key = secrets.token_hex(32)
+    logger.warning("No SECRET_KEY configured — using ephemeral random key (sessions will not persist across restarts)")
+
 app = Flask(__name__)
+app.secret_key = settings.secret_key
 app.url_map.strict_slashes = False  # Prevent 308 redirects that break CORS
 
 # Fix for running behind proxy (PythonAnywhere) - ensures correct URL generation
@@ -47,7 +53,7 @@ ALLOWED_ORIGINS = settings.get_cors_allowed_origins()
 CORS(app, origins=ALLOWED_ORIGINS, supports_credentials=True)
 
 # Configure Flask-SocketIO with specific origins
-socketio = SocketIO(app, cors_allowed_origins=ALLOWED_ORIGINS)
+socketio = SocketIO(app, cors_allowed_origins=ALLOWED_ORIGINS, async_mode='threading')
 
 # Register Socket.IO events
 from app.api.socket_events import register_socket_events
@@ -116,6 +122,8 @@ app.register_blueprint(analytics.bp, url_prefix="/api/analytics")
 app.register_blueprint(observability.bp, url_prefix="/api/observability")
 app.register_blueprint(sharepoint.sharepoint_bp)
 app.register_blueprint(auth.bp)
+# Compatibility alias for older frontend bundles that still hit /auth/*.
+app.register_blueprint(auth.bp, url_prefix="/auth", name_prefix="legacy_auth")
 app.register_blueprint(system.bp)
 
 

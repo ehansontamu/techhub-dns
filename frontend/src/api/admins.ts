@@ -1,6 +1,6 @@
 import { apiClient } from "./client";
 
-export type AdminAllowlistSource = "env" | "db" | "default";
+export type AdminAllowlistSource = "env" | "db" | "mixed" | "default";
 
 export type GetAdminsResponse = {
     admins: string[];

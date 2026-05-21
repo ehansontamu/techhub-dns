@@ -29,14 +29,15 @@ type LeafNavItem = {
 const navItems: LeafNavItem[] = [
   { path: "/", label: "Dashboard", icon: LayoutDashboard },
   { path: "/orders", label: "Orders", icon: Package },
-  { path: "/tag-request", label: "Tag Request", icon: Tag },
+  { path: "/preparation", label: "Preparation", icon: Tag },
   { path: "/order-qa", label: "QA Checklist", icon: ClipboardCheck },
   { path: "/delivery", to: "/delivery/dispatch", label: "Delivery", icon: Truck },
   { path: "/shipping", label: "Shipping", icon: Send },
 ];
 
 const adminItems = [
-  { path: "/admin", label: "Admin", icon: Settings },
+  { path: "/settings", label: "Settings", icon: Settings },
+  { path: "/admin", label: "Admin Tools", icon: Settings },
   { path: "/sessions", label: "Sessions", icon: Users },
 ];
 
@@ -67,15 +68,22 @@ export function Sidebar({ className }: { className?: string }) {
     if (typeof window === "undefined") return;
 
     const mediaQuery = window.matchMedia("(max-width: 1023px)");
-    const syncCollapsed = (event: MediaQueryList | MediaQueryListEvent) => {
-      setIsMobile(event.matches);
-      setCollapsed(event.matches);
+    const syncResponsiveState = () => {
+      const matches = mediaQuery.matches;
+      setIsMobile(matches);
+      setCollapsed(matches);
       setIsMobileOpen(false);
     };
 
-    syncCollapsed(mediaQuery);
-    mediaQuery.addEventListener("change", syncCollapsed);
-    return () => mediaQuery.removeEventListener("change", syncCollapsed);
+    syncResponsiveState();
+    mediaQuery.addEventListener("change", syncResponsiveState);
+    window.addEventListener("resize", syncResponsiveState);
+    window.addEventListener("orientationchange", syncResponsiveState);
+    return () => {
+      mediaQuery.removeEventListener("change", syncResponsiveState);
+      window.removeEventListener("resize", syncResponsiveState);
+      window.removeEventListener("orientationchange", syncResponsiveState);
+    };
   }, []);
 
   useEffect(() => {
@@ -158,37 +166,33 @@ export function Sidebar({ className }: { className?: string }) {
       )}
       <motion.aside
         initial={false}
-        animate={isMobile ? { x: isMobileOpen ? 0 : -288 } : { width: collapsed ? 72 : 256 }}
+        animate={isMobile ? { x: isMobileOpen ? 0 : -288 } : { x: 0, width: collapsed ? 72 : 256 }}
         transition={{ duration: 0.25, ease: [0.4, 0, 0.2, 1] }}
         className={cn(
-          "fixed left-0 top-0 z-50 flex h-screen flex-col border-r border-border bg-card text-foreground will-change-transform",
+          "fixed left-0 top-0 z-50 flex h-screen flex-col border-r border-border bg-background text-foreground will-change-transform",
           isMobile ? "w-[288px] max-w-[calc(100vw-3rem)] shadow-2xl" : "",
           className
         )}
       >
         <div className={cn("relative flex h-12 items-center border-b border-border", showExpandedContent ? "justify-between px-4" : "justify-center px-3")}>
-          <div className={cn("flex items-center", showExpandedContent ? "gap-3" : "justify-center")}>
-            <motion.img
-              initial={{ opacity: 0, x: -16 }}
-              animate={{ opacity: 1, x: 0 }}
-              transition={{ duration: 0.2 }}
-              src={boxTAM}
-              alt="Texas A&M University"
-              className="h-8 w-auto"
-            />
-            {showExpandedContent && (
+          {showExpandedContent && (
+            <div className="flex items-center gap-3">
+              <motion.img
+                initial={false}
+                src={boxTAM}
+                alt="Texas A&M University"
+                className="h-8 w-auto"
+              />
               <motion.span
-                initial={{ opacity: 0, x: -16 }}
-                animate={{ opacity: 1, x: 0 }}
-                transition={{ duration: 0.2 }}
+                initial={false}
                 className="font-semibold leading-tight tracking-tight text-foreground"
               >
                 TechHub
                 <br />
                 Super App
               </motion.span>
-            )}
-          </div>
+            </div>
+          )}
           <button
             type="button"
             onClick={() => {
@@ -202,7 +206,7 @@ export function Sidebar({ className }: { className?: string }) {
             aria-expanded={isMobile ? isMobileOpen : !collapsed}
             className={cn(
               "flex h-10 w-10 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground touch-manipulation",
-              showExpandedContent ? "" : "absolute right-2 top-1"
+              showExpandedContent ? "" : "static"
             )}
           >
             {isMobile ? (
@@ -230,7 +234,7 @@ export function Sidebar({ className }: { className?: string }) {
                   "flex min-h-[44px] items-center rounded-lg py-2.5 text-sm font-medium transition-colors",
                   showExpandedContent ? "gap-3 px-3" : "justify-center px-0",
                   active
-                    ? "bg-accent text-accent-foreground shadow-lg shadow-accent/25"
+                    ? "bg-secondary text-foreground"
                     : "text-muted-foreground hover:bg-muted/50 hover:text-foreground"
                 )}
               >
@@ -277,7 +281,7 @@ export function Sidebar({ className }: { className?: string }) {
                   "flex min-h-[44px] items-center rounded-lg py-2.5 text-sm font-medium transition-colors",
                   showExpandedContent ? "gap-3 px-3" : "justify-center px-0",
                   active
-                    ? "bg-accent text-accent-foreground shadow-lg shadow-accent/25"
+                    ? "bg-secondary text-foreground"
                     : "text-muted-foreground hover:bg-muted/50 hover:text-foreground"
                 )}
               >

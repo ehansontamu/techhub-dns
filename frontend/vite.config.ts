@@ -9,6 +9,10 @@ export default defineConfig({
     allowedHosts: true, // Allow all hosts
     port: 5173,
     proxy: {
+      '/auth': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+      },
       '/api': {
         target: 'http://localhost:8000',
         changeOrigin: true,

@@ -1,0 +1,1 @@
+const a=/(Z|[+-]\d{2}:\d{2})$/i;function d(t){const e=t.expected_updated_at;if(!e)return t;const r=a.test(e)?e:`${e}Z`,n=Date.parse(r);return Number.isNaN(n)?t:{...t,expected_updated_at:new Date(n).toISOString()}}export{d as n};

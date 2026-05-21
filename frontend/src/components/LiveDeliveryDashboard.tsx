@@ -1,6 +1,5 @@
 import { useDeliveryRuns } from "../hooks/useDeliveryRuns";
 import { Link } from "react-router-dom";
-import { Card } from "./ui/card";
 import { Badge } from "./ui/badge";
 import { Skeleton } from "./Skeleton";
 
@@ -37,7 +36,7 @@ export default function LiveDeliveryDashboard() {
             {loading ? (
                 <div className="space-y-3" role="status" aria-live="polite">
                     {Array.from({ length: 3 }).map((_, index) => (
-                        <Card key={index} className="p-4">
+                        <section key={index} className="rounded-2xl border border-border/70 bg-card/80 p-4 shadow-none">
                             <div className="space-y-3">
                                 <div className="flex items-center justify-between gap-4">
                                     <div className="space-y-2">
@@ -55,7 +54,7 @@ export default function LiveDeliveryDashboard() {
                                     <Skeleton className="h-12 w-full" />
                                 </div>
                             </div>
-                        </Card>
+                        </section>
                     ))}
                 </div>
             ) : runs.length === 0 ? (
@@ -70,7 +69,7 @@ export default function LiveDeliveryDashboard() {
                             to={`/delivery/runs/${r.id}`}
                             className="block rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                         >
-                            <Card className="cursor-pointer p-4 transition-colors hover:bg-muted/30">
+                            <section className="cursor-pointer rounded-2xl border border-border/70 bg-card/80 p-4 shadow-none transition-colors hover:bg-muted/30">
                                 <div className="flex justify-between items-center">
                                     <div>
                                         <div className="text-sm text-muted-foreground">Run</div>
@@ -98,7 +97,7 @@ export default function LiveDeliveryDashboard() {
                                         <div>{r.order_ids.length}</div>
                                     </div>
                                 </div>
-                            </Card>
+                            </section>
                         </Link>
                     ))}
                 </div>

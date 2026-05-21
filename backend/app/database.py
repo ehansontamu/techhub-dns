@@ -10,8 +10,8 @@ database_url = settings.database_url
 # SQLAlchemy QueuePool settings are process-local. Keep defaults conservative,
 # but allow a little headroom for a small internal team on one web worker.
 MYSQL_POOL_DEFAULTS = {
-    "pool_size": 4,
-    "max_overflow": 2,
+    "pool_size": 8,
+    "max_overflow": 4,
     "pool_timeout": 5,
     "pool_recycle": 3600,
 }
@@ -54,7 +54,7 @@ runtime_db_pool_settings = {
     "pool_recycle": None,
 }
 
-# SQLite does not support the MySQL QueuePool arguments used in production.
+# SQLite does not support the MYSQL QueuePool arguments used in production.
 if str(database_url).strip().lower().startswith("sqlite"):
     engine = create_engine(
         database_url,
@@ -104,6 +104,27 @@ else:
         pool_recycle=pool_recycle,  # MySQL connection timeout handling
         pool_timeout=pool_timeout,
     )
+
+    # Issue #42: auto-tune pool_recycle to stay under MySQL's wait_timeout
+    try:
+        from sqlalchemy import text
+        with engine.connect() as conn:
+            result = conn.execute(text("SHOW VARIABLES LIKE 'wait_timeout'"))
+            row = result.fetchone()
+            if row:
+                wait_timeout = int(row[1])
+                # Set pool_recycle to 80% of wait_timeout, minimum 60s
+                safe_recycle = max(60, int(wait_timeout * 0.8))
+                if safe_recycle < pool_recycle:
+                    engine.pool._recycle = safe_recycle
+                    runtime_db_pool_settings["pool_recycle"] = safe_recycle
+                    import logging
+                    logging.getLogger(__name__).info(
+                        "Adjusted pool_recycle to %s (wait_timeout=%s)", safe_recycle, wait_timeout
+                    )
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning("Could not query wait_timeout: %s", e)
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 

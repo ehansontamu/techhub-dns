@@ -51,3 +51,26 @@ Implements the TechHub delivery workflow platform: a React operations SPA backed
 - Database state is shared between Flask runtime, scheduler jobs, and operational scripts through `backend/app/database.py` and SQLAlchemy models.
 - Microsoft integrations are centralized in backend services and surfaced through orders, auth, notification, SharePoint, and observability routes.
 - PythonAnywhere deployment flows from GitHub Actions to `scripts/deploy.sh`, which migrates the DB, builds the SPA, and reloads the site.
+
+
+## Partial-Order Workflow
+
+- **OrderSplittingService** (`backend/app/services/order_splitting.py`)
+  - `create_partial_picklist_leg()` - Creates child `-P` order
+  - `create_remainder_order()` - Creates remainder `-R` order
+  - `process_partial_fulfillments()` - Handles bulk remainder creation
+  - `get_remainder_items()` - Calculates remaining items
+
+- **OrderService** (`backend/app/services/order_service.py`)
+  - `generate_picklist()` - Handles partial split logic
+  - `submit_qa()` - Blocks QA on parent remainder legs
+  - Order details generation uses remainder-only view for parent legs
+
+- **Frontend**:
+  - `OrderDetail.tsx` - Leg-aware product tables
+  - `OrderTable.tsx` - Partial leg labeling
+  - `OrderQAPage.tsx` - QA blocking for parent legs
+
+- **Tests**:
+  - `backend/tests/test_partial_order_workflow.py`
+  - `backend/tests/test_partial_order_smoke.py`

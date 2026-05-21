@@ -29,8 +29,14 @@ class SharePointService:
 
     @property
     def is_enabled(self) -> bool:
-        """SharePoint storage is always enabled."""
-        return True
+        """SharePoint storage is enabled only when configured in env/system settings."""
+        return bool(
+            settings.sharepoint_enabled
+            and settings.sharepoint_site_url
+            and settings.azure_tenant_id
+            and settings.azure_client_id
+            and settings.azure_client_secret
+        )
 
     def _get_msal_app(self) -> msal.ConfidentialClientApplication:
         """Get or create MSAL confidential client application."""

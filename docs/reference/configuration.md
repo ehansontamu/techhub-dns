@@ -8,7 +8,7 @@
 | `INFLOW_API_URL` | Inflow Cloud API base URL |
 | `INFLOW_API_KEY` | Inflow API key |
 | `INFLOW_COMPANY_ID` | Inflow company ID |
-| `SECRET_KEY` | Flask secret key |
+| `SECRET_KEY` | Flask secret key (if omitted, an ephemeral random key is generated at startup; sessions will not persist across restarts) |
 
 ## Authentication
 
@@ -20,9 +20,16 @@
 | `SAML_IDP_CERT_PATH` | Path to IdP certificate |
 | `SAML_SP_ENTITY_ID` | Service provider entity ID |
 | `SAML_ACS_URL` | Assertion consumer service URL |
-| `AZURE_TENANT_ID` | Azure AD tenant ID |
-| `AZURE_CLIENT_ID` | Service principal client ID |
-| `AZURE_CLIENT_SECRET` | Service principal secret |
+| `DEV_AUTH_BYPASS` | Development-only auth bypass that synthesizes a local user/session instead of using TAMU SSO |
+| `DEV_AUTH_EMAIL` | Email for the synthetic local dev user |
+| `DEV_AUTH_DISPLAY_NAME` | Display name for the synthetic local dev user |
+| `DEV_AUTH_DEPARTMENT` | Optional department label for the synthetic local dev user |
+| `OIDC_TENANT_ID` | Azure AD tenant ID used for interactive login |
+| `OIDC_CLIENT_ID` | Azure app client ID used for interactive login |
+| `OIDC_CLIENT_SECRET` | Azure app client secret used for interactive login |
+| `AZURE_TENANT_ID` | Azure AD tenant ID used for Graph access, SharePoint, and email |
+| `AZURE_CLIENT_ID` | Azure app client ID used for Graph access, SharePoint, and email |
+| `AZURE_CLIENT_SECRET` | Azure app client secret used for Graph access, SharePoint, and email |
 
 ## Admin Authorization
 
@@ -68,4 +75,4 @@ These endpoints are intended for the Admin UI (Flow + Database tabs) and are alw
 | Variable | Description |
 |----------|-------------|
 | `FLASK_ENV` | Environment (development/production) |
-| `FRONTEND_URL` | Frontend URL for CORS |
+| `FRONTEND_URL` | Browser-facing frontend origin for CORS and OIDC redirect URIs |

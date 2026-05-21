@@ -104,7 +104,7 @@ def register_error_handlers(app):
             error={
                 "code": "INTERNAL_SERVER_ERROR",
                 "message": "An unexpected error occurred",
-                "details": {"error_type": type(error).__name__}
+                "details": {}
             },
             request_id=str(uuid.uuid4())
         )
@@ -123,7 +123,7 @@ def register_error_handlers(app):
             error={
                 "code": "INTERNAL_SERVER_ERROR",
                 "message": "An unexpected error occurred",
-                "details": {"error_type": type(error).__name__}
+                "details": {}
             },
             request_id=str(uuid.uuid4())
         )

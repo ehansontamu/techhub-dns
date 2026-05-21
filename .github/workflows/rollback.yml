@@ -1,0 +1,113 @@
+name: Rollback
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Which environment to roll back"
+        required: true
+        type: choice
+        options:
+          - production
+          - dev
+      steps:
+        description: "Number of commits to roll back"
+        required: false
+        default: "1"
+        type: string
+
+jobs:
+  rollback:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    concurrency:
+      group: pythonanywhere-rollback-${{ inputs.environment }}
+      cancel-in-progress: false
+
+    steps:
+      - name: Set target variables
+        id: vars
+        shell: bash
+        run: |
+          set -euo pipefail
+          ENV="${{ inputs.environment }}"
+          STEPS="${{ inputs.steps }}"
+
+          if [ "$ENV" = "production" ]; then
+            echo "project_root=/home/techhub/techhub-dns" >> "$GITHUB_OUTPUT"
+            echo "webapp_domain=techhub.pythonanywhere.com" >> "$GITHUB_OUTPUT"
+            echo "branch=main" >> "$GITHUB_OUTPUT"
+            echo "deploy_log=~/techhub-dns/deploy.log" >> "$GITHUB_OUTPUT"
+          else
+            echo "project_root=/home/techhub/techhub-dns-dev" >> "$GITHUB_OUTPUT"
+            echo "webapp_domain=dev-techhub.pythonanywhere.com" >> "$GITHUB_OUTPUT"
+            echo "branch=dev" >> "$GITHUB_OUTPUT"
+            echo "deploy_log=~/techhub-dns-dev/deploy.log" >> "$GITHUB_OUTPUT"
+          fi
+          echo "steps=$STEPS" >> "$GITHUB_OUTPUT"
+
+      - name: Load SSH key
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.PA_SSH_PRIVATE_KEY }}
+
+      - name: Add PythonAnywhere host key
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          ssh-keyscan -4 -H ssh.pythonanywhere.com >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Rollback deployment
+        shell: bash
+        env:
+          PA_USERNAME: ${{ secrets.PA_USERNAME }}
+        run: |
+          set -euo pipefail
+          PROJECT_ROOT="${{ steps.vars.outputs.project_root }}"
+          WEBAPP_DOMAIN="${{ steps.vars.outputs.webapp_domain }}"
+          BRANCH="${{ steps.vars.outputs.branch }}"
+          STEPS="${{ steps.vars.outputs.steps }}"
+
+          ssh -4 \
+            -o AddressFamily=inet \
+            -o StrictHostKeyChecking=yes \
+            "${PA_USERNAME}@ssh.pythonanywhere.com" \
+            "set -e; \
+             cd ${PROJECT_ROOT}; \
+             echo 'Current commit: \$(git rev-parse --short HEAD)'; \
+             echo 'Rolling back ${STEPS} step(s)...'; \
+             git fetch origin ${BRANCH}; \
+             git reset --hard HEAD~${STEPS}; \
+             echo 'Rolled back to: \$(git rev-parse --short HEAD)'; \
+             \
+             cd ${PROJECT_ROOT}/frontend; \
+             if [ -d node_modules ]; then \
+               npm run build; \
+             else \
+               npm ci --include=dev --no-audit --fund=false && npm run build; \
+             fi; \
+             echo 'Frontend rebuilt'; \
+             \
+             cd ${PROJECT_ROOT}; \
+             if command -v pa >/dev/null 2>&1; then \
+               pa website reload --domain ${WEBAPP_DOMAIN} && echo 'App reloaded via PA CLI'; \
+             elif [ -f /var/www/\$(echo ${WEBAPP_DOMAIN} | tr '-' '_').wsgi.py ]; then \
+               touch /var/www/\$(echo ${WEBAPP_DOMAIN} | tr '-' '_').wsgi.py && echo 'App reloaded via WSGI touch'; \
+             fi; \
+             echo 'Rollback complete'"
+
+      - name: Tail deploy.log on failure
+        if: failure()
+        shell: bash
+        env:
+          PA_USERNAME: ${{ secrets.PA_USERNAME }}
+        run: |
+          set +e
+          ssh -4 \
+            -o AddressFamily=inet \
+            -o StrictHostKeyChecking=yes \
+            "${PA_USERNAME}@ssh.pythonanywhere.com" \
+            "tail -n 200 ${{ steps.vars.outputs.deploy_log }} || true"

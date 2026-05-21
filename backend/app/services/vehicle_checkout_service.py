@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 import logging
 from typing import Optional
 
@@ -70,17 +70,29 @@ class VehicleCheckoutService:
         if not user_id:
             raise ValidationError("Authentication required")
 
-        user = getattr(g, "user", None)
-        email = (getattr(user, "email", None) or "").strip()
-        display_name = (getattr(user, "display_name", None) or "").strip() or None
+        email = (getattr(g, "user_email", None) or "").strip()
+        user_data = getattr(g, "user_data", None) or {}
+        display_name = (user_data.get("display_name") or "").strip()
+
+        if not display_name:
+            legacy_user = getattr(g, "user", None)
+            legacy_display_name = (
+                getattr(legacy_user, "display_name", None) if legacy_user else None
+            )
+            display_name = (legacy_display_name or "").strip()
+
+        if not display_name:
+            raise ValidationError("Authenticated user missing display name")
 
         if not email:
-            raise ValidationError("Authenticated user missing email")
+            legacy_user = getattr(g, "user", None)
+            legacy_email = getattr(legacy_user, "email", None) if legacy_user else None
+            email = (legacy_email or "").strip()
 
         return user_id, email, display_name
 
-    def _format_actor_display(self, email: str, display_name: Optional[str]) -> str:
-        return (display_name or "").strip() or email.strip()
+    def _format_actor_display(self, display_name: str) -> str:
+        return (display_name or "").strip()
 
     @contextmanager
     def _vehicle_lock(self, vehicle: str):
@@ -90,25 +102,56 @@ class VehicleCheckoutService:
             return
 
         lock_name = f"vehicle-checkout:{vehicle}"
-        acquired = self.db.execute(
-            text("SELECT GET_LOCK(:lock_name, :timeout_seconds)"),
-            {"lock_name": lock_name, "timeout_seconds": 5},
-        ).scalar()
-        if acquired != 1:
-            logger.warning(
-                "Timed out waiting for vehicle checkout lock: vehicle=%s", vehicle
-            )
-            raise ValidationError(
-                f"Vehicle {vehicle} is busy processing another request. Please try again.",
-                details={"vehicle": vehicle, "lock_timeout_seconds": 5},
-            )
 
+        # Use a dedicated raw connection for the advisory lock so it's released
+        # automatically when the connection is closed — no session-state risk.
+        lock_conn = bind.connect()
         try:
-            yield
+            acquired = lock_conn.execute(
+                text("SELECT GET_LOCK(:lock_name, :timeout_seconds)"),
+                {"lock_name": lock_name, "timeout_seconds": 10},
+            ).scalar()
+            if acquired != 1:
+                logger.warning(
+                    "Timed out waiting for vehicle checkout lock: vehicle=%s", vehicle
+                )
+                raise ValidationError(
+                    f"Vehicle {vehicle} is busy processing another request. Please try again.",
+                    details={"vehicle": vehicle, "lock_timeout_seconds": 10},
+                )
+
+            try:
+                yield
+            finally:
+                try:
+                    lock_conn.execute(
+                        text("SELECT RELEASE_LOCK(:lock_name)"), {"lock_name": lock_name}
+                    )
+                except Exception:
+                    logger.warning(
+                        "Failed to release vehicle lock: %s", lock_name, exc_info=True
+                    )
         finally:
-            self.db.execute(
-                text("SELECT RELEASE_LOCK(:lock_name)"), {"lock_name": lock_name}
-            )
+            # Closing the connection releases any remaining lock as a safety net
+            try:
+                lock_conn.close()
+            except Exception:
+                pass
+
+    def recover_stale_vehicle_locks(self, max_lock_age_minutes: int = 10) -> int:
+        """Release any vehicle locks that have been held longer than max_lock_age_minutes."""
+        stale = self.db.query(VehicleCheckout).filter(
+            VehicleCheckout.checked_in_at.is_(None),
+            VehicleCheckout.created_at < datetime.utcnow() - timedelta(minutes=max_lock_age_minutes)
+        ).all()
+        count = 0
+        for checkout in stale:
+            checkout.checked_in_at = datetime.utcnow()
+            count += 1
+        if count:
+            self.db.commit()
+            logger.info("Recovered %d stale vehicle checkouts", count)
+        return count
 
     def checkout(
         self,
@@ -119,9 +162,7 @@ class VehicleCheckoutService:
     ) -> VehicleCheckout:
         vehicle_norm = self._validate_vehicle(vehicle)
         actor_user_id, actor_email, actor_display_name = self._get_authenticated_actor()
-        checked_out_by_display = self._format_actor_display(
-            actor_email, actor_display_name
-        )
+        checked_out_by_display = self._format_actor_display(actor_display_name)
 
         checkout_type_norm = (checkout_type or "").strip()
         if checkout_type_norm not in {"delivery_run", "other"}:
@@ -193,14 +234,13 @@ class VehicleCheckoutService:
         self,
         vehicle: str,
         notes: Optional[str] = None,
+        allow_active_delivery_run: bool = False,
     ) -> VehicleCheckout:
         vehicle_norm = self._validate_vehicle(vehicle)
         actor_user_id, actor_email, actor_display_name = self._get_authenticated_actor()
-        checked_in_by_display = self._format_actor_display(
-            actor_email, actor_display_name
-        )
+        checked_in_by_display = self._format_actor_display(actor_display_name)
         with self._vehicle_lock(vehicle_norm):
-            if self._delivery_run_active(vehicle_norm):
+            if self._delivery_run_active(vehicle_norm) and not allow_active_delivery_run:
                 raise ValidationError(
                     f"Cannot check in {vehicle_norm} while a delivery run is active",
                     details={"vehicle": vehicle_norm, "delivery_run_active": True},
@@ -264,9 +304,11 @@ class VehicleCheckoutService:
                 {
                     "vehicle": vehicle,
                     "checked_out": active_checkout is not None,
-                    "checked_out_by": active_checkout.checked_out_by
-                    if active_checkout
-                    else None,
+                    "checked_out_by": (
+                        (active_checkout.checked_out_by_display_name or active_checkout.checked_out_by or None)
+                        if active_checkout
+                        else None
+                    ),
                     "checked_out_by_user_id": active_checkout.checked_out_by_user_id
                     if active_checkout
                     else None,
@@ -326,7 +368,9 @@ class VehicleCheckoutService:
                     **{
                         "id": str(c.id),
                         "vehicle": c.vehicle,
-                        "checked_out_by": c.checked_out_by,
+                        "checked_out_by": (
+                            (c.checked_out_by_display_name or c.checked_out_by or "").strip()
+                        ),
                         "checked_out_by_user_id": c.checked_out_by_user_id,
                         "checked_out_by_email": c.checked_out_by_email,
                         "checkout_type": c.checkout_type,
@@ -334,7 +378,9 @@ class VehicleCheckoutService:
                         "notes": c.notes,
                         "checked_out_at": to_utc_iso_z(c.checked_out_at),
                         "checked_in_at": to_utc_iso_z(c.checked_in_at),
-                        "checked_in_by": c.checked_in_by,
+                        "checked_in_by": (
+                            (c.checked_in_by_display_name or c.checked_in_by or "").strip()
+                        ),
                     }
                 }
                 for c in items

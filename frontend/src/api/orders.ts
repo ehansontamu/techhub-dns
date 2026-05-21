@@ -1,11 +1,15 @@
 import apiClient from "./client";
-import { Order, OrderDetail, OrderStatus, OrderStatusUpdate, BulkStatusUpdate, AuditLog, ShippingWorkflowStatus } from "../types/order";
+import { Order, OrderDetail, OrderStatus, OrderStatusUpdate, OrderRollbackUpdate, BulkStatusUpdate, AuditLog, ShippingWorkflowStatus } from "../types/order";
 import { normalizeExpectedUpdatedAt } from "./expectedUpdatedAt";
 
+function safeArray<T>(value: unknown): T[] {
+  return Array.isArray(value) ? value : [];
+}
+
 export const ordersApi = {
-  getOrders: async (params?: { status?: OrderStatus; search?: string }): Promise<Order[]> => {
-    const response = await apiClient.get<Order[]>("/orders", { params });
-    return response.data;
+  getOrders: async (params?: { status?: OrderStatus; search?: string; skip?: number; limit?: number }): Promise<{ items: Order[]; total: number }> => {
+    const response = await apiClient.get<{ items?: Order[]; total?: number; skip?: number; limit?: number }>("/orders", { params });
+    return { items: safeArray<Order>(response.data?.items), total: response.data?.total ?? 0 };
   },
 
   getOrder: async (orderId: string): Promise<OrderDetail> => {
@@ -29,6 +33,32 @@ export const ordersApi = {
     return response.data;
   },
 
+  rollbackOrderStatus: async (orderId: string, update: OrderRollbackUpdate, changedBy?: string): Promise<Order> => {
+    const response = await apiClient.patch<Order>(
+      `/orders/${orderId}/rollback`,
+      normalizeExpectedUpdatedAt(update),
+      {
+        params: changedBy ? { changed_by: changedBy } : undefined,
+      }
+    );
+    return response.data;
+  },
+
+  updateOrder: async (
+    orderId: string,
+    update: {
+      recipient_name?: string;
+      recipient_contact?: string;
+      delivery_location?: string;
+      assigned_deliverer?: string;
+      issue_reason?: string;
+      expected_updated_at?: string;
+    },
+  ): Promise<Order> => {
+    const response = await apiClient.patch<Order>(`/orders/${orderId}`, normalizeExpectedUpdatedAt(update));
+    return response.data;
+  },
+
   bulkUpdateStatus: async (payload: BulkStatusUpdate): Promise<Order[]> => {
     const response = await apiClient.post<Order[]>("/orders/bulk-transition", payload);
     return response.data;
@@ -46,17 +76,20 @@ export const ordersApi = {
     return response.data;
   },
 
-  retryNotification: async (orderId: string) => {
-    const response = await apiClient.post(`/orders/${orderId}/retry-notification`);
-    return response.data;
-  },
-
   tagOrder: async (orderId: string, payload: { tag_ids: string[]; technician?: string; expected_updated_at?: string }) => {
     const response = await apiClient.post<Order>(`/orders/${orderId}/tag`, normalizeExpectedUpdatedAt(payload));
     return response.data;
   },
 
-  generatePicklist: async (orderId: string, payload?: { generated_by?: string; expected_updated_at?: string }) => {
+  generatePicklist: async (
+    orderId: string,
+    payload?: {
+      generated_by?: string;
+      expected_updated_at?: string;
+      create_partial_leg?: boolean;
+      confirm_create_partial_leg?: boolean;
+    }
+  ) => {
     const response = await apiClient.post<Order>(
       `/orders/${orderId}/picklist`,
       normalizeExpectedUpdatedAt(payload || {}),
@@ -66,7 +99,7 @@ export const ordersApi = {
 
   submitQa: async (
     orderId: string,
-    payload: { responses: Record<string, any>; technician?: string; expected_updated_at?: string }
+    payload: { responses: Record<string, unknown>; technician?: string; expected_updated_at?: string }
   ) => {
     const response = await apiClient.post<Order>(`/orders/${orderId}/qa`, normalizeExpectedUpdatedAt(payload));
     return response.data;

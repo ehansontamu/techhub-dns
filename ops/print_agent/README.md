@@ -11,6 +11,8 @@ Copy `.env.example` to `.env` and set:
 - `PRINTER_NAME`
 - `SUMATRA_PDF_PATH`
 - `POLL_SECONDS`
+- `ERROR_RETRY_SECONDS` (optional, default `5`)
+- `PRINT_TIMEOUT_SECONDS` (optional, default `120`)
 - `SPOOL_DIR`
 
 ## Install

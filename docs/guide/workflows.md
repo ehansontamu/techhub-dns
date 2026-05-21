@@ -126,6 +126,38 @@ Extracts alternative delivery locations from order notes:
 | `Delivered` | Successfully delivered (terminal state) |
 | `Issue` | Problem encountered, requires resolution |
 
+### Operational Status Specification
+
+This is the practical "what do we do next?" view for staff and leads.
+
+| Status | What it means | Usually needs to happen next |
+|--------|---------------|------------------------------|
+| `Picked` | Order exists in TechHub and has been pulled from Inflow. | Asset tagging, picklist generation, and QA setup. |
+| `QA` | The order is being prepared and checked. | Complete checklist and decide delivery vs shipping. |
+| `PreDelivery` | Prep work is done and the order is ready to move. | Add to delivery run or route into shipping workflow. |
+| `InDelivery` | The order is on a vehicle for a local delivery. | Capture signature / complete delivery. |
+| `Shipping` | The order is in the dock / carrier workflow. | Move through shipping stages until carrier handoff. |
+| `Delivered` | The order is finished. | No further action unless a correction is needed. |
+| `Issue` | Something blocked the normal workflow. | Resolve the issue, then move back to the appropriate prep state. |
+
+### Workflow Flowchart
+
+```mermaid
+flowchart LR
+    Picked --> QA
+    QA --> PreDelivery
+    PreDelivery --> InDelivery
+    PreDelivery --> Shipping
+    InDelivery --> Delivered
+    Shipping --> Delivered
+    QA --> Issue
+    PreDelivery --> Issue
+    InDelivery --> Issue
+    Shipping --> Issue
+    Issue --> Picked
+    Issue --> PreDelivery
+```
+
 ### Workflow Transitions
 
 **Local Delivery**:
@@ -171,10 +203,9 @@ In-app quality assurance replacing Google Forms with workflow routing.
 |------|-------------|
 | Order Verification | Confirm order details match Inflow |
 | Asset Tag Check | Verify asset tags match serial numbers |
-| Template Notifications | Confirm notifications were sent |
+| Order Details / Electronic Docs | Confirm the order details template was sent and electronic packing slip was saved |
 | Packaging Verification | Check proper packaging |
 | Packing Slip | Verify packing slip accuracy |
-| Electronic Documentation | Confirm digital records |
 | Box Labeling | Verify box labels |
 | QA Signature | Technician sign-off |
 | **Delivery Method** | Select "Delivery" or "Shipping" |

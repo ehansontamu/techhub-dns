@@ -43,8 +43,8 @@ def verify_webhook_signature(payload: bytes, signature: str, secret: str) -> boo
         True if signature is valid, False otherwise
     """
     if not secret:
-        logger.warning("No webhook secret configured, skipping signature verification")
-        return True  # Allow if no secret configured (for development)
+        logger.warning("No webhook secret configured, rejecting request")
+        return False  # Reject if no secret configured
 
     if not signature:
         logger.warning("No signature provided in webhook request")

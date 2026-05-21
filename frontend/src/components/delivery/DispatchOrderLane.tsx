@@ -3,7 +3,7 @@ import { AlertTriangle } from "lucide-react";
 import type { Order } from "../../types/order";
 import { formatDeliveryLocation } from "../../utils/location";
 import { Badge } from "../ui/badge";
-import { Checkbox } from "../ui/checkbox";
+import { Button } from "../ui/button";
 
 type DispatchOrderLaneProps = {
   title: string;
@@ -46,25 +46,27 @@ export default function DispatchOrderLane({
 
             return (
               <div key={order.id} className="px-3 py-3 first:pt-3 last:pb-3">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="space-y-1">
-                    <button
-                      type="button"
-                      className="inline-flex min-h-[44px] items-center rounded-md px-1.5 text-left text-sm font-medium text-foreground hover:underline"
-                      onClick={() => onViewOrder(order.id)}
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="space-y-1">
+                      <button
+                        type="button"
+                        className="inline-flex min-h-[44px] items-center rounded-md px-1.5 text-left text-sm font-medium text-foreground hover:underline"
+                        onClick={() => onViewOrder(order.id)}
+                      >
+                        {order.inflow_order_id}
+                      </button>
+                      <div className="text-xs text-muted-foreground">{order.recipient_name || "N/A"}</div>
+                      <div className="text-xs text-muted-foreground">{formatDeliveryLocation(order)}</div>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant={isSelected ? "secondary" : "outline"}
+                      onClick={() => onToggleOrder(order.id)}
+                      className="h-8"
                     >
-                      {order.inflow_order_id}
-                    </button>
-                    <div className="text-xs text-muted-foreground">{order.recipient_name || "N/A"}</div>
-                    <div className="text-xs text-muted-foreground">{formatDeliveryLocation(order)}</div>
+                      {isSelected ? "Added" : "Add to Delivery"}
+                    </Button>
                   </div>
-                  <Checkbox
-                    className="h-5 w-5"
-                    checked={isSelected}
-                    onChange={() => onToggleOrder(order.id)}
-                    aria-label={`Select order ${order.inflow_order_id ?? order.id}`}
-                  />
-                </div>
 
                 <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
                   <span className="text-muted-foreground">Deliverer: {order.assigned_deliverer || "Unassigned"}</span>

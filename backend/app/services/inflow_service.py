@@ -380,15 +380,17 @@ class InflowService:
     async def sync_recent_started_orders(
         self, max_pages: int = 3, per_page: int = 100, target_matches: int = 100
     ) -> List[Dict[str, Any]]:
-        """Sync recent unfulfilled orders, filtering for 'started' status AND pickLines"""
+        """Sync recent started orders that already have pickLines."""
         matches = []
 
         for page in range(max_pages):
             orders = await self.fetch_orders(
-                inventory_status="unfulfilled", count=per_page, skip=page * per_page
+                inventory_status="started",
+                count=per_page,
+                skip=page * per_page,
             )
 
-            # Filter for 'started' status AND pickLines exist
+            # Filter for orders that already have pickLines and are ready to ingest.
             for order in orders:
                 if self.is_started_and_picked(order):
                     matches.append(order)
@@ -405,7 +407,7 @@ class InflowService:
         return str(order.get("inventoryStatus", "")).strip().lower() == "started"
 
     def is_started_and_picked(self, order: Dict[str, Any]) -> bool:
-        """Check if order has started status AND has pickLines (ready for TechHub)"""
+        """Check if order is still started and has pickLines to ingest into TechHub."""
         return self.is_strict_started(order) and bool(order.get("pickLines"))
 
     async def get_order_by_id(self, sales_order_id: str) -> Optional[Dict[str, Any]]:
@@ -1161,12 +1163,14 @@ class InflowService:
     def sync_recent_started_orders_sync(
         self, max_pages: int = 3, per_page: int = 100, target_matches: int = 100
     ) -> List[Dict[str, Any]]:
-        """Sync recent unfulfilled orders (sync version)"""
+        """Sync recent started orders that already have pickLines (sync version)."""
         matches = []
 
         for page in range(max_pages):
             orders = self.fetch_orders_sync(
-                inventory_status="unfulfilled", count=per_page, skip=page * per_page
+                inventory_status="started",
+                count=per_page,
+                skip=page * per_page,
             )
 
             for order in orders:

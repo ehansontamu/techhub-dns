@@ -6,12 +6,12 @@ import { AlertCircle, ArrowDown, ArrowLeft, ArrowUp, CheckCircle, Clock, Package
 import { deliveryRunsApi } from "../api/deliveryRuns";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../components/ui/dialog";
 import { Input } from "../components/ui/input";
 import { useDeliveryRun } from "../hooks/useDeliveryRun";
 import { OrderStatus } from "../types/order";
 import { isValidOrderId } from "../utils/orderIds";
+import { extractApiErrorMessage } from "../utils/apiErrors";
 import { formatToCentralTime } from "../utils/timezone";
 
 type DeliveryDetailLocationState = {
@@ -58,25 +58,7 @@ function getOrderStatusVariant(status: string) {
   }
 }
 
-function getApiErrorMessage(error: unknown): string {
-  if (typeof error === "object" && error !== null && "response" in error) {
-    const candidate = error as {
-      response?: {
-        data?: {
-          error?: {
-            message?: unknown;
-          };
-        };
-      };
-    };
-    const message = candidate.response?.data?.error?.message;
-    if (typeof message === "string" && message.trim()) {
-      return message;
-    }
-  }
 
-  return "Action failed. Refresh and try again.";
-}
 
 export default function DeliveryRunDetailPage() {
   const { runId } = useParams<{ runId: string }>();
@@ -159,7 +141,7 @@ export default function DeliveryRunDetailPage() {
       toast.success("Delivery run completed");
       await refetch();
     } catch (error: unknown) {
-      setErrorMessage(getApiErrorMessage(error) || "Failed to complete delivery. Ensure all orders are delivered first.");
+      setErrorMessage(extractApiErrorMessage(error, "Failed to complete delivery. Ensure all orders are delivered first."));
       setErrorDialogOpen(true);
       await refetch();
     } finally {
@@ -193,7 +175,7 @@ export default function DeliveryRunDetailPage() {
       setRecallReason("");
       await refetch();
     } catch (error: unknown) {
-      setErrorMessage(getApiErrorMessage(error));
+      setErrorMessage(extractApiErrorMessage(error, "Action failed. Refresh and try again."));
       setErrorDialogOpen(true);
       await refetch();
     } finally {
@@ -248,7 +230,7 @@ export default function DeliveryRunDetailPage() {
       setReorderMode(false);
       await refetch();
     } catch (error: unknown) {
-      setErrorMessage(getApiErrorMessage(error));
+      setErrorMessage(extractApiErrorMessage(error, "Action failed. Refresh and try again."));
       setErrorDialogOpen(true);
       await refetch();
     } finally {
@@ -277,7 +259,7 @@ export default function DeliveryRunDetailPage() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="container mx-auto p-4 sm:p-6 space-y-6">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div className="flex items-start gap-3">
           <Button variant="outline" size="sm" onClick={() => navigate(backTo)}>
@@ -342,14 +324,14 @@ export default function DeliveryRunDetailPage() {
         </div>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Completion Readiness</CardTitle>
-          <CardDescription>
+            <section className="rounded-2xl border border-border/70 bg-card/80 p-5 shadow-none">
+        <div className="space-y-4">
+          <h3 className="text-xl font-semibold tracking-tight">Completion Readiness</h3>
+          <p className="text-sm text-muted-foreground">
             Resolve blockers below before completing this run.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
+          </p>
+        </div>
+        <div className="mt-4 space-y-3">
           <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
             <div className="rounded-lg border border-border/70 p-3">
               <div className="text-xs text-muted-foreground">Blocking orders</div>
@@ -369,11 +351,10 @@ export default function DeliveryRunDetailPage() {
             <div className="rounded-lg border border-emerald-300/40 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
               All orders are delivered. This run is ready for completion.
             </div>
-          ) : (
+          ) : nonSignableBlockingOrders.length > 0 ? (
             <div className="space-y-2">
-              {blockingOrders.map((order) => {
+              {nonSignableBlockingOrders.map((order) => {
                 const orderLabel = order.inflow_order_id || order.id.slice(0, 8);
-                const isSignable = order.status === OrderStatus.IN_DELIVERY;
 
                 return (
                   <div
@@ -388,7 +369,7 @@ export default function DeliveryRunDetailPage() {
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
                       {isValidOrderId(order.id) ? (
-                        <Link to={`/orders/${order.id}`}>
+                        <Link to={`/orders/${order.inflow_order_id || order.id}`} state={{ fromPath: location.pathname }}>
                           <Button variant="outline" size="sm">
                             View Order
                           </Button>
@@ -398,37 +379,27 @@ export default function DeliveryRunDetailPage() {
                           View Order
                         </Button>
                       )}
-                      {isSignable ? (
-                        <>
-                          <Link to={`/document-signing?orderId=${order.id}&returnTo=/delivery/runs/${run.id}`}>
-                            <Button size="sm" className="bg-emerald-600 hover:bg-emerald-700">
-                              Sign Now
-                            </Button>
-                          </Link>
-                          <Button size="sm" variant="outline" onClick={() => openRecallDialog(order.id)}>
-                            Recall Order
-                          </Button>
-                        </>
-                      ) : (
-                        <Badge variant="warning">Move to In Delivery first</Badge>
-                      )}
+                      <Badge variant="warning">Move to In Delivery first</Badge>
                     </div>
                   </div>
                 );
               })}
             </div>
+          ) : (
+            <div className="rounded-lg border border-amber-300/40 bg-amber-50/60 px-3 py-2 text-sm text-amber-900">
+              {pendingSignatureOrders.length} order{pendingSignatureOrders.length !== 1 ? "s" : ""} still need
+              signature or proof. Use the run list below to sign them.
+            </div>
           )}
-        </CardContent>
-      </Card>
+        </div>
+      </section>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
+      <section className="rounded-2xl border border-border/70 bg-card/80 p-5 shadow-none">
+        <div className="flex flex-col gap-4">
+          <h3 className="flex items-center gap-2 text-xl font-semibold tracking-tight">
             <Truck className="h-5 w-5" />
             Run Summary
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
+          </h3>
           <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-4">
             <div className="flex items-center gap-3">
               <User className="h-5 w-5 text-muted-foreground" />
@@ -465,7 +436,7 @@ export default function DeliveryRunDetailPage() {
             </div>
           </div>
 
-          <div className="mt-6 grid grid-cols-1 gap-6 border-t pt-6 md:grid-cols-2">
+          <div className="grid grid-cols-1 gap-6 border-t pt-6 md:grid-cols-2">
             <div className="flex items-center gap-3">
               <Clock className="h-5 w-5 text-muted-foreground" />
               <div>
@@ -482,18 +453,18 @@ export default function DeliveryRunDetailPage() {
               </div>
             </div>
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </section>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Orders in This Run</CardTitle>
-          <CardDescription>
+      <section className="rounded-2xl border border-border/70 bg-card/80 p-5 shadow-none">
+        <div className="space-y-4">
+          <h3 className="text-xl font-semibold tracking-tight">Orders in This Run</h3>
+          <p className="text-sm text-muted-foreground">
             {run.orders.length} order{run.orders.length !== 1 ? "s" : ""} assigned to this delivery run
             {reorderMode ? " - reorder mode enabled" : ""}
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
+          </p>
+        </div>
+        <div className="mt-4">
           {run.orders.length === 0 ? (
             <div className="py-8 text-center text-muted-foreground">No orders assigned to this run</div>
           ) : (
@@ -530,7 +501,7 @@ export default function DeliveryRunDetailPage() {
                     ) : null}
 
                     {isValidOrderId(order.id) ? (
-                      <Link to={`/orders/${order.id}`}>
+                      <Link to={`/orders/${order.inflow_order_id || order.id}`} state={{ fromPath: location.pathname }}>
                         <Button variant="outline" size="sm">
                           View Details
                         </Button>
@@ -581,8 +552,8 @@ export default function DeliveryRunDetailPage() {
               ))}
             </div>
           )}
-        </CardContent>
-      </Card>
+        </div>
+      </section>
 
       <Dialog open={errorDialogOpen} onOpenChange={setErrorDialogOpen}>
         <DialogContent>

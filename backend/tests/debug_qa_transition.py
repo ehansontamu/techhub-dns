@@ -38,10 +38,9 @@ def test_scenario(name, order_status, has_tagged_at=True, has_picklist=True, met
         "technician": "Hunter",
         "qaSignature": "Sig",
         "verifyAssetTagSerialMatch": True,
-        "verifyOrderDetailsTemplateSent": True,
+        "verifyOrderDetailsTemplateSentAndElectronicPackingSlipSaved": True,
         "verifyPackagedProperly": True,
         "verifyPackingSlipSerialsMatch": True,
-        "verifyElectronicPackingSlipSaved": True,
         "verifyBoxesLabeledCorrectly": True
     }
 

@@ -9,6 +9,8 @@ export type OrdersListStatusFilter = OrderStatus | OrderStatus[] | null;
 export interface OrdersListFilters {
   status: OrdersListStatusFilter;
   search: string;
+  skip?: number;
+  limit?: number;
 }
 
 export interface TagRequestCandidatesFilters {
@@ -55,6 +57,8 @@ export const ordersQueryKeys = {
       {
         status: normalizeStatuses(filters.status),
         search: normalizeSearch(filters.search),
+        skip: filters.skip ?? 0,
+        limit: filters.limit ?? 100,
       },
     ] as const,
   details: () => [...ordersQueryKeys.all, "detail"] as const,
@@ -65,7 +69,7 @@ export const ordersQueryKeys = {
     [...ordersQueryKeys.all, "tag-request-candidates", { limit: filters.limit ?? null, search: filters.search?.trim() ?? "" }] as const,
 };
 
-const fetchOrdersList = async (filters: OrdersListFilters): Promise<Order[]> => {
+const fetchOrdersList = async (filters: OrdersListFilters): Promise<{ items: Order[]; total: number }> => {
   const normalizedStatuses = normalizeStatuses(filters.status);
   const search = normalizeSearch(filters.search) || undefined;
 
@@ -75,17 +79,24 @@ const fetchOrdersList = async (filters: OrdersListFilters): Promise<Order[]> => 
         ordersApi.getOrders({
           status,
           search,
+          skip: filters.skip,
+          limit: filters.limit,
         })
       )
     );
 
-    return results.flat().sort(compareOrderListPriority);
+    return {
+      items: results.flatMap((r) => r.items).sort(compareOrderListPriority),
+      total: Math.max(...results.map((r) => r.total), 0),
+    };
   }
 
   return ordersApi.getOrders({
     status: normalizedStatuses[0],
     search,
-  });
+    skip: filters.skip,
+    limit: filters.limit,
+  }).then((r) => ({ items: r.items, total: r.total }));
 };
 
 export const getOrdersListQueryOptions = (filters: OrdersListFilters) =>

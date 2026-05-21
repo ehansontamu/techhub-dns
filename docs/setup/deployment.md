@@ -74,16 +74,23 @@ INFLOW_API_KEY=your_inflow_api_key
 INFLOW_COMPANY_ID=your_company_id
 
 # Authentication
+# Primary login: OIDC app registration
+# Legacy login fallback: SAML enterprise app
+FRONTEND_URL=https://username.pythonanywhere.com
+
+# OIDC login app registration
+OIDC_TENANT_ID=<from Azure>
+OIDC_CLIENT_ID=<from Azure>
+OIDC_CLIENT_SECRET=<from Azure>
+
+# Legacy SAML app registration
 SAML_ENABLED=true
 SAML_IDP_ENTITY_ID=<from Azure>
 SAML_IDP_SSO_URL=<from Azure>
-AZURE_TENANT_ID=<from Azure>
-AZURE_CLIENT_ID=<from Azure>
-AZURE_CLIENT_SECRET=<from Azure>
+SAML_IDP_CERT_PATH=certs/saml_idp_cert.crt
 
 # App Settings
 FLASK_ENV=production
-FRONTEND_URL=https://username.pythonanywhere.com
 ```
 
 ### Upload SAML Certificate
@@ -93,6 +100,17 @@ The certificate is not in git. Upload manually:
 1. In PythonAnywhere Files tab, navigate to `~/techhub-dns/backend`
 2. Create folder `certs` if it does not exist
 3. Upload `saml_idp_cert.crt`
+
+### OIDC App Registration for Login Button
+
+Create a separate Microsoft Entra app registration for the interactive login flow:
+
+1. Open the Entra ID toolkit and create a new **OpenID Connect** application.
+2. Set the redirect URI to:
+   - Production: `https://username.pythonanywhere.com/auth/oidc/callback`
+   - Local dev: `http://localhost:5173/auth/oidc/callback`
+3. Copy the app's tenant ID, client ID, and client secret into the `OIDC_*` variables above.
+4. Keep the SAML app in place if you still want the legacy fallback path.
 
 ## Database Setup
 
@@ -216,6 +234,16 @@ git push
 cd ~/techhub-dns
 bash scripts/deploy.sh
 ```
+
+## Local Dev Testing
+
+To test the OIDC chooser flow locally:
+
+1. Set `FRONTEND_URL=http://localhost:5173`
+2. Set `OIDC_TENANT_ID`, `OIDC_CLIENT_ID`, and `OIDC_CLIENT_SECRET` for the OIDC app registration
+3. Start the backend on port `8000`
+4. Start the frontend on port `5173`
+5. Click the login button and confirm the browser goes through `/auth/login` and returns to `/auth/oidc/callback`
 
 The deploy script runs `npm ci` and `npm run build` in `frontend/`, then reloads the app.
 If you changed scheduler code or env vars, restart the Always-on task after the deploy.
@@ -418,6 +446,10 @@ Look for `enabled: True` in the output.
 | `SAML_ENABLED` | Enable SAML authentication |
 | `SAML_IDP_ENTITY_ID` | IdP entity ID |
 | `SAML_IDP_SSO_URL` | IdP login URL |
+| `DEV_AUTH_BYPASS` | Development-only auth bypass for local testing |
+| `DEV_AUTH_EMAIL` | Email for the synthetic local dev user |
+| `DEV_AUTH_DISPLAY_NAME` | Display name for the synthetic local dev user |
+| `DEV_AUTH_DEPARTMENT` | Optional department for the synthetic local dev user |
 | `AZURE_TENANT_ID` | Azure tenant ID |
 | `AZURE_CLIENT_ID` | Service principal client ID |
 | `AZURE_CLIENT_SECRET` | Service principal secret |

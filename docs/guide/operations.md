@@ -206,6 +206,18 @@ SAML_SP_ENTITY_ID=https://your-domain
 SAML_ACS_URL=https://your-domain/auth/saml/callback
 ```
 
+For local development, you can bypass SAML entirely:
+
+```env
+FLASK_ENV=development
+DEV_AUTH_BYPASS=true
+DEV_AUTH_EMAIL=dev.user@example.com
+DEV_AUTH_DISPLAY_NAME=Local Dev User
+DEV_AUTH_DEPARTMENT=Development
+```
+
+This path is intended only for local testing. It should stay disabled in production.
+
 ### Session Management
 
 **Model**: `backend/app/models/session.py`

@@ -17,6 +17,8 @@ interface StatusTransitionProps {
   onCancel: () => void;
   requireReason?: boolean;
   submitting?: boolean;
+  title?: string;
+  confirmLabel?: string;
 }
 
 export default function StatusTransition({
@@ -26,6 +28,8 @@ export default function StatusTransition({
   onCancel,
   requireReason = false,
   submitting = false,
+  title = "Change Status",
+  confirmLabel = "Confirm",
 }: StatusTransitionProps) {
   const [reason, setReason] = useState("");
   const [reasonTouched, setReasonTouched] = useState(false);
@@ -50,7 +54,7 @@ export default function StatusTransition({
       <DialogContent className="sm:max-w-md">
         <form onSubmit={handleSubmit}>
           <DialogHeader>
-            <DialogTitle>Change Status</DialogTitle>
+            <DialogTitle>{title}</DialogTitle>
             <DialogDescription>
               Change status from{" "}
               <span className="font-medium text-foreground">
@@ -93,7 +97,7 @@ export default function StatusTransition({
               Cancel
             </Button>
             <Button type="submit" disabled={reasonInvalid || submitting}>
-              {submitting ? "Updating..." : "Confirm"}
+              {submitting ? "Updating..." : confirmLabel}
             </Button>
           </DialogFooter>
         </form>

@@ -113,7 +113,7 @@ Picked → QA → Pre-Delivery → Shipping → Delivered
 #### 6.2.3 QA Checklist
 
 - In-app checklist replacing Google Form
-- Items: Order verification, asset tags, packaging, documentation, labeling
+- Items: Order verification, asset tags, packaging, combined order-details / electronic documentation check, labeling
 - Includes **delivery method selection** (Delivery vs Shipping)
 - Records: Responses, technician, timestamp, method
 - **Blocking requirement:** QA must be completed to proceed
@@ -151,6 +151,8 @@ Once all three steps complete:
 - Bulk mark orders as fulfilled in inFlow
 - Record success/failure per order
 - Close run with completion timestamp
+- Auto check the vehicle back in when the final delivery is completed
+
 
 ---
 

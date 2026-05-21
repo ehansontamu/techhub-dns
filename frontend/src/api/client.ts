@@ -13,26 +13,41 @@ function normalizeApiBaseUrl(value: string | undefined): string {
   return `/${trimmed}`;
 }
 
-// Use VITE_API_URL if set (for production), otherwise use relative /api path
 export const apiClient = axios.create({
   baseURL: normalizeApiBaseUrl(import.meta.env.VITE_API_URL),
   headers: {
     "Content-Type": "application/json",
   },
-  withCredentials: true, // Include cookies for session auth
+  withCredentials: true,
 });
 
-// Response interceptor for handling auth errors
+let rateLimitToastShown = false;
+
 apiClient.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 401) {
-      // Check if we're already on the login page to prevent redirect loop
-      if (!window.location.pathname.startsWith('/login')) {
-        // Redirect to login, preserving the current path
-        window.location.href = '/login';
+    const status = error.response?.status;
+
+    if (status === 401) {
+      if (!window.location.pathname.startsWith("/login")) {
+        window.location.href = "/login";
       }
     }
+
+    if (status === 429) {
+      if (!rateLimitToastShown) {
+        rateLimitToastShown = true;
+        window.dispatchEvent(
+          new CustomEvent("app-rate-limit", {
+            detail: { message: "Too many requests. Please wait a moment." },
+          })
+        );
+        setTimeout(() => {
+          rateLimitToastShown = false;
+        }, 5000);
+      }
+    }
+
     return Promise.reject(error);
   }
 );

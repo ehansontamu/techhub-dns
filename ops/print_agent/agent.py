@@ -4,6 +4,7 @@ import logging
 import os
 import subprocess
 import threading
+import time
 from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import urljoin
@@ -37,6 +38,8 @@ class Config:
         self.printer_name = os.environ["PRINTER_NAME"]
         self.sumatra_pdf_path = os.environ.get("SUMATRA_PDF_PATH", "SumatraPDF.exe")
         self.poll_seconds = int(os.environ.get("POLL_SECONDS", "15"))
+        self.error_retry_seconds = int(os.environ.get("ERROR_RETRY_SECONDS", "5"))
+        self.print_timeout_seconds = int(os.environ.get("PRINT_TIMEOUT_SECONDS", "120"))
         self.spool_dir = Path(os.environ.get("SPOOL_DIR", str(base_dir / "jobs")))
 
 
@@ -112,15 +115,31 @@ class PicklistPrintAgent:
             "-silent",
             str(pdf_path),
         ]
-        result = subprocess.run(command, capture_output=True, text=True, check=False)
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=self.config.print_timeout_seconds,
+        )
         if result.returncode != 0:
             raise RuntimeError(
                 result.stderr.strip() or result.stdout.strip() or "Silent print failed"
             )
 
+    def _pause_after_error(self) -> None:
+        retry_seconds = max(self.config.error_retry_seconds, 1)
+        self.stop_event.wait(timeout=retry_seconds)
+
     def process_available_jobs(self) -> None:
         while not self.stop_event.is_set():
-            job = self.claim_next_job()
+            try:
+                job = self.claim_next_job()
+            except Exception:  # noqa: BLE001
+                LOGGER.exception("Failed to claim the next print job")
+                self._pause_after_error()
+                return
+
             if not job:
                 return
 
@@ -152,12 +171,17 @@ class PicklistPrintAgent:
 
         self.wake_event.set()
         while not self.stop_event.is_set():
-            if self.wake_event.is_set():
-                self.wake_event.clear()
-                self.process_available_jobs()
+            try:
+                if self.wake_event.is_set():
+                    self.wake_event.clear()
+                    self.process_available_jobs()
 
-            self.wake_event.wait(timeout=self.config.poll_seconds)
-            self.wake_event.set()
+                self.wake_event.wait(timeout=self.config.poll_seconds)
+                self.wake_event.set()
+            except Exception:  # noqa: BLE001
+                LOGGER.exception("Agent loop crashed unexpectedly; continuing")
+                self.wake_event.set()
+                self._pause_after_error()
 
 
 def main() -> None:
@@ -165,8 +189,18 @@ def main() -> None:
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
-    agent = PicklistPrintAgent(Config())
-    agent.run()
+    config = Config()
+    while True:
+        try:
+            agent = PicklistPrintAgent(config)
+            agent.run()
+            return
+        except KeyboardInterrupt:
+            LOGGER.info("Print agent stopped manually")
+            return
+        except Exception:  # noqa: BLE001
+            LOGGER.exception("Print agent crashed unexpectedly; restarting")
+            time.sleep(max(config.error_retry_seconds, 1))
 
 
 if __name__ == "__main__":

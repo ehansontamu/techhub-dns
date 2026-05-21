@@ -1,13 +1,13 @@
 import { useState, useEffect, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { isAxiosError } from "axios";
 import { useNavigate } from "react-router-dom";
 import { OrderStatus } from "../types/order";
 import OrderTable from "../components/OrderTable";
 import Filters, { StatusFilter } from "../components/Filters";
 import StatusTransition from "../components/StatusTransition";
-import { Card, CardContent } from "../components/ui/card";
 import { SkeletonTable } from "../components/Skeleton";
-import { PackageSearch } from "lucide-react";
+import { PackageSearch, ChevronLeft, ChevronRight } from "lucide-react";
 import { useOrdersWebSocket } from "../hooks/useOrdersWebSocket";
 import { ordersApi } from "../api/orders";
 import {
@@ -16,6 +16,7 @@ import {
 } from "../queries/orders";
 import { toast } from "sonner";
 import { isValidOrderId } from "../utils/orderIds";
+import { Button } from "../components/ui/button";
 
 const PREFETCH_STATUS_FILTERS: StatusFilter[] = [
     null,
@@ -27,10 +28,14 @@ const PREFETCH_STATUS_FILTERS: StatusFilter[] = [
     OrderStatus.ISSUE,
 ];
 
+const PAGE_SIZE = 50;
+
 export default function Orders() {
     const [statusFilter, setStatusFilter] = useState<StatusFilter>([OrderStatus.PICKED, OrderStatus.QA]);
     const [search, setSearch] = useState("");
     const [debouncedSearch, setDebouncedSearch] = useState("");
+    const [page, setPage] = useState(1);
+    // total comes from queryData below
     const [transitioningOrder, setTransitioningOrder] = useState<{
         orderId: string;
         currentStatus: OrderStatus;
@@ -45,14 +50,20 @@ export default function Orders() {
     const lastWebSocketUpdate = useRef<number>(0);
     const hasPrefetchedStatusTabs = useRef(false);
 
+    const skip = (page - 1) * PAGE_SIZE;
+
     const ordersQuery = useQuery(
         getOrdersListQueryOptions({
             status: statusFilter,
             search: debouncedSearch,
+            skip,
+            limit: PAGE_SIZE,
         })
     );
 
-    const orders = ordersQuery.data ?? [];
+    const queryData = ordersQuery.data ?? { items: [], total: 0 };
+    const orders = queryData.items;
+    const total = queryData.total;
     const loading = ordersQuery.isPending || ordersQuery.isFetching;
     const isInitialLoad = ordersQuery.isPending && orders.length === 0;
 
@@ -72,9 +83,9 @@ export default function Orders() {
             setTransitioningOrder(null);
             await invalidateOrderQueries(queryClient, variables.orderId);
         },
-        onError: async (error: any, variables) => {
+        onError: async (error: unknown, variables) => {
             console.error("Failed to update status:", error);
-            if (error?.response?.status === 409) {
+            if (isAxiosError(error) && error.response?.status === 409) {
                 toast.error("Order changed by another user. Reloaded the latest queue.");
                 await invalidateOrderQueries(queryClient, variables.orderId);
                 return;
@@ -106,6 +117,11 @@ export default function Orders() {
         };
     }, [search]);
 
+    // Reset to page 1 when filters change
+    useEffect(() => {
+        setPage(1);
+    }, [statusFilter, debouncedSearch]);
+
     useEffect(() => {
         if (hasPrefetchedStatusTabs.current) {
             return;
@@ -133,20 +149,7 @@ export default function Orders() {
         );
     }, [debouncedSearch, ordersQuery.isSuccess, queryClient]);
 
-    const handleStatusChange = (orderId: string, newStatus: OrderStatus, reason?: string) => {
-        const currentStatus = orders.find((order) => order.id === orderId)?.status;
-        if (!currentStatus) {
-            toast.error("Order status is unavailable. Reload the list and try again.");
-            return;
-        }
-
-        const requireReason = newStatus === OrderStatus.ISSUE;
-        if (requireReason && reason === undefined) {
-            setTransitioningOrder({ orderId, currentStatus, newStatus, requireReason: true });
-        } else {
-            performStatusChange(orderId, newStatus, reason);
-        }
-    };
+    const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
     const performStatusChange = async (
         orderId: string,
@@ -171,7 +174,12 @@ export default function Orders() {
             toast.error("Order details are unavailable for this row");
             return;
         }
-        navigate(`/orders/${orderId}`);
+        navigate(`/orders/${orderId}`, {
+            state: {
+                statusFilter,
+                search,
+            },
+        });
     };
 
     if (ordersQuery.isError && orders.length === 0) {
@@ -179,57 +187,93 @@ export default function Orders() {
     }
 
     return (
-        <div className="container mx-auto py-6 space-y-4">
-            <div className="space-y-1">
-                <h1 className="text-2xl font-semibold tracking-tight text-foreground">Orders</h1>
-            </div>
-
-            <Card>
-                <div className="p-6 pb-4">
-                    <Filters
-                        status={statusFilter}
-                        onStatusChange={setStatusFilter}
-                        search={search}
-                        onSearchChange={setSearch}
-                        loading={loading}
-                    />
+        <div className="h-full min-h-0 overflow-y-auto px-4 py-6 sm:px-6 lg:px-8">
+            <div className="mx-auto max-w-[1600px] space-y-4">
+                <div className="space-y-1">
+                    <h1 className="text-2xl font-semibold tracking-tight text-foreground">Orders</h1>
                 </div>
-                <CardContent className="min-h-[280px]">
-                    {loading && isInitialLoad ? (
-                        <div className="transition-opacity duration-150 opacity-100">
-                            <SkeletonTable rows={6} columns={5} />
+
+                <section className="overflow-hidden rounded-2xl border border-border/70 bg-card/80 shadow-none">
+                    <div className="p-5 pb-4 sm:p-6 sm:pb-4">
+                        <Filters
+                            status={statusFilter}
+                            onStatusChange={setStatusFilter}
+                            search={search}
+                            onSearchChange={setSearch}
+                            loading={loading}
+                        />
+                    </div>
+                    <div className="min-h-[280px] px-5 pb-5 sm:px-6 sm:pb-6">
+                        {loading && isInitialLoad ? (
+                            <div className="transition-opacity duration-150 opacity-100">
+                                <SkeletonTable rows={6} columns={5} />
+                            </div>
+                        ) : !loading && orders.length === 0 ? (
+                            <div className="flex flex-col items-center justify-center py-16 text-center">
+                                <PackageSearch className="mb-3 h-8 w-8 text-muted-foreground/60" />
+                                <p className="text-sm font-medium text-foreground">No orders to display</p>
+                                <p className="text-xs text-muted-foreground">Adjust your filters or clear search to see orders.</p>
+                            </div>
+                        ) : (
+                            <div className={`transition-opacity duration-150 ${loading ? "opacity-90" : "opacity-100"}`}>
+                                <OrderTable
+                                    orders={orders}
+                                    onViewDetail={handleViewDetail}
+                                    showEmptyState={false}
+                                    loading={loading}
+                                />
+                            </div>
+                        )}
+                    </div>
+                </section>
+
+                {/* Pagination */}
+                {total > PAGE_SIZE && (
+                    <div className="flex items-center justify-between px-1">
+                        <p className="text-sm text-muted-foreground">
+                            Showing {skip + 1}–{Math.min(skip + PAGE_SIZE, total)} of {total}
+                        </p>
+                        <div className="flex items-center gap-2">
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                                disabled={page <= 1 || loading}
+                                className="flex items-center gap-1"
+                            >
+                                <ChevronLeft className="h-4 w-4" />
+                                Previous
+                            </Button>
+                            <span className="text-xs text-muted-foreground px-2">
+                                Page {page} of {totalPages}
+                            </span>
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                                disabled={page >= totalPages || loading}
+                                className="flex items-center gap-1"
+                            >
+                                Next
+                                <ChevronRight className="h-4 w-4" />
+                            </Button>
                         </div>
-                    ) : !loading && orders.length === 0 ? (
-                        <div className="flex flex-col items-center justify-center py-16 text-center">
-                            <PackageSearch className="mb-3 h-8 w-8 text-muted-foreground/60" />
-                            <p className="text-sm font-medium text-foreground">No orders to display</p>
-                            <p className="text-xs text-muted-foreground">Adjust your filters or clear search to see orders.</p>
-                        </div>
-                    ) : (
-                        <div className={`transition-opacity duration-150 ${loading ? "opacity-90" : "opacity-100"}`}>
-                            <OrderTable
-                                orders={orders}
-                                onStatusChange={handleStatusChange}
-                                onViewDetail={handleViewDetail}
-                                showEmptyState={false}
-                                loading={loading}
-                            />
-                        </div>
-                    )}
-                </CardContent>
-            </Card>
-            {transitioningOrder && (
-                <StatusTransition
-                    currentStatus={transitioningOrder.currentStatus}
-                    newStatus={transitioningOrder.newStatus}
-                    requireReason={transitioningOrder.requireReason}
-                    onConfirm={(reason) =>
-                        performStatusChange(transitioningOrder.orderId, transitioningOrder.newStatus, reason)
-                    }
-                    onCancel={() => setTransitioningOrder(null)}
-                    submitting={updateStatusMutation.isPending}
-                />
-            )}
+                    </div>
+                )}
+
+                {transitioningOrder && (
+                    <StatusTransition
+                        currentStatus={transitioningOrder.currentStatus}
+                        newStatus={transitioningOrder.newStatus}
+                        requireReason={transitioningOrder.requireReason}
+                        onConfirm={(reason) =>
+                            performStatusChange(transitioningOrder.orderId, transitioningOrder.newStatus, reason)
+                        }
+                        onCancel={() => setTransitioningOrder(null)}
+                        submitting={updateStatusMutation.isPending}
+                    />
+                )}
+            </div>
         </div>
     );
 }

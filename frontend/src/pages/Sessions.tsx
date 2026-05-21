@@ -6,6 +6,7 @@
 
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Monitor } from 'lucide-react';
 
 import { useAuth } from '../contexts/AuthContext';
 import {
@@ -15,10 +16,12 @@ import {
     sessionsQueryKeys,
 } from '../queries/sessions';
 import { formatToCentralTime } from '../utils/timezone';
+import { getUserDisplayName } from '../utils/userDisplay';
 
 export default function Sessions() {
     const { user, logout } = useAuth();
     const [error, setError] = useState<string | null>(null);
+    const currentUserLabel = getUserDisplayName(user, "your account");
     const queryClient = useQueryClient();
 
     const sessionsQuery = useQuery({
@@ -61,13 +64,12 @@ export default function Sessions() {
         await revokeAllSessionsMutation.mutateAsync();
     };
 
-const formatDate = (dateString: string) => {
-    return formatToCentralTime(dateString);
-};
+    const formatDate = (dateString: string) => {
+        return formatToCentralTime(dateString);
+    };
 
     const parseUserAgent = (ua: string | null): string => {
         if (!ua) return 'Unknown device';
-        // Simple extraction - could use a library for more detail
         if (ua.includes('iPhone') || ua.includes('iPad')) return 'iOS Device';
         if (ua.includes('Android')) return 'Android Device';
         if (ua.includes('Windows')) return 'Windows PC';
@@ -79,7 +81,7 @@ const formatDate = (dateString: string) => {
     if (isLoading) {
         return (
             <div className="flex items-center justify-center min-h-[400px]">
-                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-maroon-700"></div>
+                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary"></div>
             </div>
         );
     }
@@ -88,40 +90,38 @@ const formatDate = (dateString: string) => {
     const effectiveError = error ?? (sessionsQuery.isError ? 'Failed to load sessions' : null);
 
     return (
-        <div className="max-w-4xl mx-auto p-6">
-            <div className="mb-8">
-                <h1 className="text-2xl font-bold text-gray-900">Active Sessions</h1>
-                <p className="text-gray-600 mt-1">
-                    Logged in as <strong>{user?.email}</strong>
+        <div className="container mx-auto px-4 py-6 sm:px-6">
+            <div className="mb-6 sm:mb-8">
+                <h1 className="text-xl font-semibold tracking-tight text-foreground sm:text-2xl">Active Sessions</h1>
+                <p className="text-sm text-muted-foreground mt-1">
+                    Logged in as <strong className="text-foreground">{currentUserLabel}</strong>
                 </p>
             </div>
 
             {effectiveError && (
-                <div className="mb-4 p-4 bg-red-100 text-red-700 rounded-lg">
+                <div className="mb-4 p-4 bg-destructive/10 text-destructive rounded-lg text-sm">
                     {effectiveError}
                 </div>
             )}
 
-            <div className="bg-white shadow rounded-lg divide-y">
+            <div className="rounded-lg border border-border bg-card divide-y divide-border">
                 {sessions?.map((session) => (
-                    <div key={session.id} className="p-4 flex items-center justify-between">
-                        <div className="flex items-center gap-4">
-                            <div className="h-10 w-10 bg-gray-100 rounded-full flex items-center justify-center">
-                                <svg className="h-5 w-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-                                </svg>
+                    <div key={session.id} className="p-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="flex items-center gap-3 min-w-0">
+                            <div className="h-10 w-10 shrink-0 bg-muted rounded-full flex items-center justify-center">
+                                <Monitor className="h-5 w-5 text-muted-foreground" />
                             </div>
-                            <div>
-                                <div className="font-medium text-gray-900 flex items-center gap-2">
+                            <div className="min-w-0">
+                                <div className="font-medium text-foreground flex flex-wrap items-center gap-2">
                                     {parseUserAgent(session.user_agent)}
                                     {session.is_current && (
-                                        <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full">
+                                        <span className="text-xs bg-primary/10 text-primary px-2 py-0.5 rounded-full">
                                             Current
                                         </span>
                                     )}
                                 </div>
-                                <div className="text-sm text-gray-500">
-                                    {session.ip_address || 'Unknown IP'} • Last active {formatDate(session.last_seen_at)}
+                                <div className="text-sm text-muted-foreground truncate">
+                                    {session.ip_address || 'Unknown IP'} &middot; Last active {formatDate(session.last_seen_at)}
                                 </div>
                             </div>
                         </div>
@@ -130,7 +130,7 @@ const formatDate = (dateString: string) => {
                             <button
                                 onClick={() => revokeSession(session.id)}
                                 disabled={isMutating}
-                                className="text-sm text-red-600 hover:text-red-800 font-medium"
+                                className="min-h-[44px] px-3 text-sm font-medium text-destructive hover:text-destructive/80 shrink-0 self-start sm:self-auto"
                             >
                                 Sign out
                             </button>
@@ -138,32 +138,30 @@ const formatDate = (dateString: string) => {
                     </div>
                 ))}
                 {sessions.length === 0 && !isLoading && (
-                    <div className="p-8 text-center text-gray-500">
-                        <svg className="mx-auto h-12 w-12 text-gray-300 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-                        </svg>
-                        <p>No active sessions found</p>
-                        <p className="text-sm mt-1">Sessions from other devices will appear here</p>
+                    <div className="p-8 text-center text-muted-foreground">
+                        <Monitor className="mx-auto h-12 w-12 text-muted-foreground/40 mb-3" />
+                        <p className="text-sm font-medium">No active sessions found</p>
+                        <p className="text-xs mt-1 text-muted-foreground/80">Sessions from other devices will appear here</p>
                     </div>
                 )}
             </div>
 
             {sessions.length > 1 && (
-                <div className="mt-6 flex gap-4">
+                <div className="mt-6">
                     <button
                         onClick={revokeAllOtherSessions}
                         disabled={isMutating}
-                        className="px-4 py-2 text-sm font-medium text-red-600 hover:text-red-800"
+                        className="min-h-[44px] px-4 text-sm font-medium text-destructive hover:text-destructive/80"
                     >
                         Sign out of all other sessions
                     </button>
                 </div>
             )}
 
-            <div className="mt-8 pt-8 border-t">
+            <div className="mt-8 pt-8 border-t border-border">
                 <button
                     onClick={logout}
-                    className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
+                    className="min-h-[44px] px-4 py-2 bg-destructive text-destructive-foreground rounded-lg hover:bg-destructive/90 transition-colors text-sm font-medium"
                 >
                     Sign out of this device
                 </button>

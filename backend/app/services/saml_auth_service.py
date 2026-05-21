@@ -17,6 +17,7 @@ from app.config import settings
 from app.models.user import User
 from app.models.session import Session
 from app.utils.exceptions import DNSApiError
+from app.services.graph_service import graph_service
 
 logger = logging.getLogger(__name__)
 
@@ -172,19 +173,80 @@ class SamlAuthService:
         Returns:
             User object (new or existing)
         """
-        # Extract attributes from SAML response
-        # Azure sends these as lists, take first value
-        oid = self._get_attr(saml_attributes, 'http://schemas.microsoft.com/identity/claims/objectidentifier')
-        email = self._get_attr(saml_attributes, 'http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress')
-        display_name = self._get_attr(saml_attributes, 'http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name')
-        given_name = self._get_attr(saml_attributes, 'http://schemas.xmlsoap.org/ws/2005/05/identity/claims/givenname')
-        surname = self._get_attr(saml_attributes, 'http://schemas.xmlsoap.org/ws/2005/05/identity/claims/surname')
+        # Extract attributes from SAML response.
+        # Azure/Entra can surface either the standard claim URIs or custom
+        # short claim names depending on how the SAML app is configured.
+        oid = self._get_attr(
+            saml_attributes,
+            'http://schemas.microsoft.com/identity/claims/objectidentifier',
+            'oid',
+            'objectidentifier',
+        )
+        email = self._get_attr(
+            saml_attributes,
+            'http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress',
+            'email',
+            'userprincipalname',
+            'upn',
+        )
+        display_name = self._get_attr(
+            saml_attributes,
+            'http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name',
+            'http://schemas.microsoft.com/identity/claims/displayname',
+            'http://schemas.xmlsoap.org/ws/2005/05/identity/claims/displayname',
+            'display_name',
+            'displayname',
+            'name',
+        )
+        given_name = self._get_attr(
+            saml_attributes,
+            'http://schemas.xmlsoap.org/ws/2005/05/identity/claims/givenname',
+            'given_name',
+            'givenname',
+        )
+        surname = self._get_attr(
+            saml_attributes,
+            'http://schemas.xmlsoap.org/ws/2005/05/identity/claims/surname',
+            'surname',
+            'family_name',
+            'familyname',
+        )
         department = self._get_attr(saml_attributes, 'department')
-        employee_id = self._get_attr(saml_attributes, 'employeeid')
+        employee_id = self._get_attr(saml_attributes, 'employeeid', 'employee_id')
 
         # Fallback: construct display name from given name + surname if not provided
         if not display_name and (given_name or surname):
             display_name = f"{given_name or ''} {surname or ''}".strip()
+
+        # =====================================================================
+        # Enrich from Microsoft Graph API (source of truth for directory data)
+        # =====================================================================
+        graph_profile = None
+        if oid:
+            try:
+                graph_profile = graph_service.get_user_profile(oid)
+            except Exception:
+                logger.exception("Graph user profile lookup failed; continuing with SAML attributes only")
+                graph_profile = None
+
+            if graph_profile:
+                graph_display_name = graph_profile.get("displayName")
+                graph_given_name = graph_profile.get("givenName")
+                graph_surname = graph_profile.get("surname")
+                graph_department = graph_profile.get("department")
+                graph_employee_id = graph_profile.get("employeeId")
+
+                if graph_display_name:
+                    display_name = graph_display_name
+                    logger.info(f"Overrode SAML display_name with Graph displayName for {email}")
+                if graph_given_name:
+                    given_name = graph_given_name
+                if graph_surname:
+                    surname = graph_surname
+                if graph_department:
+                    department = graph_department
+                if graph_employee_id:
+                    employee_id = graph_employee_id
 
         if not oid:
             raise ValueError("SAML response missing required 'objectidentifier' claim")
@@ -195,11 +257,14 @@ class SamlAuthService:
         user = db.query(User).filter(User.tamu_oid == oid).first()
 
         if user:
-            # Update user info on login
+            # Update user info on login.
             user.email = email
-            user.display_name = display_name
-            user.department = department
-            user.employee_id = employee_id
+            if display_name is not None:
+                user.display_name = display_name
+            if department is not None:
+                user.department = department
+            if employee_id is not None:
+                user.employee_id = employee_id
             user.last_login_at = datetime.utcnow()
             logger.info(f"User login: {email}")
         else:
@@ -220,13 +285,68 @@ class SamlAuthService:
         db.refresh(user)
         return user
 
-    def _get_attr(self, attributes: dict, key: str) -> Optional[str]:
-        """Extract single value from SAML attributes (handles list format)."""
-        value = attributes.get(key)
-        if isinstance(value, list) and len(value) > 0:
-            return value[0]
-        if isinstance(value, str):
-            return value
+    def build_user_attributes_from_oidc_claims(self, oidc_claims: dict) -> dict:
+        """Normalize Microsoft Entra OIDC claims into the shared user-attribute shape."""
+        oid = self._get_attr(
+            oidc_claims,
+            "oid",
+            "objectid",
+        )
+        email = self._get_attr(
+            oidc_claims,
+            "preferred_username",
+            "email",
+            "upn",
+            "userprincipalname",
+        )
+        display_name = self._get_attr(
+            oidc_claims,
+            "name",
+            "display_name",
+            "displayname",
+        )
+        given_name = self._get_attr(
+            oidc_claims,
+            "given_name",
+            "givenname",
+        )
+        surname = self._get_attr(
+            oidc_claims,
+            "family_name",
+            "surname",
+        )
+        department = self._get_attr(oidc_claims, "department")
+        employee_id = self._get_attr(oidc_claims, "employeeid", "employee_id")
+
+        return {
+            "oid": oid,
+            "email": email,
+            "display_name": display_name,
+            "given_name": given_name,
+            "surname": surname,
+            "department": department,
+            "employeeid": employee_id,
+        }
+
+    def get_or_create_user_from_oidc_claims(
+        self,
+        db: DbSession,
+        oidc_claims: dict,
+    ) -> User:
+        """Create or update a TAMU user from Microsoft Entra OIDC claims."""
+        return self.get_or_create_user(
+            db,
+            self.build_user_attributes_from_oidc_claims(oidc_claims),
+        )
+
+    def _get_attr(self, attributes: dict, *keys: str) -> Optional[str]:
+        """Extract the first single-value attribute found for any candidate key."""
+        for key in keys:
+            value = attributes.get(key)
+            if isinstance(value, list) and len(value) > 0:
+                return value[0]
+            if isinstance(value, str):
+                return value
         return None
 
     def create_session(

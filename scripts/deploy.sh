@@ -275,8 +275,8 @@ run_backend_migrations() {
         return 1
     fi
 
-    if [ -x "${backend_dir}/venv/bin/alembic" ]; then
-        alembic_cmd=("${backend_dir}/venv/bin/alembic")
+    if [ -x "${backend_dir}/.venv/bin/alembic" ]; then
+        alembic_cmd=("${backend_dir}/.venv/bin/alembic")
     elif command -v alembic >/dev/null 2>&1; then
         alembic_cmd=("alembic")
     elif command -v python3 >/dev/null 2>&1; then
@@ -294,6 +294,24 @@ run_backend_migrations() {
     fi
     cd "$PROJECT_ROOT"
     log "Database migrations complete"
+# Pre-deploy import check: verify the app can be imported on the server using the project venv
+if [ "$SKIP_IMPORT_CHECK" != "1" ]; then
+    log "Pre-deploy import check: testing 'import app' with project virtualenv..."
+    backend_dir="${PROJECT_ROOT}/backend"
+    if [ -d "$backend_dir/.venv" ]; then
+        python_cmd="$backend_dir/.venv/bin/python"
+    else
+        python_cmd="python3"
+    fi
+    import_output=$($python_cmd -c "import app" 2>&1) || import_rc=$?
+    if [ $? -ne 0 ]; then
+        log "ERROR: Remote import failed! Traceback:\n$import_output"
+        log "Aborting deployment due to import failure (RELOAD_STRICT=$RELOAD_STRICT)"
+        exit 1
+    else
+        log "Pre-deploy import check passed."
+    fi
+fi
 }
 
 install_frontend_deps() {
@@ -433,6 +451,13 @@ fi
 git reset --hard "origin/$BRANCH"
 log "Git pull complete"
 
+# Clean up deprecated local document storage — now using SharePoint exclusively
+if [ -d "${PROJECT_ROOT}/storage" ]; then
+    log "Removing legacy local storage directory..."
+    rm -rf "${PROJECT_ROOT}/storage"
+    log "Legacy storage removed"
+fi
+
 if ! run_backend_migrations; then
     exit 1
 fi
@@ -467,6 +492,31 @@ fi
 log "Recent commits:"
 git log --oneline -3
 
+
+
+
+# Debug: list /var/www to discover WSGI filename pattern
+if [ -n "$WEBAPP_DOMAIN" ]; then
+    log "DEBUG: Listing /var/www for wsgi files..."
+    ls -la /var/www/*.py 2>&1 | tee -a "$LOG_FILE" || true
+    # Also try to find files matching the domain
+    log "DEBUG: Looking for files matching *$(echo "$WEBAPP_DOMAIN" | tr '.' '_')*.py"
+    find /var/www -maxdepth 1 -name "*wsgi*.py" 2>&1 | tee -a "$LOG_FILE" || true
+fi
+
+    log "DEBUG: backend_dir=${backend_dir}"
+    log "DEBUG: Listing ${backend_dir}:"
+    ls -la "${backend_dir}" 2>&1 | tee -a "$LOG_FILE" || true
+    log "DEBUG: end listing"
+    # Migration: rename venv to .venv if .venv missing (PA web command expects .venv)
+    if [ -d "${backend_dir}/venv" ] && [ ! -d "${backend_dir}/.venv" ]; then
+        log "Renaming virtualenv: venv/ -> .venv/ (to match PA web app command)"
+        mv "${backend_dir}/venv" "${backend_dir}/.venv" || {
+            log "WARNING: Failed to rename venv to .venv; will try creating .venv fresh"
+            rm -rf "${backend_dir}/.venv"
+            mv "${backend_dir}/venv" "${backend_dir}/.venv"
+        }
+    fi
 # Reload web app (prefer PythonAnywhere CLI when available)
     if [ -n "$WEBAPP_DOMAIN" ] && command -v pa >/dev/null 2>&1; then
         if pa website reload --domain "$WEBAPP_DOMAIN"; then
@@ -476,7 +526,8 @@ git log --oneline -3
             if ! reload_with_domain_fallbacks "$WEBAPP_DOMAIN"; then
                 handle_reload_failure "WSGI reload failed after PythonAnywhere CLI reload failure (domain=$WEBAPP_DOMAIN)"
             fi
-        fi
+    fi
+
     else
         if [ -z "$WEBAPP_DOMAIN" ]; then
             log "WEBAPP_DOMAIN not set; using WSGI touch fallback"
@@ -491,6 +542,10 @@ git log --oneline -3
 
 log "=========================================="
 log "Deployment complete!"
+
+# Post-reload: fetch recent error log entries for debugging
+log "Fetching recent PA error log entries (up to 50 lines)..."
+tail -n 50 "$HOME/.pythonanywhere/error.log" 2>&1 | tee -a "$LOG_FILE" || log "WARNING: Could not read PA error log (maybe not accessible)"
 log "=========================================="
 
 run_non_blocking_preflight

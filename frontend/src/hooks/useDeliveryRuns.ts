@@ -4,6 +4,10 @@ import { io, Socket } from "socket.io-client";
 
 import { deliveryRunsQueryKeys, getActiveDeliveryRunsQueryOptions, type ActiveDeliveryRun } from "../queries/deliveryRuns";
 
+function safeArray<T>(value: unknown): T[] {
+  return Array.isArray(value) ? value : [];
+}
+
 export type DeliveryRun = ActiveDeliveryRun;
 
 export function useDeliveryRuns(socketUrl?: string) {
@@ -33,7 +37,7 @@ export function useDeliveryRuns(socketUrl?: string) {
       });
       socketRef.current = socket;
     } catch (e) {
-      console.debug("Socket.IO connection failed (expected if backend not running)", e);
+      console.error("Socket.IO init failed (delivery runs):", e);
     }
 
     if (!socket) {
@@ -46,30 +50,38 @@ export function useDeliveryRuns(socketUrl?: string) {
       };
     }
 
-    socket.on("connect", () => {
-      console.debug("DeliveryRuns Socket.IO connected");
+    const socketInstance = socket;
+
+    socketInstance.on("connect", () => {
       setSocketError(null);
       // Join delivery-runs namespace/room
-      socket.emit("join", { room: "delivery-runs" });
+      socketInstance.emit("join", { room: "delivery-runs" });
     });
 
-    socket.on("active_runs", (payload: { type: string; data: DeliveryRun[] }) => {
+    socketInstance.on("active_runs", (payload: { type: string; data: DeliveryRun[] }) => {
       try {
         if (payload.type === "active_runs") {
-          queryClient.setQueryData(deliveryRunsQueryKeys.active(), payload.data || []);
+          queryClient.setQueryData(deliveryRunsQueryKeys.active(), safeArray<DeliveryRun>(payload.data));
         }
       } catch (e) {
         console.warn("Failed to parse Socket.IO message", e);
       }
     });
 
-    socket.on("disconnect", () => {
-      console.debug("DeliveryRuns Socket.IO disconnected");
+    socketInstance.on("disconnect", () => {
+      // Transient disconnects are normal with long-polling fallback.
     });
 
-    socket.on("connect_error", (err) => {
-      console.debug("DeliveryRuns Socket.IO error (expected if backend not running)", err);
-      setSocketError("Socket.IO connection failed - using cached data");
+    socketInstance.on("connect_error", () => {
+      // Transient errors expected during reconnection cycle.
+    });
+
+    socketInstance.on("reconnect_failed", () => {
+      setSocketError("Socket.IO reconnection failed — using cached data");
+    });
+
+    socketInstance.on("connect", () => {
+      setSocketError(null);
     });
 
     return () => {

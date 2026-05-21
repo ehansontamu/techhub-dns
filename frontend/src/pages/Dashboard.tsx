@@ -2,7 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useSearchParams } from "react-router-dom";
 import { io, Socket } from "socket.io-client";
-import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
+
 import { Button } from "../components/ui/button";
 import { Skeleton } from "../components/Skeleton";
 import { Order } from "../types/order";
@@ -17,7 +17,13 @@ import {
   getWorkflowDailyTrendsQueryOptions,
   getYearlyFulfilledTotalsQueryOptions,
 } from "../queries/analytics";
+import { type FulfilledTotalDataPoint, type WorkflowDailyTrendDataPoint } from "../api/analytics";
 import { shouldThrowToBoundary } from "../utils/apiErrors";
+
+/** Guard against API returning non-array data (error objects, null, etc.) */
+function safeArray<T>(value: unknown): T[] {
+  return Array.isArray(value) ? value : [];
+}
 
 const LiveDeliveryDashboard = lazy(() => import("../components/LiveDeliveryDashboard"));
 const WorkflowDailyLineChart = lazy(() => import("../components/charts/WorkflowDailyLineChart"));
@@ -70,26 +76,20 @@ function StatCard({ title, value, icon: Icon, loading, accent = "slate" }: StatC
   };
 
   return (
-    <div className="group">
-        <Card className="relative overflow-hidden" data-transition="card-hover">
-        <div className={`absolute bottom-0 right-0 rounded-tl-2xl p-3 ${accentClasses[accent]}`}>
-          <Icon className="w-5 h-5" />
-        </div>
-        <CardHeader className="pb-2 pt-4">
-          <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-            {title}
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="pt-0">
-          {loading ? (
-            <Skeleton className="h-9 w-16" />
-          ) : (
-            <div className="text-3xl font-bold text-foreground tabular-nums" key={value}>
-              {animatedValue}
-            </div>
-          )}
-        </CardContent>
-      </Card>
+    <div className="group relative overflow-hidden rounded-2xl border border-border/70 bg-card/80 p-5 shadow-none transition-colors hover:bg-card">
+      <div className={`absolute bottom-0 right-0 rounded-tl-2xl p-3 ${accentClasses[accent]}`}>
+        <Icon className="h-5 w-5" />
+      </div>
+      <p className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">{title}</p>
+      <div className="mt-3">
+        {loading ? (
+          <Skeleton className="h-9 w-16" />
+        ) : (
+          <div className="text-3xl font-semibold tracking-tight text-foreground tabular-nums" key={value}>
+            {animatedValue}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -140,12 +140,12 @@ export default function Dashboard() {
     completed_today: 0,
     ready_for_delivery: 0,
   };
-  const workflowDailyTrends = workflowDailyTrendsQuery.data?.data ?? [];
-  const monthlyFulfilledTotals = monthlyFulfilledTotalsQuery.data?.data ?? [];
-  const yearlyFulfilledTotals = yearlyFulfilledTotalsQuery.data?.data ?? [];
+  const workflowDailyTrends = safeArray<WorkflowDailyTrendDataPoint>(workflowDailyTrendsQuery.data?.data);
+  const monthlyFulfilledTotals = safeArray<FulfilledTotalDataPoint>(monthlyFulfilledTotalsQuery.data?.data);
+  const yearlyFulfilledTotals = safeArray<FulfilledTotalDataPoint>(yearlyFulfilledTotalsQuery.data?.data);
 
   const completedTodayOrders = useMemo((): Order[] => {
-    const deliveredOrders = deliveredOrdersQuery.data ?? [];
+    const deliveredOrders = safeArray<Order>(deliveredOrdersQuery.data);
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
 
@@ -250,7 +250,6 @@ export default function Dashboard() {
       });
       socketRef.current = socket;
     } catch (e) {
-      console.debug("Socket.IO connection failed (expected if backend not running)", e);
     }
 
     if (!socket) {
@@ -267,34 +266,31 @@ export default function Dashboard() {
       };
     }
 
-    socket.on("connect", () => {
-      console.debug("Dashboard Socket.IO connected");
+    const socketInstance = socket;
+
+    socketInstance.on("connect", () => {
       setSocketStatus("connected");
       if (socketReconnectTimeoutRef.current) {
         window.clearTimeout(socketReconnectTimeoutRef.current);
         socketReconnectTimeoutRef.current = null;
       }
-      socket.emit("join", { room: "orders" });
+      socketInstance.emit("join", { room: "orders" });
     });
 
     // Listen for orders_update and active_runs events - refetch all metrics
-    socket.on("orders_update", () => {
-      console.debug("Orders updated, refetching analytics");
+    socketInstance.on("orders_update", () => {
       refreshFromSocket();
     });
 
-    socket.on("active_runs", () => {
-      console.debug("Active runs updated, refetching analytics");
+    socketInstance.on("active_runs", () => {
       refreshFromSocket();
     });
 
-    socket.on("disconnect", () => {
-      console.debug("Dashboard Socket.IO disconnected");
+    socketInstance.on("disconnect", () => {
       setSocketStatus("disconnected");
     });
 
-    socket.on("connect_error", (err) => {
-      console.debug("Dashboard Socket.IO error (expected if backend not running)", err);
+    socketInstance.on("connect_error", () => {
       setSocketStatus("connecting");
       if (socketReconnectTimeoutRef.current) {
         window.clearTimeout(socketReconnectTimeoutRef.current);
@@ -346,10 +342,10 @@ export default function Dashboard() {
         </div>
       )}
 
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 items-stretch">
-        <Card className="xl:col-span-2 h-full">
-          <CardHeader className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <CardTitle className="text-base">Live Status</CardTitle>
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 items-stretch min-w-0">
+        <section className="rounded-2xl border border-border/70 bg-card/80 p-5 shadow-none xl:col-span-2 h-full min-w-0">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <h2 className="text-base">Live Status</h2>
             <div className="flex flex-col items-end gap-1 text-right">
               <span
                 className={`text-xs text-muted-foreground${socketStatus === "connected" ? " status-live" : ""}`}
@@ -362,8 +358,8 @@ export default function Dashboard() {
                 <span className="text-[11px] text-muted-foreground">Fallback refresh every 60 seconds</span>
               )}
             </div>
-          </CardHeader>
-          <CardContent>
+          </div>
+          <div className="mt-4">
             <SectionErrorBoundary
               title="Live delivery widget failed"
               message="Try the live status panel again. The rest of the dashboard is still available."
@@ -372,10 +368,10 @@ export default function Dashboard() {
                 <LiveDeliveryDashboard />
               </Suspense>
             </SectionErrorBoundary>
-          </CardContent>
-        </Card>
+          </div>
+        </section>
 
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 h-full">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 h-full min-w-0">
           <StatCard
             title="Picked"
             value={statusCounts.picked ?? 0}
@@ -407,13 +403,13 @@ export default function Dashboard() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <Card>
-          <CardHeader className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <CardTitle className="text-base">Completed Today</CardTitle>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 min-w-0">
+        <section className="rounded-2xl border border-border/70 bg-card/80 p-5 shadow-none min-w-0">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <h2 className="text-base">Completed Today</h2>
             <span className="text-xs text-muted-foreground">Last 24h</span>
-          </CardHeader>
-          <CardContent>
+          </div>
+          <div className="mt-4 min-w-0">
             {completedLoading ? (
               <div className="space-y-3">
                 <Skeleton className="h-4 w-40" />
@@ -430,7 +426,8 @@ export default function Dashboard() {
                 {completedTodayOrders.map((order) => (
                   <div key={order.id} className="flex items-center justify-between text-sm">
                     <Link
-                      to={`/orders/${order.id}`}
+                      to={`/orders/${order.inflow_order_id || order.id}`}
+                      state={{ fromPath: "/" }}
                       className="font-medium text-foreground underline-offset-2 hover:text-primary hover:underline"
                     >
                       {order.inflow_order_id || order.id.slice(0, 8)}
@@ -442,13 +439,13 @@ export default function Dashboard() {
                 ))}
               </div>
             )}
-          </CardContent>
-        </Card>
+          </div>
+        </section>
 
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between gap-3">
+        <section className="rounded-2xl border border-border/70 bg-card/80 p-5 shadow-none min-w-0">
+          <div className="flex flex-row items-center justify-between gap-3">
             <div>
-              <CardTitle className="text-base">Orders Daily Workflow</CardTitle>
+              <h2 className="text-base">Orders Daily Workflow</h2>
               <p className="text-xs text-muted-foreground">Last {workflowTrendDays} days</p>
             </div>
             <div className="flex items-center gap-1 rounded-md border p-1">
@@ -473,8 +470,8 @@ export default function Dashboard() {
                   30d
                 </Button>
             </div>
-          </CardHeader>
-          <CardContent>
+          </div>
+          <div className="mt-4 min-w-0">
             <SectionErrorBoundary
               title="Workflow chart failed"
               message="Try reloading this chart. The rest of the dashboard data is still available."
@@ -484,17 +481,17 @@ export default function Dashboard() {
                 <WorkflowDailyLineChart data={workflowDailyTrends} loading={trendsLoading} />
               </Suspense>
             </SectionErrorBoundary>
-          </CardContent>
-        </Card>
+          </div>
+        </section>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Monthly Fulfilled Totals</CardTitle>
+        <section className="rounded-2xl border border-border/70 bg-card/80 p-5 shadow-none min-w-0">
+          <div>
+            <h2 className="text-base">Monthly Fulfilled Totals</h2>
             <p className="text-xs text-muted-foreground">Last 12 months</p>
-          </CardHeader>
-          <CardContent>
+          </div>
+          <div className="mt-4 min-w-0">
             <SectionErrorBoundary
               title="Monthly totals chart failed"
               message="Try reloading the monthly fulfilled totals chart."
@@ -503,15 +500,15 @@ export default function Dashboard() {
                 <FulfilledTotalsBarChart data={monthlyFulfilledTotals} loading={trendsLoading} />
               </Suspense>
             </SectionErrorBoundary>
-          </CardContent>
-        </Card>
+          </div>
+        </section>
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Yearly Fulfilled Totals</CardTitle>
+        <section className="rounded-2xl border border-border/70 bg-card/80 p-5 shadow-none">
+          <div>
+            <h2 className="text-base">Yearly Fulfilled Totals</h2>
             <p className="text-xs text-muted-foreground">Last 5 years</p>
-          </CardHeader>
-          <CardContent>
+          </div>
+          <div className="mt-4">
             <SectionErrorBoundary
               title="Yearly totals chart failed"
               message="Try reloading the yearly fulfilled totals chart."
@@ -520,10 +517,10 @@ export default function Dashboard() {
                 <FulfilledTotalsBarChart data={yearlyFulfilledTotals} loading={trendsLoading} />
               </Suspense>
             </SectionErrorBoundary>
-          </CardContent>
-        </Card>
+          </div>
+        </section>
       </div>
 
     </div>
   );
-}
+}// rebuild trigger

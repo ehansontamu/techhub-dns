@@ -8,7 +8,7 @@
     "build": "tsc && vite build",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "preview": "vite preview",
-    "test": "vitest run"
+    "test": "pushd \"%INIT_CWD%\" && node node_modules/vitest/vitest.mjs run"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.15",
@@ -52,6 +52,10 @@
     "tailwindcss-animate": "^1.0.7",
     "typescript": "^5.2.2",
     "vite": "^7.3.0",
-    "vitest": "^3.2.4"
+    "vitest": "^3.2.4",
+    "@testing-library/react": "^14.1.2",
+    "@testing-library/jest-dom": "^6.1.4",
+    "@testing-library/user-event": "^14.5.1",
+    "jsdom": "^23.0.1"
   }
 }

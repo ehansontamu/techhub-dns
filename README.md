@@ -184,6 +184,12 @@ alembic upgrade head
 python -m app.main
 ```
 
+### Frontend
+```bash
+cd frontend
+npm test          # Run tests (vitest)
+```
+
 ### Frontend Setup
 
 ```bash
@@ -207,11 +213,30 @@ See `.env.example` for all configuration options. Key sections:
 |---------|-----------|
 | **Database** | `DATABASE_URL` |
 | **Inflow** | `INFLOW_API_URL`, `INFLOW_API_KEY`, `INFLOW_COMPANY_ID` |
-| **Authentication** | `SAML_*` (user login), `AZURE_*` (service principal) |
+| **Authentication** | `SAML_*` (legacy fallback login), `OIDC_*` (user login), `AZURE_*` (service principal) |
 | **SharePoint** | `SHAREPOINT_SITE_URL`, `SHAREPOINT_FOLDER_PATH` |
 | **Features** | `TEAMS_RECIPIENT_NOTIFICATIONS_ENABLED`, `SMTP_ENABLED` |
 
 ---
+
+## Security
+
+### Authentication & Authorization
+- **TAMU SSO (SAML)** for production authentication
+- **Route-level auth**: All API endpoints require `@require_auth` or `@require_admin`
+- **CSRF protection**: Origin/Referer verification on state-changing endpoints
+- **Session management**: UUID-based sessions with expiry, revocation, and rolling last-seen
+
+### Data Protection
+- **Webhook signatures**: HMAC-SHA256 with timing-safe comparison (`hmac.compare_digest`)
+- **Token security**: Bearer tokens compared with timing-safe functions
+- **File path validation**: Picklist/document serving validated against storage root
+- **No hardcoded secrets**: Missing SECRET_KEY generates ephemeral key with warning
+
+### Operational Security
+- **Audit logging**: All order mutations recorded with actor, timestamps, and change details
+- **Error sanitization**: Internal errors logged server-side; generic messages sent to clients
+- **Payload logging**: Webhooks log event type + order number only (no PII)
 
 ## Documentation
 

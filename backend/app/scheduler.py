@@ -5,9 +5,9 @@ from datetime import datetime, timedelta
 import asyncio
 from app.database import get_db_session
 from app.services.inflow_service import InflowService
-from app.services.order_service import OrderService
 from app.models.inflow_webhook import InflowWebhook, WebhookStatus
 from app.config import settings
+from app.api.routes.inflow import _run_inflow_sync
 import logging
 import threading
 
@@ -15,62 +15,15 @@ logger = logging.getLogger(__name__)
 
 
 def sync_inflow_orders():
-    """Background task to sync orders from Inflow (sync version)"""
-    from app.api.routes.orders import _broadcast_orders_sync
+    """Background task to sync orders from Inflow.
 
-    db = get_db_session()
+    Delegates to the shared implementation in inflow_routes so we
+    maintain a single code path for manual and scheduled syncs.
+    """
     try:
-        inflow_service = InflowService()
-        order_service = OrderService(db)
-
-        logger.info("Starting Inflow sync...")
-
-        # Fetch recent started orders (sync version)
-        inflow_orders = inflow_service.sync_recent_started_orders_sync(
-            max_pages=3, per_page=100, target_matches=100
-        )
-
-        orders_created = 0
-        orders_updated = 0
-
-        for inflow_order in inflow_orders:
-            try:
-                from app.models.order import Order
-
-                order_number = inflow_order.get("orderNumber")
-                existing = (
-                    db.query(Order)
-                    .filter(Order.inflow_order_id == order_number)
-                    .first()
-                )
-
-                order = order_service.create_order_from_inflow(inflow_order)
-                if not existing:
-                    orders_created += 1
-                else:
-                    orders_updated += 1
-            except ValueError as e:
-                # ValueError is raised for skipped orders (e.g., not in Bryan/College Station)
-                continue
-            except Exception as e:
-                logger.error(
-                    f"Error processing order {inflow_order.get('orderNumber')}: {e}",
-                    exc_info=True,
-                )
-                continue
-
-        logger.info(
-            f"Inflow sync completed: {len(inflow_orders)} synced, {orders_created} created, {orders_updated} updated"
-        )
-
-        # Broadcast order updates via SocketIO
-        if orders_created > 0 or orders_updated > 0:
-            threading.Thread(target=_broadcast_orders_sync).start()
-
+        _run_inflow_sync()
     except Exception as e:
         logger.error(f"Inflow sync failed: {e}", exc_info=True)
-    finally:
-        db.close()
 
 
 def _has_active_webhook(db: Session) -> bool:
@@ -188,6 +141,7 @@ def auto_register_inflow_webhook() -> None:
 
     target_url = settings.inflow_webhook_url.strip().rstrip("/")
     db = get_db_session()
+    local_active_webhook = None
     try:
         existing = (
             db.query(InflowWebhook)
@@ -197,32 +151,52 @@ def auto_register_inflow_webhook() -> None:
 
         for webhook in existing:
             if webhook.url.strip().rstrip("/") == target_url:
-                logger.info(
-                    "Webhook already registered for %s (ID: %s)",
-                    target_url,
-                    webhook.webhook_id,
-                )
-                return
+                local_active_webhook = webhook
+                break
     finally:
         db.close()
 
-    logger.info("Auto-registering Inflow webhook: %s", target_url)
-
     async def register():
         service = InflowService()
+        remote_webhooks = []
         try:
             remote_webhooks = await service.list_webhooks()
-            for item in remote_webhooks:
-                remote_url = (item.get("url") or "").strip().rstrip("/")
-                if remote_url == target_url:
-                    webhook_id = item.get("webHookSubscriptionId") or item.get("id")
-                    if webhook_id:
-                        logger.info(
-                            "Cleaning up existing remote webhook: %s", webhook_id
-                        )
-                        await service.delete_webhook(webhook_id)
         except Exception as exc:
-            logger.warning("Could not clean up remote webhooks: %s", exc)
+            logger.warning("Could not list remote webhooks: %s", exc)
+
+        for item in remote_webhooks:
+            remote_url = (item.get("url") or "").strip().rstrip("/")
+            if remote_url == target_url:
+                remote_webhook_id = (
+                    item.get("webHookSubscriptionId")
+                    or item.get("id")
+                    or item.get("webhookId")
+                )
+                if local_active_webhook:
+                    logger.info(
+                        "Webhook already registered for %s (local ID: %s, remote ID: %s)",
+                        target_url,
+                        local_active_webhook.webhook_id,
+                        remote_webhook_id or "unknown",
+                    )
+                else:
+                    logger.info(
+                        "Webhook already registered remotely for %s (ID: %s)",
+                        target_url,
+                        remote_webhook_id or "unknown",
+                    )
+                return {
+                    "webHookSubscriptionId": remote_webhook_id,
+                    "url": remote_url,
+                }
+
+        if local_active_webhook:
+            logger.warning(
+                "Local webhook record exists for %s but remote subscription is missing; re-registering",
+                target_url,
+            )
+        else:
+            logger.info("Auto-registering Inflow webhook: %s", target_url)
 
         return await service.register_webhook(
             target_url, settings.inflow_webhook_events

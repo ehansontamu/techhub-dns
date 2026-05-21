@@ -60,6 +60,29 @@ COMMON_BUILDING_CODES = {
 }
 
 
+WEST_CAMPUS_PORTABLE_PATTERN = re.compile(
+    r"\bWEST\s+CAMPUS\s+(?:BLVD|BOULEVARD)\.?\s+(?:BLDG\.?|BUILDING)\s+0*(\d{2,4})\b"
+)
+EAST_29TH_STREET_PATTERN = re.compile(
+    r"\b2900\s+(?:E|EAST)\s+29TH\s+ST(?:REET)?\b"
+)
+LIBRARY_ANNEX_PATTERN = re.compile(
+    r"\b(?:5000\s+TAMU|LIBR(?:ARY)?\s+ANNEX|ANNEX\s+6TH\s+FLOOR\s+DIGITAL\s+INITIATIVES\s+SUITE)\b"
+)
+ESL_RELLIS_PATTERN = re.compile(
+    r"\b1210\s+AVENUE\s+A\b"
+)
+ALLEN_PATTERN = re.compile(
+    r"\b(?:4220\s+TAMU|ALLEN(?:\s+BLDG|\s+BUILDING)?)\b"
+)
+ZACH_ADDRESS_PATTERN = re.compile(
+    r"\b(?:125\s+SPENCE\s+ST(?:REET)?|TAMU\s+3579|3579\s+TAMU)\b"
+)
+FERMIER_PATTERN = re.compile(
+    r"\b(?:FERMIER(?:\s+HALL)?|MS\s+3367)\b"
+)
+
+
 def normalize_address(address: str) -> str:
     """
     Normalize an address for consistent matching.
@@ -200,6 +223,73 @@ def extract_building_code_from_location(location: str) -> Optional[str]:
     # Track which patterns we're checking for debugging
     patterns_checked = []
 
+    # Pattern P0: West Campus portable buildings
+    patterns_checked.append("Pattern P0: West Campus portable building")
+    portable_match = WEST_CAMPUS_PORTABLE_PATTERN.search(location_upper)
+    if portable_match:
+        portable_number = portable_match.group(1).zfill(4)
+        portable_label = f"Portables {portable_number}"
+        logger.info(
+            "Extracted portable location from '%s': %s (Pattern P0)",
+            location,
+            portable_label,
+        )
+        return portable_label
+
+    # Pattern P1: Health Hub / 2900 East 29th Street variants
+    patterns_checked.append("Pattern P1: 2900 E 29th St variants")
+    if EAST_29TH_STREET_PATTERN.search(location_upper):
+        logger.info(
+            "Normalized East 29th Street location from '%s' to 'E 29th St' (Pattern P1)",
+            location,
+        )
+        return "E 29th St"
+
+    # Pattern P2: Library Annex / 5000 TAMU variants
+    patterns_checked.append("Pattern P2: Library Annex / 5000 TAMU variants")
+    if LIBRARY_ANNEX_PATTERN.search(location_upper):
+        logger.info(
+            "Normalized Library Annex location from '%s' to 'ANEX' (Pattern P2)",
+            location,
+        )
+        return "ANEX"
+
+    # Pattern P3: ESL RELLIS / 1210 Avenue A
+    patterns_checked.append("Pattern P3: ESL RELLIS / 1210 Avenue A")
+    if ESL_RELLIS_PATTERN.search(location_upper):
+        logger.info(
+            "Normalized ESL RELLIS location from '%s' to 'ESL RELLIS' (Pattern P3)",
+            location,
+        )
+        return "ESL RELLIS"
+
+    # Pattern P4: ALLEN / 4220 TAMU variants
+    patterns_checked.append("Pattern P4: ALLEN / 4220 TAMU variants")
+    if ALLEN_PATTERN.search(location_upper):
+        logger.info(
+            "Normalized Allen location from '%s' to 'ALLEN' (Pattern P4)",
+            location,
+        )
+        return "ALLEN"
+
+    # Pattern P5: ZACH / 125 Spence Street / TAMU 3579 variants
+    patterns_checked.append("Pattern P5: ZACH / 125 Spence Street / TAMU 3579 variants")
+    if ZACH_ADDRESS_PATTERN.search(location_upper):
+        logger.info(
+            "Normalized Zachry location from '%s' to 'ZACH' (Pattern P5)",
+            location,
+        )
+        return "ZACH"
+
+    # Pattern P6: FERM / Fermier Hall variants
+    patterns_checked.append("Pattern P6: FERM / Fermier Hall variants")
+    if FERMIER_PATTERN.search(location_upper):
+        logger.info(
+            "Normalized Fermier location from '%s' to 'FERM' (Pattern P6)",
+            location,
+        )
+        return "FERM"
+
     # Pattern 0: Specific known addresses (highest priority)
     # These are addresses that should always map to specific building codes
     patterns_checked.append("Pattern 0: Specific known addresses")
@@ -302,6 +392,10 @@ def extract_building_code_from_location(location: str) -> Optional[str]:
         (r'\bSTUDENT\s+COMPUTING\b', "SCC"),  # Student Computing Center
         (r'\bSCHOOL\s+OF\s+PUBLIC\s+HEALTH\b', "SPHA"),
         (r'\bHEALTH\s+PROFESSIONS\b', "HPLB"),
+        (r'\bJ\.?\s*J\.?\s*CAIN\s+BUILDING\b', "JCAIN"),
+        (r'\bJ\.?\s*MIKE\s+WALKER\b', "JCAIN"),
+        (r'\bMECHANICAL\s+ENGINEERING\b', "JCAIN"),
+        (r'\bMATERIALS\s+SCIENCE\s+AND\s+ENGINEERING\b', "JCAIN"),
         (r'\bVISUALIZATION\s+(?:BLDG|BLDG\.|BUILDING|SCIENCES)\b', "VPIS"),
         (r'\bVETERINARY\s+(?:MEDICINE|PATHOBIOLOGY)\b', "VMBS"),
         (r'\bINTERDISCIPLINARY\s+LIFE\s+SCIENCES\b', "ILCB"),
@@ -324,6 +418,9 @@ def extract_building_code_from_location(location: str) -> Optional[str]:
         (r'\bPETROLEUM\b', "PETR"),
         (r'\bSCOTES\b', "SCOT"),
         (r'\bREYNOLDS\b', "REYN"),  # Reynolds alone
+        (r'\bJ\.?\s*J\.?\s*CAIN\b', "JCAIN"),
+        (r'\bMECHANICAL\s+ENGINEERING\b', "JCAIN"),
+        (r'\bMATERIALS\s+SCIENCE\s+AND\s+ENGINEERING\b', "JCAIN"),
         (r'\bRELLIS\b', "RELS"),    # RELLIS campus
 
         # Specific address patterns

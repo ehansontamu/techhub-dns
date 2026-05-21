@@ -60,6 +60,12 @@ class OrderStatusUpdate(BaseModel):
     expected_updated_at: Optional[datetime] = None
 
 
+class OrderRollbackUpdate(BaseModel):
+    status: OrderStatus
+    reason: Optional[str] = None
+    expected_updated_at: Optional[datetime] = None
+
+
 class AssetTagUpdate(BaseModel):
     tag_ids: List[str] = Field(default_factory=list)
     technician: Optional[str] = None
@@ -69,6 +75,8 @@ class AssetTagUpdate(BaseModel):
 class PicklistGenerationRequest(BaseModel):
     generated_by: Optional[str] = None
     expected_updated_at: Optional[datetime] = None
+    create_partial_leg: bool = False
+    confirm_create_partial_leg: bool = False
 
 
 class QASubmission(BaseModel):
@@ -89,6 +97,8 @@ class SignatureData(BaseModel):
     signature_image: str  # Base64 encoded PNG
     placements: List[SignaturePlacement] = Field(default_factory=list)
     expected_updated_at: Optional[datetime] = None
+    page_width: Optional[float] = None  # Frontend PDF.js viewport width — used for overlay sizing
+    page_height: Optional[float] = None  # Frontend PDF.js viewport height
     # Backward compatibility (optional)
     page_number: Optional[int] = None
     position: Optional[Dict[str, float]] = None
@@ -133,6 +143,9 @@ class OrderResponse(OrderBase):
     qa_method: Optional[str] = None
     signature_captured_at: Optional[datetime] = None
     signed_picklist_path: Optional[str] = None
+    parent_order_id: Optional[str] = None
+    has_remainder: Optional[str] = None
+    remainder_order_id: Optional[str] = None
     shipping_workflow_status: Optional[ShippingWorkflowStatus] = None
     shipping_workflow_status_updated_at: Optional[datetime] = None
     shipping_workflow_status_updated_by: Optional[str] = None
@@ -165,6 +178,8 @@ class OrderDetailResponse(OrderResponse):
     inflow_data: Optional[Dict[str, Any]] = None
     asset_tag_serials: Optional[List[Dict[str, Any]]] = None
     asset_tag_required: Optional[bool] = None
+    parent_inflow_order_id: Optional[str] = None
+    remainder_inflow_order_id: Optional[str] = None
 
 
 class BulkStatusUpdate(BaseModel):

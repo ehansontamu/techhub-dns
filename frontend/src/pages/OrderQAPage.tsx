@@ -1,77 +1,80 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { isAxiosError } from "axios";
 import { useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { useAuth } from "../contexts/AuthContext";
+import { getUserDisplayName } from "../utils/userDisplay";
 import { ordersApi } from "../api/orders";
 import { getOrderDetailQueryOptions, invalidateOrderQueries } from "../queries/orders";
 import type { OrderDetail } from "../types/order";
 import { formatToCentralTime } from "../utils/timezone";
 
-type QAMethod = "Delivery" | "Shipping";
-
 type QAFormState = {
     orderNumber: string;
     technician: string;
     verifyAssetTagSerialMatch: boolean;
-    verifyOrderDetailsTemplateSent: boolean;
+    verifyOrderDetailsTemplateSentAndElectronicPackingSlipSaved: boolean;
     verifyPackagedProperly: boolean;
     verifyPackingSlipSerialsMatch: boolean;
-    verifyElectronicPackingSlipSaved: boolean;
     verifyBoxesLabeledCorrectly: boolean;
     qaSignature: string;
-    method: QAMethod | "";
+};
+
+type LegacyQAFormState = QAFormState & {
+    method?: string;
 };
 
 type SavedQAChecklist = {
     orderId: string;
     inflowOrderId: string;
     submittedAt: string;
-    form: QAFormState;
+    form: LegacyQAFormState;
 };
 
 const defaultForm = (orderNumber: string): QAFormState => ({
     orderNumber,
     technician: "",
     verifyAssetTagSerialMatch: false,
-    verifyOrderDetailsTemplateSent: false,
+    verifyOrderDetailsTemplateSentAndElectronicPackingSlipSaved: false,
     verifyPackagedProperly: false,
     verifyPackingSlipSerialsMatch: false,
-    verifyElectronicPackingSlipSaved: false,
     verifyBoxesLabeledCorrectly: false,
     qaSignature: "",
-    method: "",
 });
 
-const storageKey = (orderId: string) => `order-qa-checklist-v2:${orderId}`;
+const normalizeSavedForm = (form: LegacyQAFormState, orderNumber: string): QAFormState => {
+    const { method: _method, ...rest } = form;
+    return {
+        ...defaultForm(orderNumber),
+        ...rest,
+    };
+};
+
+const storageKey = (orderId: string) => `order-qa-checklist-v3:${orderId}`;
 
 const verificationSteps = [
     {
         id: "verifyAssetTagSerialMatch",
         label:
-            "3. Verify that system asset tag has been applied and that the serial number on the device, sticker and pick list all match.",
+            "Confirm the asset tag is applied and the device serial number, sticker, and pick list all match.",
     },
     {
-        id: "verifyOrderDetailsTemplateSent",
+        id: "verifyOrderDetailsTemplateSentAndElectronicPackingSlipSaved",
         label:
-            "4. Verify that the order details template has been sent to the customer before completing a delivery.",
+            "Confirm the order details template was sent to the customer and the electronic packing slip was saved.",
     },
     {
         id: "verifyPackagedProperly",
-        label: "5. Verify that system and all materials included are packaged properly",
+        label: "Confirm the system and all included materials are packaged properly.",
     },
     {
         id: "verifyPackingSlipSerialsMatch",
-        label: "6. Verify packing slip and picked items and serial numbers match.",
-    },
-    {
-        id: "verifyElectronicPackingSlipSaved",
-        label:
-            "7. Verify there is an electronic packing slip saved on the shipping and receiving computer.",
+        label: "Confirm the packing slip, picked items, and serial numbers all match.",
     },
     {
         id: "verifyBoxesLabeledCorrectly",
-        label: "8. Verify boxes are labeled with correct order details and shipping labels are marked out.",
+        label: "Confirm boxes are labeled with the correct order details and shipping labels are marked out.",
     },
 ];
 
@@ -79,12 +82,10 @@ function isFormComplete(form: QAFormState) {
     return (
         form.orderNumber.trim().length > 0 &&
         form.verifyAssetTagSerialMatch &&
-        form.verifyOrderDetailsTemplateSent &&
+        form.verifyOrderDetailsTemplateSentAndElectronicPackingSlipSaved &&
         form.verifyPackagedProperly &&
         form.verifyPackingSlipSerialsMatch &&
-        form.verifyElectronicPackingSlipSaved &&
-        form.verifyBoxesLabeledCorrectly &&
-        (form.method === "Delivery" || form.method === "Shipping")
+        form.verifyBoxesLabeledCorrectly
     );
 }
 
@@ -92,6 +93,7 @@ export default function OrderQAPage() {
     const navigate = useNavigate();
     const { orderId } = useParams<{ orderId: string }>();
     const { user } = useAuth();
+    const currentUserName = getUserDisplayName(user, "Current User");
 
     const [form, setForm] = useState<QAFormState>(() => defaultForm(""));
     const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
@@ -105,6 +107,7 @@ export default function OrderQAPage() {
 
     const order = orderQuery.data ?? null;
     const loading = orderQuery.isPending;
+    const isParentPartialLeg = Boolean(order?.remainder_order_id && !order?.parent_order_id);
 
     useEffect(() => {
         if (order) {
@@ -127,7 +130,7 @@ export default function OrderQAPage() {
         if (savedRaw) {
             try {
                 const parsed = JSON.parse(savedRaw) as SavedQAChecklist;
-                setForm(parsed.form);
+                setForm(normalizeSavedForm(parsed.form, orderNumber));
                 setLastSavedAt(parsed.submittedAt);
             } catch {
                 setupDefaults(orderNumber);
@@ -139,9 +142,8 @@ export default function OrderQAPage() {
 
     const setupDefaults = (orderNumber: string) => {
         const defaults = defaultForm(orderNumber);
-        if (user?.display_name) {
-            defaults.qaSignature = user.display_name;
-        }
+        defaults.qaSignature = getUserDisplayName(user, defaults.qaSignature);
+        defaults.technician = currentUserName;
         setForm(defaults);
         setLastSavedAt(null);
     };
@@ -159,9 +161,9 @@ export default function OrderQAPage() {
                 await invalidateOrderQueries(queryClient, orderId);
             }
         },
-        onError: async (error: any) => {
+        onError: async (error: unknown) => {
             console.error("Failed to submit QA:", error);
-            if (error?.response?.status === 409 && orderId) {
+            if (isAxiosError(error) && error.response?.status === 409 && orderId) {
                 toast.error("Order changed by another user. Reloaded the latest details.");
                 await invalidateOrderQueries(queryClient, orderId);
                 return;
@@ -183,9 +185,9 @@ export default function OrderQAPage() {
             await submitQaMutation.mutateAsync({
                 responses: {
                     ...form,
-                    qaSignature: user?.display_name || user?.email || "System",
+                    qaSignature: currentUserName,
                 },
-                technician: user?.email || "system",
+                technician: currentUserName,
                 expected_updated_at: order.updated_at,
             });
 
@@ -206,8 +208,8 @@ export default function OrderQAPage() {
 
     if (loading) {
         return (
-            <div className="flex items-center justify-center min-h-screen">
-                <div className="text-lg">Loading order...</div>
+            <div className="flex h-full min-h-0 items-center justify-center bg-background px-4 py-8">
+                <div className="text-lg text-foreground">Loading order...</div>
             </div>
         );
     }
@@ -217,15 +219,20 @@ export default function OrderQAPage() {
     const hasIncompleteSteps = verificationSteps.some((step) => !form[step.id as keyof QAFormState]);
 
     return (
-        <div className="bg-background min-h-screen px-4 py-8">
+        <div className="h-full min-h-0 overflow-y-auto bg-background px-4 py-8">
             <div className="mx-auto max-w-4xl space-y-6">
                 <div className="space-y-1 text-foreground">
                     <h1 className="text-3xl font-semibold">QA Checklist</h1>
                     <p className="text-sm text-muted-foreground">
-                        Complete the checklist for <span className="font-semibold text-foreground">{order.inflow_order_id}</span> before submission.
+                        Use this checklist to verify tagging, packaging, and documentation before you submit <span className="font-semibold text-foreground">{order.inflow_order_id}</span>.
                     </p>
                     {lastSavedAt && (
                         <p className="text-xs text-muted-foreground">Previously submitted: {formatToCentralTime(lastSavedAt)}</p>
+                    )}
+                    {isParentPartialLeg && (
+                        <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                            This is the remainder parent leg. QA can be completed here as a separate delivery order.
+                        </div>
                     )}
                 </div>
 
@@ -233,7 +240,7 @@ export default function OrderQAPage() {
                     <div className="space-y-6 p-6">
                         <div className="space-y-2">
                             <label className="text-sm font-medium text-foreground">
-                                1. Order Number <span className="text-red-600">*</span>
+                                Order Number <span className="text-red-600">*</span>
                             </label>
                             <input
                                 id="qa-order-number"
@@ -245,7 +252,7 @@ export default function OrderQAPage() {
                         </div>
 
                         <div className="rounded-2xl border border-border/60 bg-muted/40 p-4 text-sm text-foreground">
-                            Technician recorded as <span className="font-semibold text-accent">{user?.display_name || user?.email || "Current User"}</span> on submission.
+                            Technician recorded as <span className="font-semibold text-foreground">{currentUserName}</span> on submission.
                         </div>
 
                         <div className="space-y-4">
@@ -259,7 +266,7 @@ export default function OrderQAPage() {
                                     return (
                                         <label
                                             key={step.id}
-                                            className={`flex gap-3 rounded-2xl border px-4 py-3 text-sm transition ${
+                                            className={`flex gap-3 rounded-2xl border px-4 py-3 text-sm transition-colors ${
                                                 checked
                                                     ? "border-green-200 bg-green-50 text-green-900"
                                                     : "border-border bg-card hover:border-accent"
@@ -281,39 +288,20 @@ export default function OrderQAPage() {
 
                         <div className="space-y-2">
                             <label className="text-sm font-medium text-muted-foreground">
-                                9. QA Signature <span className="text-red-600">*</span>
+                                QA Signature <span className="text-red-600">*</span>
                             </label>
                             <div className="rounded-xl border border-border bg-muted px-3 py-2 text-sm text-muted-foreground">
-                                {user?.display_name || user?.email || "Current User"}
+                                {currentUserName}
                             </div>
                             <p className="text-xs text-muted-foreground">Automatic signature recorded on submit.</p>
                         </div>
 
                         <div className="space-y-2">
                             <label className="text-sm font-medium text-muted-foreground">
-                                10. Method <span className="text-red-600">*</span>
+                                Routing
                             </label>
-                            <div className="grid grid-cols-2 gap-3">
-                                {(["Delivery", "Shipping"] as QAMethod[]).map((method) => (
-                                    <label
-                                        key={method}
-                                        className={`flex items-center justify-center gap-2 rounded-2xl border px-4 py-3 text-sm font-medium transition ${
-                                            form.method === method
-                                                ? "border-accent bg-accent text-white"
-                                                : "border-border bg-card text-foreground hover:border-accent"
-                                        }`}
-                                    >
-                                        <input
-                                            type="radio"
-                                            name="qa-method"
-                                            value={method}
-                                            checked={form.method === method}
-                                            onChange={() => setForm((prev) => ({ ...prev, method }))}
-                                            className="sr-only"
-                                        />
-                                        {method}
-                                    </label>
-                                ))}
+                            <div className="rounded-xl border border-border bg-muted px-3 py-2 text-sm text-muted-foreground">
+                                Determined automatically from the order's Inflow shipping data.
                             </div>
                         </div>
                     </div>
@@ -335,10 +323,10 @@ export default function OrderQAPage() {
                                 type="button"
                                 onClick={submitQA}
                                 disabled={submitQaMutation.isPending || !isFormComplete(form)}
-                                className={`rounded-2xl px-5 py-2 text-sm font-semibold text-white transition ${
+                                className={`rounded-2xl px-5 py-2 text-sm font-semibold transition-colors ${
                                     submitQaMutation.isPending || !isFormComplete(form)
                                         ? "bg-muted text-muted-foreground/70 cursor-not-allowed"
-                                        : "bg-accent hover:bg-maroon-800"
+                                        : "bg-primary text-primary-foreground hover:bg-maroon-800 hover:text-white"
                                 }`}
                             >
                                 {submitQaMutation.isPending ? "Submitting..." : "Submit QA Checklist"}

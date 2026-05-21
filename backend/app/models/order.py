@@ -89,7 +89,7 @@ class Order(Base):
         )
     else:
         inflow_order_id_lower = column_property(func.lower(inflow_order_id))
-    inflow_sales_order_id = Column(String(255), nullable=True)  # UUID from Inflow
+    inflow_sales_order_id = Column(String(255), nullable=True, index=True)  # UUID from Inflow
     recipient_name = Column(String(255), nullable=True)
     recipient_contact = Column(String(255), nullable=True)  # email
     delivery_location = Column(

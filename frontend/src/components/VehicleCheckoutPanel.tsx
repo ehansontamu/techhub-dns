@@ -12,6 +12,7 @@ import { Card, CardContent } from "./ui/card";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "./ui/dialog";
 import { Input } from "./ui/input";
 import { useAuth } from "../contexts/AuthContext";
+import { getUserDisplayName } from "../utils/userDisplay";
 import VehicleCommandCard from "./delivery/VehicleCommandCard";
 
 type VehicleDescriptor = {
@@ -192,7 +193,7 @@ export default function VehicleCheckoutPanel({
           </DialogHeader>
           <div className="grid gap-3 py-2">
             <div className="text-xs text-muted-foreground">
-              Checked out as: {user?.display_name || user?.email || "your account"}
+              Checked out as: {getUserDisplayName(user, "your account")}
             </div>
             <div className="grid gap-1">
               <label htmlFor="vehicle-checkout-purpose" className="text-sm font-medium">Purpose (required)</label>
@@ -237,7 +238,7 @@ export default function VehicleCheckoutPanel({
           </DialogHeader>
           <div className="grid gap-3 py-2">
             <div className="text-xs text-muted-foreground">
-              Checking in as: {user?.display_name || user?.email || "your account"}
+              Checking in as: {getUserDisplayName(user, "your account")}
             </div>
             <div className="grid gap-1">
               <label htmlFor="vehicle-checkin-notes" className="text-sm font-medium">Notes (optional)</label>

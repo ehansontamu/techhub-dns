@@ -25,6 +25,7 @@ class DeliveryRun(Base):
         Index("ix_delivery_runs_created_at", "created_at"),
         Index("ix_delivery_runs_status_created_at_id", "status", "created_at", "id"),
         Index("ix_delivery_runs_vehicle_status_created_at_id", "vehicle", "status", "created_at", "id"),
+        Index("ix_delivery_runs_vehicle_status", "vehicle", "status"),
     )
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))

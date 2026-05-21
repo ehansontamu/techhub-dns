@@ -1,7 +1,7 @@
 import json
 import logging
 from datetime import datetime
-from typing import Optional, Dict, Any, List, cast
+from typing import Optional, Dict, Any, List
 
 import requests
 from requests.auth import HTTPDigestAuth, HTTPBasicAuth
@@ -17,7 +17,7 @@ class CanopyOrdersUploaderService:
         self.store_base = settings.canopyorders_store_base
         self.dav_root_path = settings.canopyorders_dav_root_path
         self.base_dir = settings.canopyorders_base_dir
-        self.username = settings.canopyorders_username
+        self.username = settings.webdav_username
         self.user_agent = settings.canopyorders_user_agent
         self.teams_workflow_url = settings.canopyorders_teams_workflow_url
         self.teams_shared_secret = settings.canopyorders_teams_shared_secret
@@ -31,54 +31,12 @@ class CanopyOrdersUploaderService:
         return self._webdav_password
 
     def _get_webdav_password(self) -> str:
-        env_password = getattr(settings, "canopyorders_password", None)
-        if env_password is not None:
-            env_password_str = str(env_password)
-            if env_password_str.strip():
-                return env_password_str
-
-        vault_url = settings.azure_key_vault_url
-        if vault_url:
-            tenant_id = settings.azure_tenant_id
-            client_id = settings.azure_client_id
-            client_secret = settings.azure_client_secret
-
-            if not all([tenant_id, client_id, client_secret]):
-                raise ValueError(
-                    "Azure Key Vault configured but Service Principal credentials missing. "
-                    "Set AZURE_TENANT_ID, AZURE_CLIENT_ID, and AZURE_CLIENT_SECRET."
-                )
-
-            tenant_id = cast(str, tenant_id)
-            client_id = cast(str, client_id)
-            client_secret = cast(str, client_secret)
-
-            try:
-                from azure.identity import ClientSecretCredential
-                from azure.keyvault.secrets import SecretClient
-
-                credential = ClientSecretCredential(
-                    tenant_id=tenant_id,
-                    client_id=client_id,
-                    client_secret=client_secret,
-                )
-                kv_client = SecretClient(vault_url=vault_url, credential=credential)
-                secret = kv_client.get_secret(settings.canopyorders_password_secret_name)
-                logger.info("Retrieved Canopy Orders WebDAV password from Azure Key Vault")
-                if not secret.value:
-                    raise ValueError("Key Vault returned empty Canopy Orders WebDAV password")
-                return secret.value
-            except Exception as e:
-                raise ValueError(
-                    "Failed to get Canopy Orders WebDAV password from Key Vault. "
-                    "Alternatively, set CANOPYORDERS_PASSWORD. "
-                    f"Details: {e}"
-                )
+        password = getattr(settings, "webdav_password", None)
+        if password is not None and str(password).strip():
+            return str(password)
 
         raise ValueError(
-            "Canopy Orders WebDAV password is not configured. "
-            "Set CANOPYORDERS_PASSWORD, or configure AZURE_KEY_VAULT_URL and "
-            "CANOPYORDERS_PASSWORD_SECRET_NAME."
+            "WebDAV password is not configured. Set WEBDAV_PASSWORD."
         )
 
     def upload_orders(self, orders: List[str]) -> Dict[str, Any]:

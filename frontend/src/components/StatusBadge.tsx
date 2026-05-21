@@ -1,8 +1,10 @@
 import { OrderStatus, OrderStatusDisplayNames } from "../types/order";
 import { Badge } from "./ui/badge";
+import { cn } from "../lib/utils";
 
 interface StatusBadgeProps {
     status: OrderStatus;
+    className?: string;
 }
 
 const statusVariants: Record<OrderStatus, "default" | "secondary" | "destructive" | "success" | "warning" | "outline"> = {
@@ -15,9 +17,9 @@ const statusVariants: Record<OrderStatus, "default" | "secondary" | "destructive
     [OrderStatus.ISSUE]: "destructive",
 };
 
-export default function StatusBadge({ status }: StatusBadgeProps) {
+export default function StatusBadge({ status, className }: StatusBadgeProps) {
     return (
-        <Badge variant={statusVariants[status]}>
+        <Badge variant={statusVariants[status]} className={cn("whitespace-nowrap", className)}>
             {OrderStatusDisplayNames[status]}
         </Badge>
     );
