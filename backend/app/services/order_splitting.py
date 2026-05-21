@@ -200,6 +200,74 @@ class OrderSplittingService:
 
         return deepcopy(original_order.inflow_data)
 
+    def _get_recursive_child_pick_lines(self, original_order: Order) -> List[Dict[str, Any]]:
+        """Return the pick lines already consumed by earlier recursive child legs."""
+        if not original_order.id:
+            return []
+
+        child_orders = (
+            self.db.query(Order)
+            .filter(Order.parent_order_id == original_order.id)
+            .order_by(Order.created_at.asc(), Order.updated_at.asc(), Order.id.asc())
+            .all()
+        )
+
+        child_pick_lines: List[Dict[str, Any]] = []
+        for child_order in child_orders:
+            inflow_data = child_order.inflow_data if isinstance(child_order.inflow_data, dict) else {}
+            pick_lines = inflow_data.get("pickLines") or inflow_data.get("lines") or []
+            for line in pick_lines:
+                if isinstance(line, dict):
+                    child_pick_lines.append(deepcopy(line))
+        return child_pick_lines
+
+    def normalize_partial_remainder_snapshot(
+        self,
+        original_order: Order,
+        inflow_data: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """
+        Remove quantities already assigned to earlier child legs from a remainder snapshot.
+
+        InFlow may resend cumulative pick quantities for the original sales order. The
+        recursive partial workflow needs only the delta that belongs to the current
+        remainder leg, so we subtract the quantities already represented by prior child
+        legs before persisting the refreshed remainder snapshot.
+        """
+        normalized = deepcopy(inflow_data or {})
+        if not normalized:
+            return normalized
+        if original_order.parent_order_id or not original_order.remainder_order_id:
+            return normalized
+
+        child_pick_lines = self._get_recursive_child_pick_lines(original_order)
+        if not child_pick_lines:
+            return normalized
+
+        current_pick_lines = [
+            line
+            for line in normalized.get("pickLines", [])
+            if isinstance(line, dict)
+        ]
+        current_product_ids = {
+            str(line.get("productId"))
+            for line in current_pick_lines
+            if line.get("productId")
+        }
+        child_product_ids = {
+            str(line.get("productId"))
+            for line in child_pick_lines
+            if line.get("productId")
+        }
+        if not current_product_ids.intersection(child_product_ids):
+            return normalized
+
+        normalized["pickLines"] = self._subtract_lines(
+            current_pick_lines,
+            child_pick_lines,
+        )
+        return normalized
+
     def _subtract_lines(
         self,
         source_lines: List[Dict[str, Any]],

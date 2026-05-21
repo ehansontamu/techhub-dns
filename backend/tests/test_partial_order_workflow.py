@@ -1293,6 +1293,168 @@ def test_recursive_remainder_split_creates_next_partial_leg():
     engine.dispose()
 
 
+def test_recursive_partial_split_uses_delta_picks_for_next_child_leg():
+    """Later recursive legs should only capture the newest picked delta, not prior child quantities."""
+
+    session, engine = _make_sqlite_session()
+
+    parent_order = Order(
+        id="order-parent-8b",
+        inflow_order_id="TH4770",
+        inflow_sales_order_id="sales-order-4770",
+        recipient_name="User Eight",
+        recipient_contact="user.eight@example.com",
+        delivery_location="Building 4770",
+        po_number="PO-4770",
+        status=OrderStatus.PICKED.value,
+        tagged_by="tech@example.com",
+        inflow_data={
+            "orderNumber": "TH4770",
+            "contactName": "User Eight",
+            "email": "user.eight@example.com",
+            "shippingAddress": {"address1": "4770 Example St"},
+            "lines": [
+                {
+                    "productId": "prod-laptop",
+                    "product": {"name": "Laptop", "sku": "LAP-1"},
+                    "quantity": {"standardQuantity": "85"},
+                }
+            ],
+            "pickLines": [
+                {
+                    "productId": "prod-laptop",
+                    "product": {"name": "Laptop", "sku": "LAP-1"},
+                    "quantity": {"standardQuantity": "20"},
+                }
+            ],
+        },
+    )
+    session.add(parent_order)
+    session.commit()
+
+    splitting_service = OrderSplittingService(session)
+    first_child = splitting_service.create_partial_picklist_leg(parent_order, user_id="tech@example.com")
+    session.refresh(parent_order)
+
+    assert first_child is not None
+    session.refresh(first_child)
+    assert first_child.inflow_order_id == "TH4770-P"
+    assert first_child.inflow_data["lines"] == [
+        {
+            "productId": "prod-laptop",
+            "product": {"name": "Laptop", "sku": "LAP-1"},
+            "quantity": {"standardQuantity": "20.0"},
+        }
+    ]
+    assert parent_order.inflow_data["lines"] == [
+        {
+            "productId": "prod-laptop",
+            "product": {"name": "Laptop", "sku": "LAP-1"},
+            "quantity": {"standardQuantity": 65.0},
+        }
+    ]
+
+    order_service = OrderService(session)
+    cumulative_refresh = {
+        "orderNumber": "TH4770",
+        "salesOrderId": "sales-order-4770",
+        "contactName": "User Eight",
+        "email": "user.eight@example.com",
+        "shippingAddress": {"address1": "4770 Example St"},
+        "lines": [
+            {
+                "productId": "prod-laptop",
+                "product": {"name": "Laptop", "sku": "LAP-1"},
+                "quantity": {"standardQuantity": "65"},
+            }
+        ],
+        "pickLines": [
+            {
+                "productId": "prod-laptop",
+                "product": {"name": "Laptop", "sku": "LAP-1"},
+                "quantity": {"standardQuantity": "60"},
+            }
+        ],
+        "packLines": [],
+        "shipLines": [],
+    }
+
+    updated = order_service.create_order_from_inflow(cumulative_refresh)
+    session.refresh(updated)
+
+    assert updated.inflow_data["pickLines"] == [
+        {
+            "productId": "prod-laptop",
+            "product": {"name": "Laptop", "sku": "LAP-1"},
+            "quantity": {"standardQuantity": 40.0},
+        }
+    ]
+
+    class FakeSharePointService:
+        is_enabled = True
+
+        def upload_pdf(self, pdf_path: str, subfolder: str, filename: str) -> str:
+            return f"sharepoint://{subfolder}/{filename}"
+
+    def fake_generate_picklist_pdf(self, inflow_data, output_path):
+        Path(output_path).write_bytes(b"%PDF-1.4 fake recursive picklist\n")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        order_service._local_doc_path = lambda category, filename: Path(tmpdir) / category / filename  # type: ignore[method-assign]
+
+        with patch("app.services.sharepoint_service.get_sharepoint_service", return_value=FakeSharePointService()):
+            with patch(
+                "app.services.picklist_service.PicklistService.generate_picklist_pdf",
+                new=fake_generate_picklist_pdf,
+            ):
+                with patch(
+                    "app.services.order_service.SystemSettingService.is_setting_enabled",
+                    return_value=False,
+                ), patch(
+                    "app.services.order_service.SystemSettingService.get_setting",
+                    return_value="false",
+                ):
+                    with patch.object(order_service, "_send_order_details_email", return_value=True):
+                        result = order_service.generate_picklist(
+                            parent_order.id,
+                            generated_by="tech@example.com",
+                            generated_by_display="tech@example.com",
+                            create_partial_leg=False,
+                        )
+
+    session.refresh(parent_order)
+    session.refresh(first_child)
+    session.refresh(result)
+
+    assert result.inflow_order_id == "TH4770-P2"
+    assert result.parent_order_id == parent_order.id
+    assert result.inflow_data["lines"] == [
+        {
+            "productId": "prod-laptop",
+            "product": {"name": "Laptop", "sku": "LAP-1"},
+            "quantity": {"standardQuantity": "40.0"},
+        }
+    ]
+    assert result.inflow_data["pickLines"] == [
+        {
+            "productId": "prod-laptop",
+            "product": {"name": "Laptop", "sku": "LAP-1"},
+            "quantity": {"standardQuantity": "40.0"},
+        }
+    ]
+    assert parent_order.inflow_data["lines"] == [
+        {
+            "productId": "prod-laptop",
+            "product": {"name": "Laptop", "sku": "LAP-1"},
+            "quantity": {"standardQuantity": 25.0},
+        }
+    ]
+    assert parent_order.inflow_data["pickLines"] == []
+
+    session.close()
+    engine.dispose()
+
+
 def test_recursive_partial_split_requires_base_order_number():
     """Recursive child ID generation should fail fast when the base order number is blank."""
 

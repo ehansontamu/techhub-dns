@@ -1988,10 +1988,21 @@ class OrderService:
             if data_changed:
                 existing.updated_at = datetime.utcnow()
 
-            existing.inflow_data = self._preserve_partial_split_inflow_snapshot(
+            merged_inflow_data = self._preserve_partial_split_inflow_snapshot(
                 existing,
                 inflow_data,
             )  # Always update to keep latest data without clobbering partial splits
+            if getattr(existing, "remainder_order_id", None) and not getattr(
+                existing, "parent_order_id", None
+            ):
+                merged_inflow_data = OrderSplittingService(self.db).normalize_partial_remainder_snapshot(
+                    existing,
+                    merged_inflow_data,
+                )
+
+            if existing.inflow_data != merged_inflow_data:
+                existing.inflow_data = merged_inflow_data
+                data_changed = True
 
             # Don't overwrite manual status changes - keep existing status
 
@@ -2087,10 +2098,18 @@ class OrderService:
                 # Another request created it — fetch and update instead
                 existing = self.db.query(Order).filter(Order.inflow_order_id == order_number).first()
                 if existing:
-                    existing.inflow_data = self._preserve_partial_split_inflow_snapshot(
+                    merged_inflow_data = self._preserve_partial_split_inflow_snapshot(
                         existing,
                         inflow_data,
                     )
+                    if getattr(existing, "remainder_order_id", None) and not getattr(
+                        existing, "parent_order_id", None
+                    ):
+                        merged_inflow_data = OrderSplittingService(self.db).normalize_partial_remainder_snapshot(
+                            existing,
+                            merged_inflow_data,
+                        )
+                    existing.inflow_data = merged_inflow_data
                     existing.updated_at = datetime.utcnow()
                     self.db.commit()
                     self.db.refresh(existing)
