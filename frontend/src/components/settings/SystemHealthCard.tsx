@@ -2,7 +2,7 @@ import type { SyncHealthResponse, SystemStatusResponse } from "../../api/setting
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../ui/card";
-import { formatStatusLabel, formatTimestamp, getStatusBadgeVariant } from "./utils";
+import { dedupeByName, formatStatusLabel, formatTimestamp, getStatusBadgeVariant } from "./utils";
 
 interface SystemHealthCardProps {
     syncHealth?: SyncHealthResponse | null;
@@ -22,12 +22,12 @@ export function SystemHealthCard({
     onRetry,
 }: SystemHealthCardProps) {
     const statusCards = systemStatus
-        ? [
+        ? dedupeByName([
               systemStatus.saml_auth,
               systemStatus.graph_api,
               systemStatus.sharepoint,
               systemStatus.inflow_sync,
-          ]
+          ])
         : [];
 
     return (
