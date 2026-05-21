@@ -22,6 +22,7 @@ from app.models.user import User
 from app.utils.pdf_helpers import wrap_text, check_page_break, filter_picklines
 from app.models.audit_log import AuditLog
 from app.services.audit_service import AuditService
+from app.services.location_resolver_service import location_resolver_service
 
 from app.utils.building_mapper import (
     get_building_abbreviation,
@@ -292,18 +293,32 @@ class OrderService:
         if not order.inflow_data:
             return False
 
-        shipping_addr_obj = self._as_dict(order.inflow_data.get("shippingAddress"))
-        city = (
-            shipping_addr_obj.get("city", "").strip()
-            if shipping_addr_obj.get("city")
-            else ""
+        try:
+            resolved_location = location_resolver_service.resolve_location(
+                self._as_dict(order.inflow_data)
+            )
+            return not resolved_location.is_local_delivery
+        except Exception as exc:
+            logger.warning(
+                "Failed to resolve shipping route for %s: %s",
+                order.inflow_order_id,
+                exc,
+            )
+            return False
+
+    def _derive_qa_method(self, order: Order) -> str:
+        """Derive the QA routing method from Inflow data."""
+        if not order.inflow_data:
+            raise ValidationError(
+                "Order is missing inflow data needed to determine QA routing",
+                field="inflow_data",
+                details={"order_id": order.inflow_order_id},
+            )
+
+        resolved_location = location_resolver_service.resolve_location(
+            self._as_dict(order.inflow_data)
         )
-
-        if city:
-            city_upper = city.upper()
-            return city_upper not in ("BRYAN", "COLLEGE STATION")
-
-        return False  # Default to local delivery if no city specified
+        return "Delivery" if resolved_location.is_local_delivery else "Shipping"
 
     def _storage_path(self, *parts: str) -> Path:
         return Path(settings.storage_root).joinpath(*parts)
@@ -727,7 +742,6 @@ class OrderService:
             "orderNumber",
             "technician",
             "qaSignature",
-            "method",
             "verifyAssetTagSerialMatch",
             "verifyOrderDetailsTemplateSentAndElectronicPackingSlipSaved",
             "verifyPackagedProperly",
@@ -740,14 +754,6 @@ class OrderService:
             raise ValidationError(
                 f"QA data missing required fields for detailed format: {', '.join(missing_fields)}",
                 details={"missing_fields": missing_fields},
-            )
-
-        # Validate method is either "Delivery" or "Shipping"
-        if qa_data.get("method") not in ["Delivery", "Shipping"]:
-            raise ValidationError(
-                "QA method must be either 'Delivery' or 'Shipping'",
-                field="method",
-                details={"provided_method": qa_data.get("method")},
             )
 
         # Validate boolean fields are boolean
@@ -804,12 +810,15 @@ class OrderService:
             logger.error(f"SharePoint upload failed for QA: {e}")
             raise  # Fail fast
 
+        qa_method = self._derive_qa_method(order)
+        qa_data["method"] = qa_method
+
         # Update order object (BUT DO NOT COMMIT YET to keep transition atomic)
         order.qa_completed_at = datetime.utcnow()
         order.qa_completed_by = technician
         order.qa_data = qa_data
         # order.qa_path already set to SharePoint sp_url above
-        order.qa_method = qa_data.get("method")  # "Delivery" or "Shipping"
+        order.qa_method = qa_method
         order.updated_at = datetime.utcnow()
 
         # Audit logging for QA completion
@@ -818,9 +827,9 @@ class OrderService:
             order_id=str(order_id),
             action="qa_completed",
             user_id=technician or "unknown",
-            description=f"QA completed using {qa_data.get('method', 'unknown')} method",
+            description=f"QA completed using {qa_method} routing",
             audit_metadata={
-                "qa_method": qa_data.get("method"),
+                "qa_method": qa_method,
                 "completed_by": technician,
                 "sharepoint_url": sp_url,
             },
@@ -828,7 +837,7 @@ class OrderService:
 
         # Automatically transition status based on QA method
         target_status = None
-        method = qa_data.get("method")
+        method = qa_method
 
         logger.info(f"Checking for auto-transition. Method: '{method}'")
 
