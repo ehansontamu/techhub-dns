@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type PointerEvent } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import axios from "axios";
 import { AlertTriangle, ChevronDown, ChevronUp, Truck } from "lucide-react";
@@ -36,7 +36,6 @@ import { isValidOrderId } from "../../utils/orderIds";
 import { getUserDisplayName } from "../../utils/userDisplay";
 import { useOrdersWebSocket } from "../../hooks/useOrdersWebSocket";
 import { useVehicleStatuses } from "../../hooks/useVehicleStatuses";
-import { reorderOrderIds, type OrderReorderPlacement } from "./orderReorder";
 import type { User } from "../../contexts/AuthContext";
 import type { Order } from "../../types/order";
 import { OrderStatus } from "../../types/order";
@@ -124,8 +123,7 @@ export default function Dispatch() {
   const [selectedOrderIds, setSelectedOrderIds] = useState<string[]>([]);
   const [draggingOrderId, setDraggingOrderId] = useState<string | null>(null);
   const [dragOverOrderId, setDragOverOrderId] = useState<string | null>(null);
-  const [dragInsertPosition, setDragInsertPosition] = useState<OrderReorderPlacement | null>(null);
-  const reorderGestureRef = useRef<
+  const touchDragStateRef = useRef<
     { orderId: string; pointerId: number; startClientX: number; startClientY: number; hasMoved: boolean } | null
   >(null);
   const [activeVehicleAction, setActiveVehicleAction] = useState<Vehicle | null>(null);
@@ -323,39 +321,30 @@ export default function Dispatch() {
     });
   };
 
-  const resolveDropTarget = useCallback((draggedOrderId: string, clientX: number, clientY: number) => {
+  const handleDragStartOrder = (orderId: string, event: DragEvent<HTMLElement>) => {
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", orderId);
+    setDraggingOrderId(orderId);
+    setDragOverOrderId(orderId);
+  };
+
+  const resolveDropTargetOrderId = useCallback((clientX: number, clientY: number): string | null => {
     const element = document.elementFromPoint(clientX, clientY);
     const orderElement = element?.closest<HTMLElement>("[data-order-id]");
-    if (!orderElement) {
-      return { targetOrderId: null, placement: "end" as const };
-    }
-    const targetOrderId = orderElement?.dataset.orderId ?? null;
-
-    if (!targetOrderId) {
-      return { targetOrderId: null, placement: "end" as const };
-    }
-
-    if (targetOrderId === draggedOrderId) {
-      return { targetOrderId, placement: null };
-    }
-
-    const rect = orderElement.getBoundingClientRect();
-    const placement: OrderReorderPlacement = clientY < rect.top + rect.height / 2 ? "before" : "after";
-    return { targetOrderId, placement };
+    return orderElement?.dataset.orderId ?? null;
   }, []);
 
   const clearDragState = useCallback(() => {
-    reorderGestureRef.current = null;
+    touchDragStateRef.current = null;
     setDraggingOrderId(null);
     setDragOverOrderId(null);
-    setDragInsertPosition(null);
   }, []);
 
-  const startOrderReorder = (orderId: string, event: PointerEvent<HTMLButtonElement>) => {
-    if (event.pointerType === "mouse" && event.button !== 0) return;
+  const handleTouchReorderStart = (orderId: string, event: PointerEvent<HTMLButtonElement>) => {
+    if (event.pointerType !== "touch") return;
 
     event.preventDefault();
-    reorderGestureRef.current = {
+    touchDragStateRef.current = {
       orderId,
       pointerId: event.pointerId,
       startClientX: event.clientX,
@@ -364,63 +353,96 @@ export default function Dispatch() {
     };
     setDraggingOrderId(orderId);
     setDragOverOrderId(orderId);
-    setDragInsertPosition("before");
+
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
     event.currentTarget.setPointerCapture(event.pointerId);
   };
 
-  const moveOrderReorder = (event: PointerEvent<HTMLButtonElement>) => {
-    const reorderGesture = reorderGestureRef.current;
-    if (!reorderGesture || reorderGesture.pointerId !== event.pointerId) return;
+  const handleTouchReorderMove = (event: PointerEvent<HTMLButtonElement>) => {
+    const touchDragState = touchDragStateRef.current;
+    if (!touchDragState || touchDragState.pointerId !== event.pointerId) return;
 
-    const deltaX = event.clientX - reorderGesture.startClientX;
-    const deltaY = event.clientY - reorderGesture.startClientY;
-    if (!reorderGesture.hasMoved) {
+    const deltaX = event.clientX - touchDragState.startClientX;
+    const deltaY = event.clientY - touchDragState.startClientY;
+    if (!touchDragState.hasMoved) {
       const distance = Math.hypot(deltaX, deltaY);
-      if (distance < 8) return;
-      reorderGestureRef.current = { ...reorderGesture, hasMoved: true };
+      if (distance < 8) {
+        return;
+      }
+      touchDragStateRef.current = { ...touchDragState, hasMoved: true };
     }
 
-    const { targetOrderId, placement } = resolveDropTarget(reorderGesture.orderId, event.clientX, event.clientY);
-    setDragOverOrderId(targetOrderId && targetOrderId !== reorderGesture.orderId ? targetOrderId : null);
-    setDragInsertPosition(placement);
+    const targetOrderId = resolveDropTargetOrderId(event.clientX, event.clientY);
+    setDragOverOrderId(targetOrderId);
   };
 
-  const finishOrderReorder = (event: PointerEvent<HTMLButtonElement>) => {
-    const reorderGesture = reorderGestureRef.current;
-    if (!reorderGesture || reorderGesture.pointerId !== event.pointerId) return;
+  const handleTouchReorderEnd = (event: PointerEvent<HTMLButtonElement>) => {
+    const touchDragState = touchDragStateRef.current;
+    if (!touchDragState || touchDragState.pointerId !== event.pointerId) return;
 
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
-    }
-
-    if (!reorderGesture.hasMoved) {
+    if (!touchDragState.hasMoved) {
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
       clearDragState();
       return;
     }
 
-    const { targetOrderId, placement } = resolveDropTarget(reorderGesture.orderId, event.clientX, event.clientY);
-    if (targetOrderId === reorderGesture.orderId) {
+    const targetOrderId = resolveDropTargetOrderId(event.clientX, event.clientY);
+    if (targetOrderId === touchDragState.orderId) {
       clearDragState();
-      return;
-    }
-
-    if (!targetOrderId || !placement) {
-      setSelectedOrderIds((previous) => reorderOrderIds(previous, reorderGesture.orderId, null, "end"));
+    } else if (targetOrderId) {
+      handleDropOrderBefore(targetOrderId);
     } else {
-      setSelectedOrderIds((previous) => reorderOrderIds(previous, reorderGesture.orderId, targetOrderId, placement));
+      handleDropOrderToEnd();
     }
-
-    clearDragState();
-  };
-
-  const cancelOrderReorder = (event: PointerEvent<HTMLButtonElement>) => {
-    const reorderGesture = reorderGestureRef.current;
-    if (!reorderGesture || reorderGesture.pointerId !== event.pointerId) return;
 
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
     clearDragState();
+  };
+
+  const handleTouchReorderCancel = (event: PointerEvent<HTMLButtonElement>) => {
+    const touchDragState = touchDragStateRef.current;
+    if (!touchDragState || touchDragState.pointerId !== event.pointerId) return;
+
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    clearDragState();
+  };
+
+  const handleDropOrderBefore = (targetOrderId: string) => {
+    setSelectedOrderIds((previous) => {
+      const fromIndex = previous.indexOf(draggingOrderId ?? "");
+      const toIndex = previous.indexOf(targetOrderId);
+      if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return previous;
+
+      const next = [...previous];
+      const [moved] = next.splice(fromIndex, 1);
+      const adjustedToIndex = fromIndex < toIndex ? toIndex - 1 : toIndex;
+      next.splice(adjustedToIndex, 0, moved);
+      return next;
+    });
+    setDraggingOrderId(null);
+    setDragOverOrderId(null);
+  };
+
+  const handleDropOrderToEnd = () => {
+    setSelectedOrderIds((previous) => {
+      if (!draggingOrderId) return previous;
+      const fromIndex = previous.indexOf(draggingOrderId);
+      if (fromIndex < 0 || fromIndex === previous.length - 1) return previous;
+      const next = [...previous];
+      const [moved] = next.splice(fromIndex, 1);
+      next.push(moved);
+      return next;
+    });
+    setDraggingOrderId(null);
+    setDragOverOrderId(null);
   };
 
   const doStartRun = async (
@@ -832,27 +854,40 @@ export default function Dispatch() {
 
           <div
             className="space-y-2"
+            onDragOver={(event) => event.preventDefault()}
+            onDrop={(event) => {
+              event.preventDefault();
+              handleDropOrderToEnd();
+            }}
           >
             {selectedOrdersList.map((order, index) => {
               const isDragging = draggingOrderId === order.id;
               const isDropTarget = dragOverOrderId === order.id;
-              const dropPlacementClass =
-                isDropTarget && dragInsertPosition === "before"
-                  ? "border-accent/50 bg-accent/5 ring-2 ring-accent/30"
-                  : isDropTarget && dragInsertPosition === "after"
-                    ? "border-accent/50 bg-accent/5 ring-2 ring-accent/30"
-                    : isDropTarget && dragInsertPosition === "end"
-                      ? "border-accent/50 bg-accent/5 ring-2 ring-accent/30"
-                      : "";
               return (
                 <div
                   key={order.id}
                   data-order-id={order.id}
+                  draggable
+                  onDragStart={(event) => handleDragStartOrder(order.id, event)}
+                  onDragEnd={() => {
+                    clearDragState();
+                  }}
+                  onDragOver={(event) => {
+                    event.preventDefault();
+                    setDragOverOrderId(order.id);
+                  }}
+                  onDragLeave={() => {
+                    setDragOverOrderId((current) => (current === order.id ? null : current));
+                  }}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    handleDropOrderBefore(order.id);
+                  }}
                   className={`flex items-center justify-between gap-3 rounded-lg border px-3 py-3 transition-colors ${
                     isDragging
                       ? "border-accent/50 bg-accent/10 opacity-70"
                       : isDropTarget
-                        ? `border-accent/50 bg-accent/5 ${dropPlacementClass}`
+                        ? "border-accent/50 bg-accent/5"
                         : "border-border/60 bg-background"
                   }`}
                 >
@@ -862,10 +897,13 @@ export default function Dispatch() {
                         type="button"
                         aria-label={`Reorder stop ${index + 1}`}
                         className="inline-flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground active:cursor-grabbing"
-                        onPointerDown={(event) => startOrderReorder(order.id, event)}
-                        onPointerMove={moveOrderReorder}
-                        onPointerUp={finishOrderReorder}
-                        onPointerCancel={cancelOrderReorder}
+                        draggable
+                        onDragStart={(event) => handleDragStartOrder(order.id, event)}
+                        onDragEnd={clearDragState}
+                        onPointerDown={(event) => handleTouchReorderStart(order.id, event)}
+                        onPointerMove={handleTouchReorderMove}
+                        onPointerUp={handleTouchReorderEnd}
+                        onPointerCancel={handleTouchReorderCancel}
                         style={{ touchAction: "none" }}
                       >
                         <span aria-hidden="true" className="cursor-grab select-none text-lg leading-none">
