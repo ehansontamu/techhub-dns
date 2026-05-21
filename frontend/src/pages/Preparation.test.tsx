@@ -133,7 +133,7 @@ describe("Preparation", () => {
 
         fireEvent.click(screen.getByLabelText("Select TH2001"));
 
-        fireEvent.click(screen.getByRole("button", { name: /generate picklists/i }));
+        fireEvent.click(screen.getByRole("button", { name: /^generate$/i }));
         expect(screen.getByText("Generate picklists for selected orders?")).toBeInTheDocument();
 
         fireEvent.click(screen.getByRole("button", { name: /generate now/i }));
