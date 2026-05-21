@@ -359,9 +359,6 @@ export default function Preparation() {
         <div className="container mx-auto px-4 py-4 sm:px-6 sm:py-6 space-y-6 overflow-hidden">
             <div className="space-y-1">
                 <h1 className="text-xl font-semibold tracking-tight text-foreground sm:text-2xl">Preparation</h1>
-                <p className="text-sm text-muted-foreground">
-                    Request tags, then batch generate picklists and order details for orders that are ready to move forward.
-                </p>
             </div>
 
             <section className="overflow-hidden rounded-2xl border border-border/70 bg-card/80 shadow-none">
@@ -369,9 +366,6 @@ export default function Preparation() {
                     <div className="flex items-start justify-between gap-3">
                         <div>
                             <h2 className="text-base font-semibold tracking-tight">Tag Request Actions</h2>
-                            <p className="mt-1 text-sm text-muted-foreground">
-                                Upload selected order numbers to Canopy for asset tagging.
-                            </p>
                         </div>
                         <div className="flex flex-wrap items-center gap-2">
                             <Button type="button" variant="outline" size="sm" onClick={() => void loadTagCandidates()}>
@@ -404,190 +398,192 @@ export default function Preparation() {
                 </div>
 
                 <div className="px-5 pb-5 sm:px-6 sm:pb-6">
-                    <div className="space-y-4">
-                        {tagCandidatesLoading && tagCandidates.length === 0 ? (
-                            <div className="rounded-lg border bg-muted/30 p-4 text-center text-sm text-muted-foreground">
-                                Loading picked orders...
-                            </div>
-                        ) : tagCandidatesError ? (
-                            <div className="rounded-lg border border-destructive/20 bg-destructive/5 p-4 text-sm text-destructive">
-                                {tagCandidatesError}
-                            </div>
-                        ) : tagCandidates.length === 0 ? (
-                            <div className="rounded-lg border border-dashed bg-muted/30 p-4 text-center text-sm text-muted-foreground">
-                                No tag request candidates found.
-                            </div>
-                        ) : (
-                            <div className="rounded-lg border bg-card overflow-hidden">
-                                <div className="max-h-[26rem] overflow-auto">
-                                    <Table className="w-full">
-                                        <TableHeader className="sticky top-0 z-10 bg-card">
-                                            <TableRow>
-                                                <TableHead className="w-10" />
-                                                <TableHead className="whitespace-nowrap">Order</TableHead>
-                                                <TableHead>Recipient</TableHead>
-                                            </TableRow>
-                                        </TableHeader>
-                                        <TableBody>
-                                            {tagCandidates.map((candidate) => {
-                                                const inflowOrderId = candidate.inflow_order_id;
-                                                const checked = inflowOrderId ? selectedTagCandidateSet.has(inflowOrderId) : false;
-                                                const disabled = !inflowOrderId;
-                                                const selectable = Boolean(inflowOrderId);
-
-                                                return (
-                                                    <TableRow
-                                                        key={candidate.id}
-                                                        data-state={checked ? "selected" : undefined}
-                                                        className={selectable ? "cursor-pointer hover:bg-muted/30" : undefined}
-                                                        tabIndex={selectable ? 0 : undefined}
-                                                        onClick={() => {
-                                                            if (!inflowOrderId) return;
-                                                            toggleTagCandidate(inflowOrderId, !checked);
-                                                        }}
-                                                        onKeyDown={(event) => {
-                                                            if (!inflowOrderId) return;
-                                                            if (event.key !== "Enter" && event.key !== " ") return;
-                                                            event.preventDefault();
-                                                            toggleTagCandidate(inflowOrderId, !checked);
-                                                        }}
-                                                    >
-                                                        <TableCell className="w-10">
-                                                            <Checkbox
-                                                                checked={checked}
-                                                                disabled={disabled}
-                                                                aria-label={inflowOrderId ? `Select ${inflowOrderId}` : "Select candidate"}
-                                                                onClick={(event) => event.stopPropagation()}
-                                                                onChange={(event) => {
-                                                                    if (!inflowOrderId) return;
-                                                                    toggleTagCandidate(inflowOrderId, event.target.checked);
-                                                                }}
-                                                            />
-                                                        </TableCell>
-                                                        <TableCell>
-                                                            <div className="flex items-center gap-2">
-                                                                <span className="font-medium text-foreground whitespace-nowrap">
-                                                                    {candidate.inflow_order_id || "-"}
-                                                                </span>
-                                                                {checked ? (
-                                                                    <Badge variant="secondary" className="whitespace-nowrap">
-                                                                        Selected
-                                                                    </Badge>
-                                                                ) : null}
-                                                            </div>
-                                                        </TableCell>
-                                                        <TableCell>
-                                                            <div className="min-w-0 max-w-[12rem] sm:max-w-none">
-                                                                <p className="truncate text-foreground">
-                                                                    {candidate.recipient_name || "Unknown recipient"}
-                                                                </p>
-                                                                {candidate.delivery_location ? (
-                                                                    <p className="truncate text-xs text-muted-foreground">
-                                                                        {candidate.delivery_location}
-                                                                    </p>
-                                                                ) : null}
-                                                            </div>
-                                                        </TableCell>
-                                                    </TableRow>
-                                                );
-                                            })}
-                                        </TableBody>
-                                    </Table>
-                                </div>
-                            </div>
-                        )}
-                    </div>
-
-                    <div className="mt-4 rounded-2xl border border-border/70 bg-muted/20 p-4 shadow-none">
+                    <div className="grid gap-4 xl:grid-cols-[3fr_2fr]">
                         <div className="space-y-4">
-                            <div className="rounded-lg border bg-muted/30 p-4 text-sm text-muted-foreground">
-                                <p className="text-foreground font-medium">{selectedTagOrderIds.length} selected</p>
-                                {selectedTagOrderIds.length > 0 ? (
-                                    <p className="mt-1 text-xs text-muted-foreground break-words">
-                                        {selectedTagOrderIds.join(", ")}
-                                    </p>
-                                ) : null}
-                            </div>
+                            {tagCandidatesLoading && tagCandidates.length === 0 ? (
+                                <div className="rounded-lg border bg-muted/30 p-4 text-center text-sm text-muted-foreground">
+                                    Loading picked orders...
+                                </div>
+                            ) : tagCandidatesError ? (
+                                <div className="rounded-lg border border-destructive/20 bg-destructive/5 p-4 text-sm text-destructive">
+                                    {tagCandidatesError}
+                                </div>
+                            ) : tagCandidates.length === 0 ? (
+                                <div className="rounded-lg border border-dashed bg-muted/30 p-4 text-center text-sm text-muted-foreground">
+                                    No tag request candidates found.
+                                </div>
+                            ) : (
+                                <div className="rounded-lg border bg-card overflow-hidden">
+                                    <div className="max-h-[26rem] overflow-auto">
+                                        <Table className="w-full">
+                                            <TableHeader className="sticky top-0 z-10 bg-card">
+                                                <TableRow>
+                                                    <TableHead className="w-10" />
+                                                    <TableHead className="whitespace-nowrap">Order</TableHead>
+                                                    <TableHead>Recipient</TableHead>
+                                                </TableRow>
+                                            </TableHeader>
+                                            <TableBody>
+                                                {tagCandidates.map((candidate) => {
+                                                    const inflowOrderId = candidate.inflow_order_id;
+                                                    const checked = inflowOrderId ? selectedTagCandidateSet.has(inflowOrderId) : false;
+                                                    const disabled = !inflowOrderId;
+                                                    const selectable = Boolean(inflowOrderId);
 
-                            {uploadStatus ? (
-                                <div className={`rounded-lg border p-4 text-sm ${uploadStatusStyles}`}>
-                                    <p className="font-medium">{uploadStatus.message}</p>
-                                    {uploadStatus.uploadedUrl ? (
-                                        <p className="mt-2 text-sm break-all">
-                                            File URL:{" "}
-                                            <a
-                                                href={uploadStatus.uploadedUrl}
-                                                target="_blank"
-                                                rel="noreferrer"
-                                                className="text-primary underline"
-                                            >
-                                                {uploadStatus.uploadedUrl}
-                                            </a>
-                                        </p>
-                                    ) : null}
-                                    {uploadStatus.filename ? <p className="mt-1 text-xs">Filename: {uploadStatus.filename}</p> : null}
-                                    {typeof uploadStatus.teamsNotified === "boolean" ? (
-                                        <p className="mt-1 text-xs">
-                                            Teams notification: {uploadStatus.teamsNotified ? "sent" : "not sent"}
-                                        </p>
-                                    ) : null}
-                                    {typeof uploadStatus.updatedOrders === "number" ? (
-                                        <p className="mt-1 text-xs">Updated local orders: {uploadStatus.updatedOrders}</p>
-                                    ) : null}
-                                    {uploadStatus.ineligibleOrders && uploadStatus.ineligibleOrders.length > 0 ? (
-                                        <div className="mt-2 space-y-1">
-                                            <p className="text-xs font-medium">Ineligible</p>
-                                            <ul className="flex flex-wrap gap-1">
-                                                {uploadStatus.ineligibleOrders.map(({ order, reason }) => (
-                                                    <li key={`${order}:${reason}`}>
-                                                        <Badge
-                                                            variant="outline"
-                                                            className="whitespace-nowrap border-destructive/40 text-destructive"
+                                                    return (
+                                                        <TableRow
+                                                            key={candidate.id}
+                                                            data-state={checked ? "selected" : undefined}
+                                                            className={selectable ? "cursor-pointer hover:bg-muted/30" : undefined}
+                                                            tabIndex={selectable ? 0 : undefined}
+                                                            onClick={() => {
+                                                                if (!inflowOrderId) return;
+                                                                toggleTagCandidate(inflowOrderId, !checked);
+                                                            }}
+                                                            onKeyDown={(event) => {
+                                                                if (!inflowOrderId) return;
+                                                                if (event.key !== "Enter" && event.key !== " ") return;
+                                                                event.preventDefault();
+                                                                toggleTagCandidate(inflowOrderId, !checked);
+                                                            }}
                                                         >
-                                                            {order} ({reason})
-                                                        </Badge>
-                                                    </li>
-                                                ))}
-                                            </ul>
-                                        </div>
-                                    ) : null}
-                                    {uploadStatus.missingOrders && uploadStatus.missingOrders.length > 0 ? (
-                                        <div className="mt-2 space-y-1">
-                                            <p className="text-xs font-medium">Missing locally</p>
-                                            <ul className="flex flex-wrap gap-1">
-                                                {uploadStatus.missingOrders.map((order) => (
-                                                    <li key={order}>
-                                                        <Badge variant="outline" className="whitespace-nowrap">
-                                                            {order}
-                                                        </Badge>
-                                                    </li>
-                                                ))}
-                                            </ul>
-                                        </div>
+                                                            <TableCell className="w-10">
+                                                                <Checkbox
+                                                                    checked={checked}
+                                                                    disabled={disabled}
+                                                                    aria-label={inflowOrderId ? `Select ${inflowOrderId}` : "Select candidate"}
+                                                                    onClick={(event) => event.stopPropagation()}
+                                                                    onChange={(event) => {
+                                                                        if (!inflowOrderId) return;
+                                                                        toggleTagCandidate(inflowOrderId, event.target.checked);
+                                                                    }}
+                                                                />
+                                                            </TableCell>
+                                                            <TableCell>
+                                                                <div className="flex items-center gap-2">
+                                                                    <span className="font-medium text-foreground whitespace-nowrap">
+                                                                        {candidate.inflow_order_id || "-"}
+                                                                    </span>
+                                                                    {checked ? (
+                                                                        <Badge variant="secondary" className="whitespace-nowrap">
+                                                                            Selected
+                                                                        </Badge>
+                                                                    ) : null}
+                                                                </div>
+                                                            </TableCell>
+                                                            <TableCell>
+                                                                <div className="min-w-0 max-w-[12rem] sm:max-w-none">
+                                                                    <p className="truncate text-foreground">
+                                                                        {candidate.recipient_name || "Unknown recipient"}
+                                                                    </p>
+                                                                    {candidate.delivery_location ? (
+                                                                        <p className="truncate text-xs text-muted-foreground">
+                                                                            {candidate.delivery_location}
+                                                                        </p>
+                                                                    ) : null}
+                                                                </div>
+                                                            </TableCell>
+                                                        </TableRow>
+                                                    );
+                                                })}
+                                            </TableBody>
+                                        </Table>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+
+                        <aside className="self-start rounded-2xl border border-border/70 bg-muted/20 p-4 shadow-none lg:sticky lg:top-6">
+                            <div className="space-y-4">
+                                <div className="rounded-lg border bg-muted/30 p-4 text-sm text-muted-foreground">
+                                    <p className="text-foreground font-medium">{selectedTagOrderIds.length} selected</p>
+                                    {selectedTagOrderIds.length > 0 ? (
+                                        <p className="mt-1 text-xs text-muted-foreground break-words">
+                                            {selectedTagOrderIds.join(", ")}
+                                        </p>
                                     ) : null}
                                 </div>
-                            ) : null}
 
-                            <div className="flex flex-col gap-2">
-                                <Button
-                                    type="button"
-                                    variant="outline"
-                                    onClick={handleClearTagSelection}
-                                    disabled={selectedTagOrderIds.length === 0}
-                                >
-                                    Clear selection
-                                </Button>
-                                <Button
-                                    type="button"
-                                    onClick={() => setUploadConfirmOpen(true)}
-                                    disabled={selectedTagOrderIds.length === 0 || uploadMutation.isPending}
-                                    className="btn-lift"
-                                >
-                                    <UploadCloud className="mr-2 h-4 w-4" />
-                                    {uploadMutation.isPending ? "Uploading..." : "Upload orders"}
-                                </Button>
+                                {uploadStatus ? (
+                                    <div className={`rounded-lg border p-4 text-sm ${uploadStatusStyles}`}>
+                                        <p className="font-medium">{uploadStatus.message}</p>
+                                        {uploadStatus.uploadedUrl ? (
+                                            <p className="mt-2 text-sm break-all">
+                                                File URL:{" "}
+                                                <a
+                                                    href={uploadStatus.uploadedUrl}
+                                                    target="_blank"
+                                                    rel="noreferrer"
+                                                    className="text-primary underline"
+                                                >
+                                                    {uploadStatus.uploadedUrl}
+                                                </a>
+                                            </p>
+                                        ) : null}
+                                        {uploadStatus.filename ? <p className="mt-1 text-xs">Filename: {uploadStatus.filename}</p> : null}
+                                        {typeof uploadStatus.teamsNotified === "boolean" ? (
+                                            <p className="mt-1 text-xs">
+                                                Teams notification: {uploadStatus.teamsNotified ? "sent" : "not sent"}
+                                            </p>
+                                        ) : null}
+                                        {typeof uploadStatus.updatedOrders === "number" ? (
+                                            <p className="mt-1 text-xs">Updated local orders: {uploadStatus.updatedOrders}</p>
+                                        ) : null}
+                                        {uploadStatus.ineligibleOrders && uploadStatus.ineligibleOrders.length > 0 ? (
+                                            <div className="mt-2 space-y-1">
+                                                <p className="text-xs font-medium">Ineligible</p>
+                                                <ul className="flex flex-wrap gap-1">
+                                                    {uploadStatus.ineligibleOrders.map(({ order, reason }) => (
+                                                        <li key={`${order}:${reason}`}>
+                                                            <Badge
+                                                                variant="outline"
+                                                                className="whitespace-nowrap border-destructive/40 text-destructive"
+                                                            >
+                                                                {order} ({reason})
+                                                            </Badge>
+                                                        </li>
+                                                    ))}
+                                                </ul>
+                                            </div>
+                                        ) : null}
+                                        {uploadStatus.missingOrders && uploadStatus.missingOrders.length > 0 ? (
+                                            <div className="mt-2 space-y-1">
+                                                <p className="text-xs font-medium">Missing locally</p>
+                                                <ul className="flex flex-wrap gap-1">
+                                                    {uploadStatus.missingOrders.map((order) => (
+                                                        <li key={order}>
+                                                            <Badge variant="outline" className="whitespace-nowrap">
+                                                                {order}
+                                                            </Badge>
+                                                        </li>
+                                                    ))}
+                                                </ul>
+                                            </div>
+                                        ) : null}
+                                    </div>
+                                ) : null}
+
+                                <div className="flex flex-col gap-2">
+                                    <Button
+                                        type="button"
+                                        variant="outline"
+                                        onClick={handleClearTagSelection}
+                                        disabled={selectedTagOrderIds.length === 0}
+                                    >
+                                        Clear selection
+                                    </Button>
+                                    <Button
+                                        type="button"
+                                        onClick={() => setUploadConfirmOpen(true)}
+                                        disabled={selectedTagOrderIds.length === 0 || uploadMutation.isPending}
+                                        className="btn-lift"
+                                    >
+                                        <UploadCloud className="mr-2 h-4 w-4" />
+                                        {uploadMutation.isPending ? "Uploading..." : "Upload orders"}
+                                    </Button>
+                                </div>
                             </div>
-                        </div>
+                        </aside>
                     </div>
                 </div>
             </section>
@@ -602,11 +598,6 @@ export default function Preparation() {
                     <DialogHeader>
                         <DialogTitle>Upload orders to Canopy?</DialogTitle>
                     </DialogHeader>
-                    <div className="space-y-1 text-sm">
-                        <p className="text-foreground">
-                            Selected orders will be uploaded for asset tagging and tracked in the tag request queue.
-                        </p>
-                    </div>
                     <DialogFooter>
                         <Button
                             ref={uploadConfirmCancelRef}
@@ -636,9 +627,6 @@ export default function Preparation() {
                     <div className="flex items-start justify-between gap-3">
                         <div>
                             <h2 className="text-base font-semibold tracking-tight">Batch Prep Queue</h2>
-                            <p className="mt-1 text-sm text-muted-foreground">
-                                Orders here will be validated against current asset tagging before picklists and order details are generated.
-                            </p>
                         </div>
                         <div className="flex flex-wrap items-center gap-2">
                             <Button type="button" variant="outline" size="sm" onClick={() => void loadPrepOrders()}>
@@ -831,11 +819,7 @@ export default function Preparation() {
                                             </div>
                                         ) : null}
                                     </div>
-                                ) : (
-                                    <div className="rounded-lg border bg-muted/30 p-4 text-sm text-muted-foreground">
-                                        Pick orders that are ready for asset-tag-dependent prep. Items still waiting on tags will be skipped at submit time.
-                                    </div>
-                                )}
+                                ) : null}
 
                                 <div className="flex flex-col gap-2">
                                     <Button
@@ -876,11 +860,6 @@ export default function Preparation() {
                     <DialogHeader>
                         <DialogTitle>Generate picklists for selected orders?</DialogTitle>
                     </DialogHeader>
-                    <div className="space-y-2 text-sm text-muted-foreground">
-                        <p>
-                            Selected orders will be validated one by one. Orders still blocked by asset tagging or other prep requirements will be skipped.
-                        </p>
-                    </div>
                     <DialogFooter>
                         <Button
                             ref={batchConfirmCancelRef}
