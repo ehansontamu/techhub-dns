@@ -122,7 +122,7 @@ export default function Preparation() {
 
     const prepOrdersQuery = useQuery({
         ...getOrdersListQueryOptions({ status: OrderStatus.PICKED, search: "", limit: 1000 }),
-        select: (result) => result.items.filter((order) => !order.picklist_generated_at),
+        select: (result) => result.items.filter((order) => canGeneratePicklist(order)),
     });
 
     const tagCandidates = tagCandidatesQuery.data ?? [];
@@ -626,7 +626,7 @@ export default function Preparation() {
                 <div className="p-5 pb-4 sm:p-6 sm:pb-4">
                     <div className="flex items-start justify-between gap-3">
                         <div>
-                            <h2 className="text-base font-semibold tracking-tight">Batch Prep Queue</h2>
+                            <h2 className="text-base font-semibold tracking-tight">Generate Picklist &amp; Order Details</h2>
                         </div>
                         <div className="flex flex-wrap items-center gap-2">
                             <Button type="button" variant="outline" size="sm" onClick={() => void loadPrepOrders()}>
@@ -670,7 +670,7 @@ export default function Preparation() {
                                 </div>
                             ) : prepOrders.length === 0 ? (
                                 <div className="rounded-lg border border-dashed bg-muted/30 p-4 text-center text-sm text-muted-foreground">
-                                    No orders are ready for batch prep.
+                                    No orders are ready to generate picklists and order details.
                                 </div>
                             ) : (
                                 <div className="rounded-lg border bg-card overflow-hidden">
