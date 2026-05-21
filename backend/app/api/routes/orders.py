@@ -75,8 +75,45 @@ def _resolve_order_user_fields(data: dict, db_session) -> dict:
     return data
 
 
+def _resolve_asset_tag_required(
+    data: dict,
+    order,
+    inflow_service: Optional[InflowService] = None,
+    asset_tag_requirement_cache: Optional[dict[tuple[object, ...], bool]] = None,
+) -> dict:
+    inflow_data = getattr(order, "inflow_data", None)
+    if not inflow_data:
+        data["asset_tag_required"] = False
+        return data
+
+    try:
+        if inflow_service is not None and asset_tag_requirement_cache is not None:
+            data["asset_tag_required"] = inflow_service.requires_asset_tags_cached(
+                inflow_data,
+                asset_tag_requirement_cache,
+            )
+        elif inflow_service is not None:
+            data["asset_tag_required"] = inflow_service.requires_asset_tags(inflow_data)
+        else:
+            data["asset_tag_required"] = False
+    except Exception as exc:
+        logger.warning(
+            "Failed to compute asset_tag_required for order %s: %s",
+            getattr(order, "inflow_order_id", None) or getattr(order, "id", None),
+            exc,
+        )
+        data["asset_tag_required"] = False
+
+    return data
+
+
 def _order_response_json(order, db_session=None) -> dict:
     data = current_app.json.loads(OrderResponse.model_validate(order).model_dump_json())
+    data = _resolve_asset_tag_required(
+        data,
+        order,
+        InflowService() if getattr(order, "inflow_data", None) else None,
+    )
     return _resolve_order_user_fields(data, db_session)
 
 
@@ -84,6 +121,7 @@ def _order_detail_response_json(order, db_session=None) -> dict:
     data = current_app.json.loads(
         OrderDetailResponse.model_validate(order).model_dump_json()
     )
+    inflow_service = InflowService() if getattr(order, "inflow_data", None) else None
     if db_session:
         linked_ids = {
             "parent_order_id": data.get("parent_order_id"),
@@ -96,6 +134,7 @@ def _order_detail_response_json(order, db_session=None) -> dict:
                 continue
             linked_order = db_session.query(Order).filter(Order.id == linked_order_id).first()
             data[inflow_field] = linked_order.inflow_order_id if linked_order else None
+    data = _resolve_asset_tag_required(data, order, inflow_service)
     return _resolve_order_user_fields(data, db_session)
 
 
@@ -125,7 +164,13 @@ def _serialize_utc_datetime(value: Optional[datetime]) -> Optional[str]:
     return to_utc_iso_z(value)
 
 
-def _serialize_order_list_item(order, pick_status_data=None, db_session=None) -> dict:
+def _serialize_order_list_item(
+    order,
+    pick_status_data=None,
+    db_session=None,
+    inflow_service: Optional[InflowService] = None,
+    asset_tag_requirement_cache: Optional[dict[tuple[object, ...], bool]] = None,
+) -> dict:
     latest_job = getattr(order, "latest_picklist_print_job", None)
     latest_job_payload = None
     if latest_job is not None:
@@ -187,6 +232,12 @@ def _serialize_order_list_item(order, pick_status_data=None, db_session=None) ->
         "pick_status": pick_status_data,
         "latest_picklist_print_job": latest_job_payload,
     }
+    data = _resolve_asset_tag_required(
+        data,
+        order,
+        inflow_service,
+        asset_tag_requirement_cache,
+    )
     return _resolve_order_user_fields(data, db_session)
 
 
@@ -263,6 +314,7 @@ def get_orders():
     with get_db() as db:
         service = OrderService(db)
         inflow_service = InflowService()
+        asset_tag_requirement_cache: dict[tuple[object, ...], bool] = {}
         orders, total = service.get_orders(
             status=status_enum, search=search, skip=skip, limit=limit
         )
@@ -292,7 +344,15 @@ def get_orders():
                         exc,
                     )
 
-            result.append(_serialize_order_list_item(o, pick_status_data, db))
+            result.append(
+                _serialize_order_list_item(
+                    o,
+                    pick_status_data,
+                    db,
+                    inflow_service,
+                    asset_tag_requirement_cache,
+                )
+            )
 
         return jsonify({
             "items": result,

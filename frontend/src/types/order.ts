@@ -99,6 +99,7 @@ export interface Order {
   remainder_order_id?: string | null;
   remainder_inflow_order_id?: string | null;
   inflow_data?: Record<string, unknown>;
+  asset_tag_required?: boolean;
   pick_status?: PickStatus;
   latest_picklist_print_job?: PrintJobSummary;
   asset_tag_serials?: AssetTagSerial[];
