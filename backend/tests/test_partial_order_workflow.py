@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, PropertyMock, patch
 
 import pytest
 
@@ -243,9 +243,14 @@ def test_partial_order_details_regenerate_instead_of_reusing_sharepoint_pdf():
             ):
                 with patch(
                     "app.services.email_service.email_service.is_configured",
-                    return_value=False,
+                    return_value=True,
                 ):
-                    success = service._send_order_details_email(order)
+                    with patch(
+                        "app.services.email_service.EmailService.is_enabled",
+                        new_callable=PropertyMock,
+                        return_value=False,
+                    ):
+                        success = service._send_order_details_email(order)
 
     assert success is False
     assert fake_sp_service.download_called is False
@@ -256,6 +261,8 @@ def test_partial_order_details_regenerate_instead_of_reusing_sharepoint_pdf():
     ]
     assert order.order_details_path == "sharepoint://order-details/TH1004.pdf"
     assert order.order_details_generated_at is not None
+    assert order.order_details_email_status == OrderService.ORDER_DETAILS_EMAIL_NOT_SENT
+    assert order.order_details_email_status_updated_at is not None
     print("[PASS] Partial order details regenerate from remaining items")
 
 
@@ -1451,6 +1458,83 @@ def test_recursive_partial_split_uses_delta_picks_for_next_child_leg():
     ]
     assert parent_order.inflow_data["pickLines"] == []
 
+    full_order_refresh = {
+        "orderNumber": "TH4770",
+        "salesOrderId": "sales-order-4770",
+        "contactName": "User Eight",
+        "email": "user.eight@example.com",
+        "shippingAddress": {"address1": "4770 Example St"},
+        "lines": [
+            {
+                "productId": "prod-laptop",
+                "product": {"name": "Laptop", "sku": "LAP-1"},
+                "quantity": {"standardQuantity": "85"},
+            }
+        ],
+        "pickLines": [
+            {
+                "productId": "prod-laptop",
+                "product": {"name": "Laptop", "sku": "LAP-1"},
+                "quantity": {"standardQuantity": "60"},
+            }
+        ],
+        "packLines": [],
+        "shipLines": [],
+    }
+
+    refreshed = order_service.create_order_from_inflow(full_order_refresh)
+    session.refresh(refreshed)
+
+    assert refreshed.id == parent_order.id
+    assert refreshed.inflow_data["lines"] == [
+        {
+            "productId": "prod-laptop",
+            "product": {"name": "Laptop", "sku": "LAP-1"},
+            "quantity": {"standardQuantity": 25.0},
+        }
+    ]
+    assert refreshed.inflow_data["pickLines"] == []
+
+    stale_full_snapshot = {
+        **full_order_refresh,
+        "lines": [
+            {
+                "productId": "prod-laptop",
+                "product": {"name": "Laptop", "sku": "LAP-1"},
+                "quantity": {
+                    "standardQuantity": "85",
+                    "serialNumbers": ["FIRST-LEG", "SECOND-LEG"],
+                },
+            }
+        ],
+        "pickLines": [
+            {
+                "productId": "prod-laptop",
+                "product": {"name": "Laptop", "sku": "LAP-1"},
+                "quantity": {
+                    "standardQuantity": "60",
+                    "serialNumbers": ["FIRST-LEG", "SECOND-LEG"],
+                },
+            }
+        ],
+    }
+    parent_order.inflow_data = stale_full_snapshot
+    session.commit()
+
+    repaired_document_view = splitting_service.build_parent_remainder_document_view(
+        parent_order
+    )
+
+    assert repaired_document_view is not None
+    assert repaired_document_view["lines"] == [
+        {
+            "productId": "prod-laptop",
+            "product": {"name": "Laptop", "sku": "LAP-1"},
+            "quantity": {"standardQuantity": 25.0, "serialNumbers": []},
+        }
+    ]
+    assert repaired_document_view["pickLines"] == []
+
     session.close()
     engine.dispose()
 
@@ -2206,6 +2290,7 @@ def test_generate_picklist_auto_print_enqueues_only_once():
     jobs = session.query(PrintJob).filter(PrintJob.order_id == order.id).all()
 
     assert result.picklist_path == "sharepoint://picklists/TH000141.pdf"
+    assert result.order_details_email_status == OrderService.ORDER_DETAILS_EMAIL_SENT
     assert len(jobs) == 1
     assert jobs[0].trigger_source == "automatic"
     assert jobs[0].requested_by == "Tech Example"
@@ -2272,6 +2357,8 @@ def test_order_details_generated_pdf_is_uploaded_to_sharepoint():
     assert fake_sp_service.upload_calls == [(b"fresh-pdf", "order-details", "TH1005.pdf")]
     assert order.order_details_path == "sharepoint://order-details/TH1005.pdf"
     assert order.order_details_generated_at is not None
+    assert order.order_details_email_status == OrderService.ORDER_DETAILS_EMAIL_NOT_SENT
+    assert order.order_details_email_status_updated_at is not None
     print("[PASS] Generated order-details PDFs upload to SharePoint")
 
 

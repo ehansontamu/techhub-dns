@@ -121,6 +121,8 @@ class Order(Base):
     # Order Details PDF fields
     order_details_path = Column(String(500), nullable=True)
     order_details_generated_at = Column(DateTime, nullable=True)
+    order_details_email_status = Column(String(50), nullable=True)
+    order_details_email_status_updated_at = Column(DateTime, nullable=True)
     # Shipping workflow fields
     shipping_workflow_status = Column(
         String(50), nullable=True, default=ShippingWorkflowStatus.WORK_AREA.value

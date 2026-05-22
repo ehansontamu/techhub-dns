@@ -98,7 +98,7 @@ export default function Dashboard() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [workflowTrendDays, setWorkflowTrendDays] = useState<7 | 30>(() => {
     const value = searchParams.get("workflowRange");
-    return value === "7" ? 7 : 30;
+    return value === "30" ? 30 : 7;
   });
   const [socketStatus, setSocketStatus] = useState<"connecting" | "connected" | "disconnected">("connecting");
 
@@ -106,7 +106,7 @@ export default function Dashboard() {
   const socketReconnectTimeoutRef = useRef<number | null>(null);
   const lastSocketRefreshRef = useRef(0);
   const socketRefreshInFlightRef = useRef(false);
-  const workflowTrendDaysRef = useRef<7 | 30>(30);
+  const workflowTrendDaysRef = useRef<7 | 30>(7);
   const queryClient = useQueryClient();
 
   const statusCountsQuery = useQuery({
@@ -183,7 +183,7 @@ export default function Dashboard() {
 
   useEffect(() => {
     const value = searchParams.get("workflowRange");
-    const next = value === "7" ? 7 : 30;
+    const next = value === "30" ? 30 : 7;
     if (next !== workflowTrendDays) {
       setWorkflowTrendDays(next);
     }

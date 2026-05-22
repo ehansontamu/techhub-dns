@@ -53,6 +53,9 @@ logger = logging.getLogger(__name__)
 class OrderService:
     VIDI_CUSTOM1_OVERRIDE = "TAMU - College of Veterinary Medicine"
     ZACH_CONTACT_OVERRIDE = "TAKODA POWELL"
+    ORDER_DETAILS_EMAIL_SENT = "sent"
+    ORDER_DETAILS_EMAIL_NOT_SENT = "not_sent"
+    ORDER_DETAILS_EMAIL_FAILED = "failed"
 
     def __init__(self, db: Session):
         self.db = db
@@ -437,6 +440,11 @@ class OrderService:
 
         self._ensure_remainder_leg_ready(order, "send the order details email")
         return self._send_order_details_email(order, generated_by)
+
+    def _record_order_details_email_status(self, order: Order, status: str) -> None:
+        order.order_details_email_status = status
+        order.order_details_email_status_updated_at = datetime.utcnow()
+        self.db.commit()
 
     def mark_asset_tagged(
         self,
@@ -2276,16 +2284,32 @@ class OrderService:
             order.order_details_generated_at = datetime.utcnow()
             self.db.commit()
 
-            # Check if email sending is configured
+            # Check if email sending is configured and allowed before sending.
             if not email_service.is_configured():
                 logger.debug(
                     f"Power Automate email not configured, skipping Order Details email for order {order_number}"
+                )
+                self._record_order_details_email_status(
+                    order, self.ORDER_DETAILS_EMAIL_NOT_SENT
                 )
                 return False
 
             if not recipient_email:
                 logger.warning(
                     f"No recipient email for order {order_number}, skipping Order Details email"
+                )
+                self._record_order_details_email_status(
+                    order, self.ORDER_DETAILS_EMAIL_NOT_SENT
+                )
+                return False
+
+            if not getattr(email_service, "is_enabled", True):
+                logger.info(
+                    "Email sending is disabled, skipping Order Details email for order %s",
+                    order_number,
+                )
+                self._record_order_details_email_status(
+                    order, self.ORDER_DETAILS_EMAIL_NOT_SENT
                 )
                 return False
 
@@ -2302,6 +2326,9 @@ class OrderService:
             if success:
                 logger.info(
                     f"Order Details email sent to {recipient_email} for order {order_number}"
+                )
+                self._record_order_details_email_status(
+                    order, self.ORDER_DETAILS_EMAIL_SENT
                 )
 
                 # Audit log the email
@@ -2328,11 +2355,17 @@ class OrderService:
                 logger.error(
                     f"Failed to send Order Details email to {recipient_email} for order {order_number}"
                 )
+                self._record_order_details_email_status(
+                    order, self.ORDER_DETAILS_EMAIL_FAILED
+                )
                 return False
 
         except Exception as e:
             # Log error and re-raise so required SharePoint/upload/email failures
             # surface to the caller instead of being masked as success.
+            self._record_order_details_email_status(
+                order, self.ORDER_DETAILS_EMAIL_FAILED
+            )
             logger.error(
                 f"Error generating/sending Order Details for order {order.inflow_order_id}: {e}"
             )

@@ -71,7 +71,31 @@ class OrderSplittingService:
             if remaining_qty > 0.0001:  # Use tolerance for float comparison
                 # Create a copy of the line with remaining quantity
                 remaining_line = deepcopy(line)
-                remaining_line["quantity"]["standardQuantity"] = remaining_qty
+                quantity_data = dict(remaining_line.get("quantity") or {})
+                quantity_data["standardQuantity"] = remaining_qty
+
+                source_serials = [
+                    str(serial_number)
+                    for serial_number in (quantity_data.get("serialNumbers") or [])
+                    if serial_number is not None
+                ]
+                picked_serials = {
+                    str(serial_number)
+                    for pick_line in pick_lines
+                    if str(pick_line.get("productId") or "") == str(pid or "")
+                    for serial_number in (
+                        (pick_line.get("quantity") or {}).get("serialNumbers") or []
+                    )
+                    if serial_number is not None
+                }
+                if source_serials and picked_serials:
+                    quantity_data["serialNumbers"] = [
+                        serial_number
+                        for serial_number in source_serials
+                        if serial_number not in picked_serials
+                    ]
+
+                remaining_line["quantity"] = quantity_data
                 remaining_lines.append(remaining_line)
 
         return remaining_lines, lines
@@ -262,11 +286,48 @@ class OrderSplittingService:
         if not current_product_ids.intersection(child_product_ids):
             return normalized
 
-        normalized["pickLines"] = self._subtract_lines(
+        normalized_pick_lines = self._subtract_lines(
             current_pick_lines,
             child_pick_lines,
         )
+        normalized["pickLines"] = normalized_pick_lines
+
+        # Older split parents can drift back to full-order lines when InFlow
+        # refreshes the cumulative sales order snapshot. If every picked line
+        # belongs to existing child legs, rebuild the parent line set as the
+        # unpicked remainder instead of leaving the full-order lines in place.
+        current_lines = [
+            line
+            for line in normalized.get("lines", [])
+            if isinstance(line, dict)
+        ]
+        if (
+            len(child_pick_lines) > 1
+            and not normalized_pick_lines
+            and self._line_quantity_total(current_lines)
+            > self._line_quantity_total(current_pick_lines) + 0.0001
+        ):
+            remainder_source = deepcopy(normalized)
+            remainder_source["pickLines"] = current_pick_lines
+            remainder_lines, _ = self.get_remainder_items(remainder_source)
+            normalized["lines"] = remainder_lines
+            subtotal = sum(
+                (float(line.get("unitPrice") or 0) if isinstance(line, dict) else 0.0)
+                * self._parse_standard_quantity(line.get("quantity") if isinstance(line, dict) else 0)
+                for line in remainder_lines
+                if isinstance(line, dict)
+            )
+            normalized["subtotal"] = subtotal
+            normalized["total"] = subtotal
+
         return normalized
+
+    def _line_quantity_total(self, lines: List[Dict[str, Any]]) -> float:
+        return sum(
+            self._parse_standard_quantity(line.get("quantity"))
+            for line in lines
+            if isinstance(line, dict)
+        )
 
     def _subtract_lines(
         self,
@@ -465,7 +526,15 @@ class OrderSplittingService:
         if not remainder_source:
             return None
 
-        assigned_view = deepcopy(remainder_source)
+        normalized_source = self.normalize_partial_remainder_snapshot(
+            original_order,
+            remainder_source,
+        )
+        assigned_view = (
+            normalized_source
+            if normalized_source.get("lines") != remainder_source.get("lines")
+            else deepcopy(remainder_source)
+        )
         source_lines = [
             line
             for line in assigned_view.get("lines", [])

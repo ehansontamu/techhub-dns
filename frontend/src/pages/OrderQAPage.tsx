@@ -10,7 +10,7 @@ import { ordersApi } from "../api/orders";
 import { getOrderDetailQueryOptions, invalidateOrderQueries } from "../queries/orders";
 import type { OrderDetail } from "../types/order";
 import { formatToCentralTime } from "../utils/timezone";
-import { getOrderPickerLabel, isOrderPickedByUser } from "../utils/qaEligibility";
+import { isOrderPickedByUser } from "../utils/qaEligibility";
 
 type QAFormState = {
     orderNumber: string;
@@ -111,7 +111,6 @@ export default function OrderQAPage() {
     const loading = orderQuery.isPending;
     const isParentPartialLeg = Boolean(order?.remainder_order_id && !order?.parent_order_id);
     const pickedByCurrentUser = order ? isOrderPickedByUser(order, user) : false;
-    const pickerLabel = order ? getOrderPickerLabel(order) : "Not recorded";
 
     useEffect(() => {
         if (order) {
@@ -250,9 +249,6 @@ export default function OrderQAPage() {
                             This is the remainder parent leg. QA can be completed here as a separate delivery order.
                         </div>
                     )}
-                    <div className="rounded-2xl border border-border bg-card px-4 py-3 text-sm text-foreground">
-                        Picked by <span className="font-semibold">{pickerLabel}</span>.
-                    </div>
                     {pickedByCurrentUser && (
                         <div className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
                             You picked this order, so QA must be completed by another logged-in user.

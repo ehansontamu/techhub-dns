@@ -449,7 +449,13 @@ export default function OrderDetail({
                 </p>
                 {order.picklist_generated_at && (
                   <p className="text-xs text-muted-foreground">
-                    ✓ Order Details emailed to recipient
+                    {order.order_details_email_status === "sent"
+                      ? "Order Details emailed to recipient"
+                      : order.order_details_email_status === "failed"
+                        ? "Order Details email failed"
+                        : order.order_details_email_status === "not_sent"
+                          ? "Order Details email was not sent"
+                          : "Order Details email status not recorded"}
                   </p>
                 )}
                 {order.picklist_path && (

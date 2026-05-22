@@ -136,6 +136,10 @@ class OrderResponse(OrderBase):
     picklist_generated_at: Optional[datetime] = None
     picklist_generated_by: Optional[str] = None
     picklist_path: Optional[str] = None
+    order_details_path: Optional[str] = None
+    order_details_generated_at: Optional[datetime] = None
+    order_details_email_status: Optional[str] = None
+    order_details_email_status_updated_at: Optional[datetime] = None
     qa_completed_at: Optional[datetime] = None
     qa_completed_by: Optional[str] = None
     qa_data: Optional[Dict[str, Any]] = None
