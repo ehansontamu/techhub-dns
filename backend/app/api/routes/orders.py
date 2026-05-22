@@ -215,6 +215,10 @@ def _serialize_order_list_item(
         "order_details_generated_at": _serialize_utc_datetime(
             order.order_details_generated_at
         ),
+        "order_details_email_status": order.order_details_email_status,
+        "order_details_email_status_updated_at": _serialize_utc_datetime(
+            order.order_details_email_status_updated_at
+        ),
         "shipping_workflow_status": order.shipping_workflow_status,
         "shipping_workflow_status_updated_at": _serialize_utc_datetime(
             order.shipping_workflow_status_updated_at

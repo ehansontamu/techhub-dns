@@ -78,6 +78,10 @@ export interface Order {
   picklist_generated_at?: string;
   picklist_generated_by?: string;
   picklist_path?: string;
+  order_details_path?: string;
+  order_details_generated_at?: string;
+  order_details_email_status?: "sent" | "not_sent" | "failed";
+  order_details_email_status_updated_at?: string;
   qa_completed_at?: string;
   qa_completed_by?: string;
   qa_data?: Record<string, unknown>;
