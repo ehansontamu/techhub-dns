@@ -19,6 +19,7 @@ import {
 } from "../queries/analytics";
 import { type FulfilledTotalDataPoint, type WorkflowDailyTrendDataPoint } from "../api/analytics";
 import { shouldThrowToBoundary } from "../utils/apiErrors";
+import { getCompletedTodayOrders } from "./dashboardCompletedToday";
 
 /** Guard against API returning non-array data (error objects, null, etc.) */
 function safeArray<T>(value: unknown): T[] {
@@ -145,22 +146,7 @@ export default function Dashboard() {
   const yearlyFulfilledTotals = safeArray<FulfilledTotalDataPoint>(yearlyFulfilledTotalsQuery.data?.data);
 
   const completedTodayOrders = useMemo((): Order[] => {
-    const deliveredOrders = safeArray<Order>(deliveredOrdersQuery.data);
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
-
-    return deliveredOrders
-      .filter((order) => {
-        if (!order.signature_captured_at) return false;
-        const signatureDate = new Date(order.signature_captured_at);
-        signatureDate.setHours(0, 0, 0, 0);
-        return signatureDate.getTime() === todayStart.getTime();
-      })
-      .sort((a, b) => {
-        const aTime = a.signature_captured_at ? new Date(a.signature_captured_at).getTime() : 0;
-        const bTime = b.signature_captured_at ? new Date(b.signature_captured_at).getTime() : 0;
-        return bTime - aTime;
-      });
+    return getCompletedTodayOrders(safeArray<Order>(deliveredOrdersQuery.data?.items));
   }, [deliveredOrdersQuery.data]);
 
   const statusLoading = statusCountsQuery.isPending;
