@@ -21,6 +21,19 @@ describe("qaEligibility", () => {
     expect(isOrderPickedByUser({ picklist_generated_by: "Picker Person" }, user)).toBe(true);
   });
 
+  it("matches compact display names against email local parts", () => {
+    expect(
+      isOrderPickedByUser(
+        { picklist_generated_by: "Julian Hon" },
+        {
+          ...user,
+          email: "julianhon@tamu.edu",
+          display_name: "Julian Hon",
+        },
+      ),
+    ).toBe(true);
+  });
+
   it("does not match a different picker", () => {
     expect(isOrderPickedByUser({ picklist_generated_by: "other@example.com" }, user)).toBe(false);
   });

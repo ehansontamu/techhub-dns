@@ -224,3 +224,48 @@ def test_submit_qa_blocks_picker_from_qcing_own_order(tmp_path, monkeypatch):
         assert "someone other than the person who picked" in str(exc)
     else:
         raise AssertionError("Expected picker to be blocked from QA")
+
+
+def test_submit_qa_blocks_compact_display_name_match(tmp_path, monkeypatch):
+    mock_db = MagicMock()
+    service = OrderService(mock_db)
+
+    monkeypatch.setattr("app.services.order_service.settings.local_document_storage", str(tmp_path))
+
+    order = MagicMock(spec=Order)
+    order.id = "test-order-id"
+    order.inflow_order_id = "TH124"
+    order.status = OrderStatus.QA.value
+    order.tagged_at = datetime.utcnow()
+    order.picklist_generated_at = datetime.utcnow()
+    order.picklist_generated_by = "Julian Hon"
+    order.qa_completed_at = None
+    order.qa_method = None
+
+    mock_db.query.return_value.filter.return_value.with_for_update.return_value.first.return_value = order
+
+    qa_data = {
+        "method": "Delivery",
+        "orderNumber": order.inflow_order_id,
+        "technician": "Julian Hon",
+        "qaSignature": "Sig",
+        "verifyAssetTagSerialMatch": True,
+        "verifyOrderDetailsTemplateSentAndElectronicPackingSlipSaved": True,
+        "verifyPackagedProperly": True,
+        "verifyPackingSlipSerialsMatch": True,
+        "verifyBoxesLabeledCorrectly": True,
+    }
+
+    from app.utils.exceptions import ValidationError
+
+    try:
+        service.submit_qa(
+            order.id,
+            qa_data,
+            technician="Julian Hon",
+            technician_identifier="julianhon@tamu.edu",
+        )
+    except ValidationError as exc:
+        assert "someone other than the person who picked" in str(exc)
+    else:
+        raise AssertionError("Expected compact display/email match to block QA")
