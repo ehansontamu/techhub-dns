@@ -16,6 +16,9 @@ class InflowService:
     _CATEGORY_MAP_EMPTY_TTL_SECONDS = 30
     _category_map_cache: Optional[Dict[str, str]] = None
     _category_map_cache_expires_at = 0.0
+    _KNOWN_NON_PICKABLE_PRODUCT_NAMES = {
+        "computer imaging",
+    }
 
     def __init__(self):
         self.base_url = settings.inflow_api_url
@@ -51,6 +54,8 @@ class InflowService:
         # Build map of required quantities by product ID
         required = {}
         for line in lines:
+            if not self._is_pick_required_line(line):
+                continue
             pid = line.get("productId")
             qty = 0
             try:
@@ -89,6 +94,59 @@ class InflowService:
             return float(value or 0)
         except (TypeError, ValueError):
             return 0.0
+
+    @staticmethod
+    def _normalized_text(value: Any) -> str:
+        return " ".join(str(value or "").strip().lower().replace("-", " ").split())
+
+    @classmethod
+    def _is_service_line(cls, line: Dict[str, Any]) -> bool:
+        product = line.get("product")
+        product_dict = product if isinstance(product, dict) else {}
+
+        type_candidates = [
+            line.get("type"),
+            line.get("lineType"),
+            line.get("itemType"),
+            line.get("productType"),
+            product_dict.get("type"),
+            product_dict.get("itemType"),
+            product_dict.get("productType"),
+        ]
+        for candidate in type_candidates:
+            normalized = cls._normalized_text(candidate)
+            if normalized in {"service", "services", "non inventory", "non stock"}:
+                return True
+
+        for bool_key in ("isService", "service", "isNonInventory", "isNonStock"):
+            if line.get(bool_key) is True or product_dict.get(bool_key) is True:
+                return True
+
+        category = product_dict.get("category")
+        category_dict = category if isinstance(category, dict) else {}
+        category_name = cls._normalized_text(category_dict.get("name"))
+        if category_name in {"service", "services"}:
+            return True
+
+        names = [
+            line.get("description"),
+            line.get("productName"),
+            product_dict.get("name"),
+        ]
+        return any(
+            cls._normalized_text(name) in cls._KNOWN_NON_PICKABLE_PRODUCT_NAMES
+            for name in names
+        )
+
+    @classmethod
+    def _is_pick_required_line(cls, line: Dict[str, Any]) -> bool:
+        if not isinstance(line, dict):
+            return False
+        if not line.get("productId"):
+            return False
+        if cls._parse_standard_quantity(line.get("quantity")) <= 0:
+            return False
+        return not cls._is_service_line(line)
 
     @staticmethod
     def _copy_line_with_quantity(
@@ -142,7 +200,7 @@ class InflowService:
                 continue
 
             product_id = line.get("productId")
-            if not product_id:
+            if not product_id or not self._is_pick_required_line(line):
                 continue
 
             product_key = str(product_id)
@@ -216,7 +274,7 @@ class InflowService:
         required = {}
         product_names = {}
         for line in lines:
-            if not isinstance(line, dict):
+            if not isinstance(line, dict) or not self._is_pick_required_line(line):
                 continue
             pid = line.get("productId")
             if pid is not None:
@@ -547,7 +605,7 @@ class InflowService:
                 container_number = f"DELIVERY-{order_number}"
                 new_pack_lines = []
                 for line in order.get("lines", []):
-                    if not positive_quantity(line):
+                    if not positive_quantity(line) or not self._is_pick_required_line(line):
                         continue
                     new_pack_lines.append(
                         {

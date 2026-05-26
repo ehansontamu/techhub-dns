@@ -58,6 +58,8 @@ class OrderSplittingService:
         # Calculate remaining for each line
         remaining_lines = []
         for line in lines:
+            if not self.inflow_service._is_pick_required_line(line):
+                continue
             pid = line.get("productId")
             ordered_qty = 0
             try:
