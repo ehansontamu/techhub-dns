@@ -9,10 +9,18 @@ function identityCandidates(...values: Array<string | null | undefined>): Set<st
     if (!normalized) continue;
 
     candidates.add(normalized);
+    const compact = normalized.replace(/[^a-z0-9]+/g, "");
+    if (compact) {
+      candidates.add(compact);
+    }
     if (normalized.includes("@")) {
       const localPart = normalized.split("@", 1)[0]?.trim();
       if (localPart) {
         candidates.add(localPart);
+        const compactLocalPart = localPart.replace(/[^a-z0-9]+/g, "");
+        if (compactLocalPart) {
+          candidates.add(compactLocalPart);
+        }
       }
     }
   }

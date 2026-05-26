@@ -909,10 +909,16 @@ class OrderService:
                 continue
 
             candidates.add(normalized)
+            compact = re.sub(r"[^a-z0-9]+", "", normalized)
+            if compact:
+                candidates.add(compact)
             if "@" in normalized:
                 local_part = normalized.split("@", 1)[0].strip()
                 if local_part:
                     candidates.add(local_part)
+                    compact_local_part = re.sub(r"[^a-z0-9]+", "", local_part)
+                    if compact_local_part:
+                        candidates.add(compact_local_part)
 
         return candidates
 
