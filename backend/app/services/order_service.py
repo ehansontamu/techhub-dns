@@ -606,6 +606,9 @@ class OrderService:
         
         try:
             # Generate the actual picklist PDF from inFlow data using PicklistService
+            document_inflow_data = InflowService().build_picklist_view(
+                document_inflow_data
+            )
             from app.services.picklist_service import PicklistService
             picklist_svc = PicklistService()
             picklist_svc.generate_picklist_pdf(document_inflow_data, temp_path)

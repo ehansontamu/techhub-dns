@@ -31,8 +31,8 @@ def test_service_lines_do_not_make_order_partially_picked():
 
     assert pick_status == {
         "is_fully_picked": True,
-        "total_ordered": 1,
-        "total_picked": 1,
+        "total_ordered": 2,
+        "total_picked": 2,
         "missing_items": [],
     }
     assert service._is_fully_picked(order) is True
@@ -74,3 +74,40 @@ def test_known_computer_imaging_line_is_excluded_from_remaining_view():
 
     assert remaining["lines"] == []
     assert remaining["pickLines"] == []
+
+
+def test_picklist_view_includes_service_lines_as_picked_items():
+    service = InflowService()
+    order = {
+        "lines": [
+            {
+                "productId": "laptop-1",
+                "description": "Laptop",
+                "product": {"name": "Laptop", "sku": "LAP-1"},
+                "quantity": {"standardQuantity": "1"},
+            },
+            {
+                "productId": "computer-imaging",
+                "description": "Computer Imaging",
+                "quantity": {"standardQuantity": "1"},
+            },
+        ],
+        "pickLines": [
+            {
+                "productId": "laptop-1",
+                "description": "Laptop",
+                "product": {"name": "Laptop", "sku": "LAP-1"},
+                "quantity": {"standardQuantity": "1"},
+            }
+        ],
+        "packLines": [],
+    }
+
+    picklist_view = service.build_picklist_view(order)
+
+    assert [line["productId"] for line in picklist_view["pickLines"]] == [
+        "laptop-1",
+        "computer-imaging",
+    ]
+    assert picklist_view["pickLines"][1]["product"]["name"] == "Computer Imaging"
+    assert picklist_view["pickLines"][1]["product"]["sku"] == "SERVICE"

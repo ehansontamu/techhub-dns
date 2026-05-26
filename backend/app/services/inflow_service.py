@@ -53,9 +53,8 @@ class InflowService:
 
         # Build map of required quantities by product ID
         required = {}
+        picked = {}
         for line in lines:
-            if not self._is_pick_required_line(line):
-                continue
             pid = line.get("productId")
             qty = 0
             try:
@@ -64,9 +63,10 @@ class InflowService:
                 pass
             if pid and qty > 0:
                 required[pid] = required.get(pid, 0) + qty
+                if self._is_service_line(line):
+                    picked[pid] = picked.get(pid, 0) + qty
 
         # Build map of picked quantities
-        picked = {}
         for line in pick_lines:
             pid = line.get("productId")
             qty = 0
@@ -147,6 +147,65 @@ class InflowService:
         if cls._parse_standard_quantity(line.get("quantity")) <= 0:
             return False
         return not cls._is_service_line(line)
+
+    @classmethod
+    def _line_name(cls, line: Dict[str, Any]) -> str:
+        product = line.get("product")
+        product_dict = product if isinstance(product, dict) else {}
+        return str(
+            line.get("description")
+            or line.get("productName")
+            or product_dict.get("name")
+            or line.get("productId")
+            or ""
+        )
+
+    @staticmethod
+    def _line_key(line: Dict[str, Any]) -> str:
+        product_id = line.get("productId")
+        if product_id is not None:
+            return f"product:{product_id}"
+        return f"description:{line.get('description') or line.get('productName') or ''}"
+
+    def build_picklist_view(self, order: Dict[str, Any]) -> Dict[str, Any]:
+        """Return a picklist payload that includes service lines as picked items."""
+        order_view = dict(order or {})
+        lines = order.get("lines", []) if isinstance(order, dict) else []
+        pick_lines = order.get("pickLines", []) if isinstance(order, dict) else []
+
+        if not isinstance(lines, list):
+            lines = []
+        if not isinstance(pick_lines, list):
+            pick_lines = []
+
+        displayed_pick_lines = filter_picklines(order_view, pick_lines)
+        displayed_keys = {
+            self._line_key(line)
+            for line in displayed_pick_lines
+            if isinstance(line, dict)
+        }
+
+        for line in lines:
+            if not isinstance(line, dict) or not self._is_service_line(line):
+                continue
+            if self._parse_standard_quantity(line.get("quantity")) <= 0:
+                continue
+            line_key = self._line_key(line)
+            if line_key in displayed_keys:
+                continue
+            service_line = dict(line)
+            product = service_line.get("product")
+            product_dict = dict(product) if isinstance(product, dict) else {}
+            if not product_dict:
+                product_dict = {"name": self._line_name(line), "sku": "SERVICE"}
+            elif not product_dict.get("sku"):
+                product_dict["sku"] = product_dict.get("sku") or "SERVICE"
+            service_line["product"] = product_dict
+            displayed_pick_lines.append(service_line)
+            displayed_keys.add(line_key)
+
+        order_view["pickLines"] = displayed_pick_lines
+        return order_view
 
     @staticmethod
     def _copy_line_with_quantity(
@@ -273,8 +332,9 @@ class InflowService:
         # Build map of required quantities and product names by product ID
         required = {}
         product_names = {}
+        picked = {}
         for line in lines:
-            if not isinstance(line, dict) or not self._is_pick_required_line(line):
+            if not isinstance(line, dict):
                 continue
             pid = line.get("productId")
             if pid is not None:
@@ -288,16 +348,13 @@ class InflowService:
                 pass
             if pid and qty > 0:
                 required[pid] = required.get(pid, 0) + qty
+                if self._is_service_line(line):
+                    picked[pid] = picked.get(pid, 0) + qty
                 # Try to get product name from line description or product data
                 if pid not in product_names:
-                    product = line.get("product")
-                    product_dict = product if isinstance(product, dict) else {}
-                    product_names[pid] = str(
-                        line.get("description") or product_dict.get("name") or pid
-                    )
+                    product_names[pid] = self._line_name(line) or pid
 
         # Build map of picked quantities
-        picked = {}
         for line in pick_lines:
             if not isinstance(line, dict):
                 continue
