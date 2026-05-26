@@ -27,7 +27,7 @@ from app.database import get_db_session
 from app.models.system_setting import SystemSetting
 from app.models.order import Order
 from app.models.inflow_webhook import InflowWebhook, WebhookStatus
-from app.api.auth_middleware import get_current_user_email, require_admin
+from app.api.auth_middleware import get_current_user_email, require_admin, require_auth
 from app.utils.timezone import to_utc_iso_z
 from app.services.audit_service import AuditService
 from app.services.print_job_service import (
@@ -1701,7 +1701,7 @@ def sync_orders():
 
 
 @bp.route("/canopyorders/upload", methods=["POST"])
-@require_admin
+@require_auth
 def upload_canopy_orders():
     data = request.get_json(silent=True) or {}
     orders_payload = data.get("orders")
