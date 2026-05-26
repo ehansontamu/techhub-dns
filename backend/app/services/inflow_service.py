@@ -63,7 +63,7 @@ class InflowService:
                 pass
             if pid and qty > 0:
                 required[pid] = required.get(pid, 0) + qty
-                if self._is_service_line(line):
+                if self._is_service_completed_line(line):
                     picked[pid] = picked.get(pid, 0) + qty
 
         # Build map of picked quantities
@@ -148,6 +148,20 @@ class InflowService:
             return False
         return not cls._is_service_line(line)
 
+    @staticmethod
+    def _is_truthy(value: Any) -> bool:
+        if value is True:
+            return True
+        if isinstance(value, str):
+            return value.strip().lower() in {"true", "1", "yes", "on"}
+        return False
+
+    @classmethod
+    def _is_service_completed_line(cls, line: Dict[str, Any]) -> bool:
+        return cls._is_service_line(line) and cls._is_truthy(
+            line.get("serviceCompleted")
+        )
+
     @classmethod
     def _line_name(cls, line: Dict[str, Any]) -> str:
         product = line.get("product")
@@ -187,6 +201,8 @@ class InflowService:
 
         for line in lines:
             if not isinstance(line, dict) or not self._is_service_line(line):
+                continue
+            if not self._is_service_completed_line(line):
                 continue
             if self._parse_standard_quantity(line.get("quantity")) <= 0:
                 continue
@@ -259,12 +275,26 @@ class InflowService:
                 continue
 
             product_id = line.get("productId")
-            if not product_id or not self._is_pick_required_line(line):
+            if not product_id:
                 continue
 
             product_key = str(product_id)
             original_qty = self._parse_standard_quantity(line.get("quantity"))
             if original_qty <= 0:
+                continue
+            if self._is_service_line(line):
+                if self._is_service_completed_line(line):
+                    continue
+                remaining_line = self._copy_line_with_quantity(line, original_qty)
+                remaining_lines.append(remaining_line)
+                raw_price = line.get("unitPrice")
+                try:
+                    unit_price = float(raw_price or 0)
+                except (TypeError, ValueError):
+                    unit_price = 0.0
+                remaining_subtotal += unit_price * original_qty
+                continue
+            if not self._is_pick_required_line(line):
                 continue
 
             serial_numbers = [
@@ -309,7 +339,9 @@ class InflowService:
         order_view["total"] = remaining_subtotal
         return order_view
 
-    def get_pick_status(self, order: Dict[str, Any]) -> Dict[str, Any]:
+    def get_pick_status(
+        self, order: Dict[str, Any], include_services: bool = True
+    ) -> Dict[str, Any]:
         """
         Get detailed pick status for an order.
 
@@ -336,6 +368,8 @@ class InflowService:
         for line in lines:
             if not isinstance(line, dict):
                 continue
+            if self._is_service_line(line) and not include_services:
+                continue
             pid = line.get("productId")
             if pid is not None:
                 pid = str(pid)
@@ -348,7 +382,7 @@ class InflowService:
                 pass
             if pid and qty > 0:
                 required[pid] = required.get(pid, 0) + qty
-                if self._is_service_line(line):
+                if self._is_service_completed_line(line):
                     picked[pid] = picked.get(pid, 0) + qty
                 # Try to get product name from line description or product data
                 if pid not in product_names:

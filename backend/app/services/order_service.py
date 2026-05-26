@@ -267,7 +267,9 @@ class OrderService:
             return None
 
         try:
-            return InflowService().get_pick_status(pick_status_source)
+            return InflowService().get_pick_status(
+                pick_status_source, include_services=False
+            )
         except Exception as exc:
             logger.warning(
                 "Failed to compute pick status for %s %s: %s",
@@ -487,7 +489,9 @@ class OrderService:
         # without requiring a separate confirmation step.
         if self._requires_asset_tags(order):
             from app.services.inflow_service import InflowService
-            pick_status = InflowService().get_pick_status(order.inflow_data)
+            pick_status = InflowService().get_pick_status(
+                order.inflow_data, include_services=False
+            )
             is_partial = bool(
                 pick_status
                 and pick_status.get("total_ordered", 0) > 0
@@ -526,7 +530,9 @@ class OrderService:
         pick_status = None
         if order.inflow_data:
             try:
-                pick_status = InflowService().get_pick_status(order.inflow_data)
+                pick_status = InflowService().get_pick_status(
+                    order.inflow_data, include_services=False
+                )
             except Exception as exc:
                 logger.warning(
                     "Failed to compute pick status for order %s before picklist generation: %s",

@@ -13,8 +13,9 @@ def test_service_lines_do_not_make_order_partially_picked():
             {
                 "productId": "computer-imaging",
                 "description": "Computer Imaging",
-                "product": {"type": "Service", "name": "Computer Imaging"},
+                "product": {"itemType": "service", "name": "Computer Imaging"},
                 "quantity": {"standardQuantity": "1"},
+                "serviceCompleted": True,
             },
         ],
         "pickLines": [
@@ -38,7 +39,7 @@ def test_service_lines_do_not_make_order_partially_picked():
     assert service._is_fully_picked(order) is True
 
 
-def test_known_computer_imaging_line_is_excluded_from_remaining_view():
+def test_completed_computer_imaging_line_is_excluded_from_remaining_view():
     service = InflowService()
     order = {
         "lines": [
@@ -51,8 +52,10 @@ def test_known_computer_imaging_line_is_excluded_from_remaining_view():
             {
                 "productId": "computer-imaging",
                 "description": "Computer Imaging",
+                "product": {"itemType": "service", "name": "Computer Imaging"},
                 "unitPrice": 0,
                 "quantity": {"standardQuantity": "1"},
+                "serviceCompleted": True,
             },
         ],
         "pickLines": [
@@ -89,7 +92,9 @@ def test_picklist_view_includes_service_lines_as_picked_items():
             {
                 "productId": "computer-imaging",
                 "description": "Computer Imaging",
+                "product": {"itemType": "service", "name": "Computer Imaging"},
                 "quantity": {"standardQuantity": "1"},
+                "serviceCompleted": True,
             },
         ],
         "pickLines": [
@@ -111,3 +116,52 @@ def test_picklist_view_includes_service_lines_as_picked_items():
     ]
     assert picklist_view["pickLines"][1]["product"]["name"] == "Computer Imaging"
     assert picklist_view["pickLines"][1]["product"]["sku"] == "SERVICE"
+
+
+def test_incomplete_service_line_stays_missing_but_not_physical_partial():
+    service = InflowService()
+    order = {
+        "lines": [
+            {
+                "productId": "laptop-1",
+                "description": "Laptop",
+                "quantity": {"standardQuantity": "1"},
+            },
+            {
+                "productId": "computer-imaging",
+                "description": "Computer Imaging",
+                "product": {"itemType": "service", "name": "Computer Imaging"},
+                "quantity": {"standardQuantity": "1"},
+                "serviceCompleted": False,
+            },
+        ],
+        "pickLines": [
+            {
+                "productId": "laptop-1",
+                "description": "Laptop",
+                "quantity": {"standardQuantity": "1"},
+            }
+        ],
+        "packLines": [],
+    }
+
+    service_aware_status = service.get_pick_status(order)
+    physical_status = service.get_pick_status(order, include_services=False)
+    picklist_view = service.build_picklist_view(order)
+
+    assert service_aware_status["is_fully_picked"] is False
+    assert service_aware_status["missing_items"] == [
+        {
+            "product_id": "computer-imaging",
+            "product_name": "Computer Imaging",
+            "ordered": 1,
+            "picked": 0,
+        }
+    ]
+    assert physical_status == {
+        "is_fully_picked": True,
+        "total_ordered": 1,
+        "total_picked": 1,
+        "missing_items": [],
+    }
+    assert [line["productId"] for line in picklist_view["pickLines"]] == ["laptop-1"]
