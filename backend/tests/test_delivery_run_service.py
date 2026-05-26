@@ -48,6 +48,83 @@ def test_fulfill_orders_persists_updated_inflow_payload():
     print("[PASS] DeliveryRunService persists updated InFlow payload")
 
 
+def test_fulfill_orders_accepts_already_fulfilled_inflow_order():
+    """Retrying run completion should succeed when InFlow already fulfilled the order."""
+
+    order = SimpleNamespace(
+        id="order-fulfilled",
+        inflow_order_id="TH2001",
+        inflow_sales_order_id="sales-order-fulfilled",
+        inflow_data={"orderNumber": "TH2001", "packLines": []},
+    )
+    fulfilled_payload = {
+        "id": "sales-order-fulfilled",
+        "orderNumber": "TH2001",
+        "inventoryStatus": "fulfilled",
+        "pickLines": [{"productId": "prod-1"}],
+        "packLines": [{"productId": "prod-1"}],
+        "shipLines": [{"salesOrderShipLineId": "ship-1"}],
+    }
+
+    service = DeliveryRunService(db=cast(Any, object()))
+
+    with patch("app.services.delivery_run_service.InflowService") as inflow_service_cls:
+        inflow_service = inflow_service_cls.return_value
+        inflow_service.fulfill_sales_order = AsyncMock(
+            side_effect=ValueError("Order TH2001 has no newly picked items to fulfill in InFlow")
+        )
+        inflow_service.get_order_by_id = AsyncMock(return_value=fulfilled_payload)
+
+        successes, failures = service._fulfill_orders_in_inflow(
+            cast(Any, [order]), user_id="user-1"
+        )
+
+    assert failures == []
+    assert len(successes) == 1
+    assert successes[0]["already_fulfilled"] is True
+    assert successes[0]["inflow_sales_order_id"] == "sales-order-fulfilled"
+    assert order.inflow_data == fulfilled_payload
+    print("[PASS] DeliveryRunService accepts already-fulfilled InFlow retries")
+
+
+def test_fulfill_orders_preserves_unconfirmed_inflow_failure():
+    """A fulfillment error should still fail if InFlow does not confirm completion."""
+
+    order = SimpleNamespace(
+        id="order-unfulfilled",
+        inflow_order_id="TH2002",
+        inflow_sales_order_id="sales-order-unfulfilled",
+        inflow_data={"orderNumber": "TH2002", "packLines": []},
+    )
+    unfulfilled_payload = {
+        "id": "sales-order-unfulfilled",
+        "orderNumber": "TH2002",
+        "inventoryStatus": "started",
+        "pickLines": [{"productId": "prod-1"}],
+        "packLines": [],
+        "shipLines": [],
+    }
+
+    service = DeliveryRunService(db=cast(Any, object()))
+
+    with patch("app.services.delivery_run_service.InflowService") as inflow_service_cls:
+        inflow_service = inflow_service_cls.return_value
+        inflow_service.fulfill_sales_order = AsyncMock(
+            side_effect=RuntimeError("InFlow API unavailable")
+        )
+        inflow_service.get_order_by_id = AsyncMock(return_value=unfulfilled_payload)
+
+        successes, failures = service._fulfill_orders_in_inflow(
+            cast(Any, [order]), user_id="user-1"
+        )
+
+    assert successes == []
+    assert len(failures) == 1
+    assert failures[0]["error"] == "InFlow API unavailable"
+    assert order.inflow_data != unfulfilled_payload
+    print("[PASS] DeliveryRunService preserves unconfirmed InFlow failures")
+
+
 def test_requeue_partial_delivery_returns_order_to_pre_delivery():
     """Partial deliveries should reuse the original order and restart prep."""
 
@@ -131,6 +208,8 @@ if __name__ == "__main__":
     print()
 
     test_fulfill_orders_persists_updated_inflow_payload()
+    test_fulfill_orders_accepts_already_fulfilled_inflow_order()
+    test_fulfill_orders_preserves_unconfirmed_inflow_failure()
     test_requeue_partial_delivery_returns_order_to_pre_delivery()
 
     print()

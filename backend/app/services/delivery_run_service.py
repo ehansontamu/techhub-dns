@@ -17,6 +17,7 @@ from app.models.vehicle_checkout import VehicleCheckout
 from app.services.audit_service import AuditService
 from app.services.inflow_service import InflowService
 from app.utils.exceptions import ConflictError, NotFoundError, ValidationError
+from app.utils.pdf_helpers import filter_picklines
 from app.utils.timezone import get_date_in_cst, is_morning_in_cst, to_utc_iso_z
 
 class DeliveryRunService:
@@ -593,6 +594,19 @@ class DeliveryRunService:
                         "inflow_sales_order_id": inflow_sales_order_id,
                     }, None
                 except Exception as exc:
+                    already_fulfilled_order = await self._get_already_fulfilled_inflow_order(
+                        inflow_service, inflow_sales_order_id
+                    )
+                    if already_fulfilled_order is not None:
+                        order.inflow_data = already_fulfilled_order
+                        return {
+                            "order_id": str(order.id),
+                            "inflow_order_id": order.inflow_order_id,
+                            "inflow_sales_order_id": inflow_sales_order_id,
+                            "already_fulfilled": True,
+                            "fulfillment_error": str(exc),
+                        }, None
+
                     return None, {
                         "order_id": str(order.id),
                         "inflow_order_id": order.inflow_order_id,
@@ -607,6 +621,38 @@ class DeliveryRunService:
             return successes, failures
 
         return asyncio.run(_fulfill())
+
+    async def _get_already_fulfilled_inflow_order(
+        self, inflow_service: InflowService, sales_order_id: str
+    ) -> Optional[Dict[str, Any]]:
+        try:
+            current_order = await inflow_service.get_order_by_id(sales_order_id)
+        except Exception:
+            return None
+
+        if not self._is_inflow_order_fulfilled(current_order):
+            return None
+
+        return current_order
+
+    def _is_inflow_order_fulfilled(
+        self, inflow_order: Optional[Dict[str, Any]]
+    ) -> bool:
+        if not inflow_order:
+            return False
+
+        inventory_status = str(inflow_order.get("inventoryStatus") or "").strip().lower()
+        if inventory_status in {"fulfilled", "complete", "completed"}:
+            return True
+
+        pick_lines = inflow_order.get("pickLines", [])
+        ship_lines = inflow_order.get("shipLines", [])
+        if not isinstance(pick_lines, list) or not pick_lines:
+            return False
+        if not isinstance(ship_lines, list) or not ship_lines:
+            return False
+
+        return len(filter_picklines(inflow_order, pick_lines)) == 0
 
     def finish_run(
         self,
