@@ -58,6 +58,8 @@ class OrderSplittingService:
         # Calculate remaining for each line
         remaining_lines = []
         for line in lines:
+            if not self.inflow_service._is_pick_required_line(line):
+                continue
             pid = line.get("productId")
             ordered_qty = 0
             try:
@@ -607,7 +609,9 @@ class OrderSplittingService:
         if original_order.parent_order_id:
             return original_order
 
-        pick_status = self.inflow_service.get_pick_status(original_order.inflow_data)
+        pick_status = self.inflow_service.get_pick_status(
+            original_order.inflow_data, include_services=False
+        )
         if pick_status.get("is_fully_picked", True):
             return None
 
