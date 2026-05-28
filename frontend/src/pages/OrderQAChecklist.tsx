@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Order, OrderStatus } from "../types/order";
 import { ordersApi } from "../api/orders";
+import { settingsApi } from "../api/settings";
 import { useAuth } from "../contexts/AuthContext";
-import { getOrderPickerLabel, isOrderPickedByUser } from "../utils/qaEligibility";
+import { getOrderPickerLabel, isSameUserQaBlocked } from "../utils/qaEligibility";
 import { isValidOrderId } from "../utils/orderIds";
 
 function safeArray<T>(value: unknown): T[] {
@@ -29,6 +31,10 @@ export default function OrderQAChecklist() {
     const navigate = useNavigate();
     const location = useLocation();
     const { user } = useAuth();
+    const settingsQuery = useQuery({
+        queryKey: ["admin", "settings"],
+        queryFn: () => settingsApi.getSettings(),
+    });
 
     const openOrder = (orderId?: string) => {
         if (!isValidOrderId(orderId)) {
@@ -145,7 +151,11 @@ export default function OrderQAChecklist() {
                                 {qaCandidateOrders.map((o) => {
                                         const submittedAt = completedMap.get(o.id) || null;
                                         const qaButtonLabel = submittedAt ? "Edit QA" : "Perform QA"; // clearer label
-                                        const pickedByCurrentUser = isOrderPickedByUser(o, user);
+                                        const sameUserQaBlocked = isSameUserQaBlocked(
+                                            o,
+                                            user,
+                                            settingsQuery.data?.require_different_user_for_pick_and_qa?.value,
+                                        );
                                         const pickerLabel = getOrderPickerLabel(o);
 
                                         return (
@@ -171,16 +181,16 @@ export default function OrderQAChecklist() {
                                                 <button
                                                     type="button"
                                                     onClick={() => openQa(o.inflow_order_id || o.id)}
-                                                    disabled={loadingOrders || pickedByCurrentUser}
-                                                    title={pickedByCurrentUser ? "You cannot QA an order you picked." : undefined}
+                                                    disabled={loadingOrders || sameUserQaBlocked}
+                                                    title={sameUserQaBlocked ? "You cannot QA an order you picked." : undefined}
                                                     className={`flex min-h-[44px] items-center gap-2 rounded-md px-3 py-2 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ${
-                                                        loadingOrders || pickedByCurrentUser
+                                                        loadingOrders || sameUserQaBlocked
                                                             ? "cursor-not-allowed bg-muted text-muted-foreground opacity-80"
                                                             : "bg-accent text-accent-foreground hover:bg-accent/90"
                                                     }`}
                                                 >
-                                                    {pickedByCurrentUser ? "Picked by you" : qaButtonLabel}
-                                                    {!pickedByCurrentUser && (
+                                                    {sameUserQaBlocked ? "Picked by you" : qaButtonLabel}
+                                                    {!sameUserQaBlocked && (
                                                         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
                                                             <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3" />
                                                         </svg>
