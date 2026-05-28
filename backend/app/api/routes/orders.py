@@ -211,6 +211,7 @@ def _serialize_order_list_item(
         "qa_method": order.qa_method,
         "signature_captured_at": _serialize_utc_datetime(order.signature_captured_at),
         "signed_picklist_path": order.signed_picklist_path,
+        "bundle_path": order.bundle_path,
         "order_details_path": order.order_details_path,
         "order_details_generated_at": _serialize_utc_datetime(
             order.order_details_generated_at
@@ -857,6 +858,31 @@ def sign_order(order_id):
             order_id=order_id,
             signature_data=signature_data.model_dump(exclude={"expected_updated_at"}),
         )
+        order = service.get_order_detail(order_id)
+        if not order:
+            raise NotFoundError("Order", str(order_id))
+
+        updated_inflow_order = None
+        proof_of_delivery_updated = False
+        if order.inflow_sales_order_id:
+            try:
+                inflow_service = InflowService()
+                updated_inflow_order = inflow_service.update_proof_of_delivery_url_sync(
+                    order.inflow_sales_order_id,
+                    bundle_sp_url,
+                )
+                proof_of_delivery_updated = True
+            except Exception as exc:
+                logger.error(
+                    "Failed to update inFlow customFields.custom5 for %s after signing: %s",
+                    order.inflow_order_id or order.id,
+                    exc,
+                )
+        else:
+            logger.warning(
+                "Order %s has no inflow_sales_order_id; skipping Proof of Delivery link update",
+                order.inflow_order_id or order.id,
+            )
         # generate_bundled_documents now stores signed_picklist_path on the order internally
         signed_picklist_path = signed_sp_url
         bundled_path = bundle_sp_url
@@ -890,6 +916,9 @@ def sign_order(order_id):
 
         order.signature_captured_at = datetime.utcnow()
         order.signed_picklist_path = signed_picklist_path
+        order.bundle_path = bundled_path
+        if updated_inflow_order is not None:
+            order.inflow_data = updated_inflow_order
         order.updated_at = datetime.utcnow()
 
         delivery_vehicle = order.delivery_run.vehicle if order.delivery_run else None
@@ -925,6 +954,7 @@ def sign_order(order_id):
                 "message": "Order signed and bundled documents generated",
                 "bundled_document_path": bundled_path,
                 "signed_picklist_path": signed_picklist_path,
+                "proof_of_delivery_updated": proof_of_delivery_updated,
             }
         )
 

@@ -89,6 +89,7 @@ export interface Order {
   qa_method?: string;
   signature_captured_at?: string;
   signed_picklist_path?: string;
+  bundle_path?: string;
   // Shipping workflow fields
   shipping_workflow_status?: ShippingWorkflowStatus;
   shipping_workflow_status_updated_at?: string;

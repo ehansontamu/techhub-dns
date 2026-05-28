@@ -1247,6 +1247,7 @@ class OrderService:
         clear("tracking_number")
         clear("signature_captured_at")
         clear("signed_picklist_path")
+        clear("bundle_path")
         order.shipping_workflow_status = ShippingWorkflowStatus.WORK_AREA.value
 
         if target_status in (OrderStatus.QA, OrderStatus.PICKED):
@@ -2612,8 +2613,7 @@ class OrderService:
 
             # Persist SharePoint URLs on order (source of truth)
             order.signed_picklist_path = signed_sp_url
-            if hasattr(order, 'bundle_path'):
-                order.bundle_path = bundle_sp_url
+            order.bundle_path = bundle_sp_url
         except Exception as e:
             logger.error(f"SharePoint upload failed in generate_bundled_documents: {e}")
             raise  # No local fallback
