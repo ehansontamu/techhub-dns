@@ -14,6 +14,7 @@ from app.api.routes import (
     auth,
     system,
     analytics,
+    bigcommerce_chat,
     observability,
     vehicle_checkouts,
 )
@@ -119,6 +120,7 @@ app.register_blueprint(delivery_runs.bp, url_prefix="/api/delivery-runs")
 app.register_blueprint(vehicle_checkouts.vehicle_checkouts_bp)
 app.register_blueprint(vehicle_checkouts.vehicles_bp)
 app.register_blueprint(analytics.bp, url_prefix="/api/analytics")
+app.register_blueprint(bigcommerce_chat.bp, url_prefix="/api/bigcommerce-chat")
 app.register_blueprint(observability.bp, url_prefix="/api/observability")
 app.register_blueprint(sharepoint.sharepoint_bp)
 app.register_blueprint(auth.bp)

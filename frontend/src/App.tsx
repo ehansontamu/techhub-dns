@@ -29,6 +29,7 @@ const Login = lazy(() => import("./pages/Login"));
 const Sessions = lazy(() => import("./pages/Sessions"));
 const Preparation = lazy(() => import("./pages/Preparation"));
 const VettingEditor = lazy(() => import("./pages/VettingEditor"));
+const BigCommerceChat = lazy(() => import("./pages/BigCommerceChat"));
 
 const prefetchRoutes = () => {
     void import("./pages/Dashboard");
@@ -45,6 +46,7 @@ function AppRoutes() {
             <Route path="/preparation" element={<ProtectedRoute><Preparation /></ProtectedRoute>} />
             <Route path="/tag-request" element={<Navigate to="/preparation" replace />} />
             <Route path="/vetting-editor" element={<ProtectedRoute><VettingEditor /></ProtectedRoute>} />
+            <Route path="/bigcommerce-chat" element={<ProtectedRoute><BigCommerceChat /></ProtectedRoute>} />
             <Route path="/order-qa" element={<ProtectedRoute><OrderQAChecklist /></ProtectedRoute>} />
             <Route path="/delivery" element={<ProtectedRoute><DeliveryLayout /></ProtectedRoute>}>
                 <Route index element={<Navigate to="dispatch" replace />} />

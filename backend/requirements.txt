@@ -11,6 +11,7 @@ pydantic==2.5.2
 pydantic-settings==2.1.0
 httpx==0.25.2
 python-dotenv==1.0.0
+requests==2.32.3
 apscheduler==3.10.4
 msal==1.31.0
 python3-saml==1.16.0
