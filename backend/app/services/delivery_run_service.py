@@ -177,6 +177,7 @@ class DeliveryRunService:
             order.qa_method = None
             order.signature_captured_at = None
             order.signed_picklist_path = None
+            order.bundle_path = None
             order.order_details_path = None
             order.order_details_generated_at = None
             order.updated_at = changed_at
