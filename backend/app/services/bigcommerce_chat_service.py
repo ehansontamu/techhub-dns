@@ -10,18 +10,18 @@ class BigCommerceChatError(RuntimeError):
     """Raised when the BigCommerce chat bridge cannot answer a request."""
 
 
-def _repo_root() -> Path:
-    return Path(__file__).resolve().parents[3]
+def _backend_root() -> Path:
+    return Path(__file__).resolve().parents[2]
 
 
 def _bc_ai_path() -> Path:
-    return _repo_root() / "BC_AI"
+    return _backend_root() / "BC_AI"
 
 
 def _ensure_bc_ai_importable() -> None:
     bc_ai_path = _bc_ai_path()
     if not bc_ai_path.exists():
-        raise BigCommerceChatError("BC_AI folder was not found in the repository root.")
+        raise BigCommerceChatError("BC_AI folder was not found under backend/.")
 
     path_value = str(bc_ai_path)
     if path_value not in sys.path:
