@@ -1,5 +1,6 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
+import logging
 from typing import Any, Dict, List, Optional, Sequence, Union
 from uuid import UUID
 
@@ -19,6 +20,8 @@ from app.services.inflow_service import InflowService
 from app.utils.exceptions import ConflictError, NotFoundError, ValidationError
 from app.utils.pdf_helpers import filter_picklines
 from app.utils.timezone import get_date_in_cst, is_morning_in_cst, to_utc_iso_z
+
+logger = logging.getLogger(__name__)
 
 class DeliveryRunService:
     def __init__(self, db: Session):
@@ -634,6 +637,12 @@ class DeliveryRunService:
                         "inflow_sales_order_id": inflow_sales_order_id,
                     }, None
                 except Exception as exc:
+                    logger.warning(
+                        "Delivery run InFlow fulfillment failed for order %s (%s): %s",
+                        order.inflow_order_id,
+                        inflow_sales_order_id,
+                        exc,
+                    )
                     already_fulfilled_order = await self._get_already_fulfilled_inflow_order(
                         inflow_service, inflow_sales_order_id
                     )
@@ -755,6 +764,11 @@ class DeliveryRunService:
         )
 
         if inflow_failures:
+            logger.warning(
+                "Delivery run %s completion failed during InFlow fulfillment: %s",
+                run_id_str,
+                inflow_failures,
+            )
             # Log failure in a quick write
             audit_service = AuditService(self.db)
             audit_service.log_delivery_run_action(
