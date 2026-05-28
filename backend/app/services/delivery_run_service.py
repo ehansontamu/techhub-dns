@@ -24,6 +24,40 @@ class DeliveryRunService:
     def __init__(self, db: Session):
         self.db = db
 
+    def _merge_partial_leg_fulfillment_result(
+        self,
+        order: Order,
+        updated_inflow_order: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        if not getattr(order, "parent_order_id", None):
+            if isinstance(updated_inflow_order, dict):
+                updated_inflow_order.pop("_techhub_partial_leg_pack_lines", None)
+                updated_inflow_order.pop("_techhub_partial_leg_ship_lines", None)
+            return updated_inflow_order
+
+        existing_snapshot = (
+            dict(order.inflow_data) if isinstance(order.inflow_data, dict) else {}
+        )
+        merged_snapshot = dict(existing_snapshot)
+        merged_snapshot.update(
+            {
+                key: value
+                for key, value in dict(updated_inflow_order or {}).items()
+                if key not in {"lines", "pickLines", "packLines", "shipLines"}
+            }
+        )
+        merged_snapshot["lines"] = existing_snapshot.get("lines", [])
+        merged_snapshot["pickLines"] = existing_snapshot.get("pickLines", [])
+        merged_snapshot["packLines"] = updated_inflow_order.get(
+            "_techhub_partial_leg_pack_lines",
+            existing_snapshot.get("packLines", []),
+        )
+        merged_snapshot["shipLines"] = updated_inflow_order.get(
+            "_techhub_partial_leg_ship_lines",
+            existing_snapshot.get("shipLines", []),
+        )
+        return merged_snapshot
+
     @staticmethod
     def _normalize_stale_timestamp(value: datetime) -> datetime:
         normalized = (
@@ -587,8 +621,13 @@ class DeliveryRunService:
                         db=self.db,
                         user_id=user_id,
                         only_picked_items=True,
+                        source_order_data=order.inflow_data,
+                        source_order_identifier=order.inflow_order_id,
                     )
-                    order.inflow_data = updated_inflow_order
+                    order.inflow_data = self._merge_partial_leg_fulfillment_result(
+                        order,
+                        updated_inflow_order,
+                    )
                     return {
                         "order_id": str(order.id),
                         "inflow_order_id": order.inflow_order_id,
