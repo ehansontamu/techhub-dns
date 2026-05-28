@@ -676,6 +676,12 @@ class InflowService:
                     for line in source_pick_lines
                     if isinstance(line, dict)
                 ]
+                if not source_lines:
+                    logger.warning(
+                        "Split delivery leg %s has no local pick/line snapshot; falling back to live InFlow pickLines",
+                        source_order_identifier or sales_order_id,
+                    )
+                    source_lines = filter_picklines(order, order.get("pickLines", []))
             else:
                 source_lines = filter_picklines(order, order.get("pickLines", []))
 
