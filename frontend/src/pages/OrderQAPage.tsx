@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { isAxiosError } from "axios";
 import { useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
+import { settingsApi } from "../api/settings";
 import { useAuth } from "../contexts/AuthContext";
 import { getUserDisplayName } from "../utils/userDisplay";
 import { isLocalDelivery } from "../utils/location";
@@ -10,7 +11,7 @@ import { ordersApi } from "../api/orders";
 import { getOrderDetailQueryOptions, invalidateOrderQueries } from "../queries/orders";
 import type { OrderDetail } from "../types/order";
 import { formatToCentralTime } from "../utils/timezone";
-import { isOrderPickedByUser } from "../utils/qaEligibility";
+import { isSameUserQaBlocked } from "../utils/qaEligibility";
 
 type QAFormState = {
     orderNumber: string;
@@ -106,11 +107,21 @@ export default function OrderQAPage() {
         enabled: Boolean(orderId),
         retry: false,
     });
+    const settingsQuery = useQuery({
+        queryKey: ["workflow-settings"],
+        queryFn: () => settingsApi.getWorkflowSettings(),
+    });
 
     const order = orderQuery.data ?? null;
     const loading = orderQuery.isPending;
     const isParentPartialLeg = Boolean(order?.remainder_order_id && !order?.parent_order_id);
-    const pickedByCurrentUser = order ? isOrderPickedByUser(order, user) : false;
+    const sameUserQaBlocked = order
+        ? isSameUserQaBlocked(
+            order,
+            user,
+            settingsQuery.data?.require_different_user_for_pick_and_qa?.value,
+        )
+        : false;
 
     useEffect(() => {
         if (order) {
@@ -179,7 +190,7 @@ export default function OrderQAPage() {
     const submitQA = async () => {
         if (!order) return;
 
-        if (pickedByCurrentUser) {
+        if (sameUserQaBlocked) {
             toast.error("You cannot QA an order you picked.");
             return;
         }
@@ -249,7 +260,7 @@ export default function OrderQAPage() {
                             This is the remainder parent leg. QA can be completed here as a separate delivery order.
                         </div>
                     )}
-                    {pickedByCurrentUser && (
+                    {sameUserQaBlocked && (
                         <div className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
                             You picked this order, so QA must be completed by another logged-in user.
                         </div>
@@ -296,7 +307,7 @@ export default function OrderQAPage() {
                                                 type="checkbox"
                                                 id={step.id}
                                                 checked={checked}
-                                                disabled={pickedByCurrentUser}
+                                                disabled={sameUserQaBlocked}
                                                 onChange={() => setForm((prev) => ({ ...prev, [step.id]: !checked }))}
                                                 className="mt-1 h-5 w-5 rounded border-border/70 text-accent focus:ring-accent"
                                             />
@@ -343,14 +354,14 @@ export default function OrderQAPage() {
                             <button
                                 type="button"
                                 onClick={submitQA}
-                                disabled={submitQaMutation.isPending || pickedByCurrentUser || !isFormComplete(form)}
+                                disabled={submitQaMutation.isPending || sameUserQaBlocked || !isFormComplete(form)}
                                 className={`rounded-2xl px-5 py-2 text-sm font-semibold transition-colors ${
-                                    submitQaMutation.isPending || pickedByCurrentUser || !isFormComplete(form)
+                                    submitQaMutation.isPending || sameUserQaBlocked || !isFormComplete(form)
                                         ? "bg-muted text-muted-foreground/70 cursor-not-allowed"
                                         : "bg-primary text-primary-foreground hover:bg-maroon-800 hover:text-white"
                                 }`}
                             >
-                                {pickedByCurrentUser ? "QA unavailable" : submitQaMutation.isPending ? "Submitting..." : "Submit QA Checklist"}
+                                {sameUserQaBlocked ? "QA unavailable" : submitQaMutation.isPending ? "Submitting..." : "Submit QA Checklist"}
                             </button>
                         </div>
                     </div>

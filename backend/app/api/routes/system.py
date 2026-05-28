@@ -47,11 +47,16 @@ from app.services.system_setting_service import (
     SETTING_EMAIL_ENABLED,
     SETTING_TEAMS_RECIPIENT_ENABLED,
     SETTING_ADMIN_EMAILS,
+    SETTING_REQUIRE_DIFFERENT_USER_FOR_PICK_AND_QA,
     SETTING_PICKLIST_PRINT_CLAIM_TIMEOUT_SECONDS,
 )
 
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", re.IGNORECASE)
+
+WORKFLOW_READABLE_SETTINGS = (
+    SETTING_REQUIRE_DIFFERENT_USER_FOR_PICK_AND_QA,
+)
 
 VETTING_EDITOR_ALLOWED_SECTIONS = (
     "UnderConsideration",
@@ -885,6 +890,28 @@ def get_system_setting(key: str):
                 "updated_by": setting.updated_by if setting else None,
             }
         )
+    finally:
+        db.close()
+
+
+@bp.route("/workflow-settings", methods=["GET"])
+@require_auth
+def get_workflow_settings():
+    """Get workflow settings that normal authenticated operators may read."""
+    db = get_db_session()
+    try:
+        result: dict[str, dict[str, Optional[str]]] = {}
+        for key in WORKFLOW_READABLE_SETTINGS:
+            setting = db.query(SystemSetting).filter(SystemSetting.key == key).first()
+            defaults = DEFAULT_SETTINGS[key]
+            result[key] = {
+                "value": setting.value if setting else defaults["value"],
+                "description": cast(Optional[str], defaults.get("description")),
+                "updated_at": _to_utc_iso_z(setting.updated_at) if setting and setting.updated_at else None,
+                "updated_by": setting.updated_by if setting else None,
+            }
+
+        return jsonify(result)
     finally:
         db.close()
 

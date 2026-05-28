@@ -18,8 +18,13 @@ export interface SystemSettings {
     picklist_auto_print_enabled: SystemSettingValue;
     require_asset_tags_before_picklist: SystemSettingValue;
     require_same_user_for_tagging_and_picklist: SystemSettingValue;
+    require_different_user_for_pick_and_qa: SystemSettingValue;
     require_partial_picklist_confirmation: SystemSettingValue;
     picklist_print_claim_timeout_seconds: SystemSettingValue;
+}
+
+export interface WorkflowSettings {
+    require_different_user_for_pick_and_qa: SystemSettingValue;
 }
 
 export interface SyncHealthResponse {
@@ -104,6 +109,11 @@ export const settingsApi = {
      */
     async getSettings(): Promise<SystemSettings> {
         const response = await apiClient.get("/system/settings");
+        return response.data;
+    },
+
+    async getWorkflowSettings(): Promise<WorkflowSettings> {
+        const response = await apiClient.get("/system/workflow-settings");
         return response.data;
     },
 

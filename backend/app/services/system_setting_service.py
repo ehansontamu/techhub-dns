@@ -22,6 +22,7 @@ SETTING_ADMIN_EMAILS = "admin_emails"
 SETTING_PICKLIST_AUTO_PRINT_ENABLED = "picklist_auto_print_enabled"
 SETTING_REQUIRE_ASSET_TAGS_BEFORE_PICKLIST = "require_asset_tags_before_picklist"
 SETTING_REQUIRE_SAME_USER_FOR_TAGGING_AND_PICKLIST = "require_same_user_for_tagging_and_picklist"
+SETTING_REQUIRE_DIFFERENT_USER_FOR_PICK_AND_QA = "require_different_user_for_pick_and_qa"
 SETTING_REQUIRE_PARTIAL_PICKLIST_CONFIRMATION = "require_partial_picklist_confirmation"
 
 # Queue policy controls
@@ -62,6 +63,11 @@ DEFAULT_SETTINGS = {
         "value": "true",
         "type": SETTING_TYPE_BOOLEAN,
         "description": "Require the same user to perform asset tagging and picklist generation",
+    },
+    SETTING_REQUIRE_DIFFERENT_USER_FOR_PICK_AND_QA: {
+        "value": "true",
+        "type": SETTING_TYPE_BOOLEAN,
+        "description": "Require QA to be completed by someone other than the picker",
     },
     SETTING_REQUIRE_PARTIAL_PICKLIST_CONFIRMATION: {
         "value": "true",

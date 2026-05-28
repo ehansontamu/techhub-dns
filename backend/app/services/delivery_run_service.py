@@ -1,5 +1,6 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
+import logging
 from typing import Any, Dict, List, Optional, Sequence, Union
 from uuid import UUID
 
@@ -20,9 +21,45 @@ from app.utils.exceptions import ConflictError, NotFoundError, ValidationError
 from app.utils.pdf_helpers import filter_picklines
 from app.utils.timezone import get_date_in_cst, is_morning_in_cst, to_utc_iso_z
 
+logger = logging.getLogger(__name__)
+
 class DeliveryRunService:
     def __init__(self, db: Session):
         self.db = db
+
+    def _merge_partial_leg_fulfillment_result(
+        self,
+        order: Order,
+        updated_inflow_order: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        if not getattr(order, "parent_order_id", None):
+            if isinstance(updated_inflow_order, dict):
+                updated_inflow_order.pop("_techhub_partial_leg_pack_lines", None)
+                updated_inflow_order.pop("_techhub_partial_leg_ship_lines", None)
+            return updated_inflow_order
+
+        existing_snapshot = (
+            dict(order.inflow_data) if isinstance(order.inflow_data, dict) else {}
+        )
+        merged_snapshot = dict(existing_snapshot)
+        merged_snapshot.update(
+            {
+                key: value
+                for key, value in dict(updated_inflow_order or {}).items()
+                if key not in {"lines", "pickLines", "packLines", "shipLines"}
+            }
+        )
+        merged_snapshot["lines"] = existing_snapshot.get("lines", [])
+        merged_snapshot["pickLines"] = existing_snapshot.get("pickLines", [])
+        merged_snapshot["packLines"] = updated_inflow_order.get(
+            "_techhub_partial_leg_pack_lines",
+            existing_snapshot.get("packLines", []),
+        )
+        merged_snapshot["shipLines"] = updated_inflow_order.get(
+            "_techhub_partial_leg_ship_lines",
+            existing_snapshot.get("shipLines", []),
+        )
+        return merged_snapshot
 
     @staticmethod
     def _normalize_stale_timestamp(value: datetime) -> datetime:
@@ -587,14 +624,25 @@ class DeliveryRunService:
                         db=self.db,
                         user_id=user_id,
                         only_picked_items=True,
+                        source_order_data=order.inflow_data,
+                        source_order_identifier=order.inflow_order_id,
                     )
-                    order.inflow_data = updated_inflow_order
+                    order.inflow_data = self._merge_partial_leg_fulfillment_result(
+                        order,
+                        updated_inflow_order,
+                    )
                     return {
                         "order_id": str(order.id),
                         "inflow_order_id": order.inflow_order_id,
                         "inflow_sales_order_id": inflow_sales_order_id,
                     }, None
                 except Exception as exc:
+                    logger.warning(
+                        "Delivery run InFlow fulfillment failed for order %s (%s): %s",
+                        order.inflow_order_id,
+                        inflow_sales_order_id,
+                        exc,
+                    )
                     already_fulfilled_order = await self._get_already_fulfilled_inflow_order(
                         inflow_service, inflow_sales_order_id
                     )
@@ -716,6 +764,11 @@ class DeliveryRunService:
         )
 
         if inflow_failures:
+            logger.warning(
+                "Delivery run %s completion failed during InFlow fulfillment: %s",
+                run_id_str,
+                inflow_failures,
+            )
             # Log failure in a quick write
             audit_service = AuditService(self.db)
             audit_service.log_delivery_run_action(

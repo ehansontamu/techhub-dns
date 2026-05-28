@@ -2,6 +2,7 @@ import httpx
 from typing import Optional, List, Dict, Any
 import logging
 import uuid
+from copy import deepcopy
 from datetime import datetime
 import time
 from sqlalchemy.orm import Session
@@ -592,6 +593,8 @@ class InflowService:
         db: Session = None,
         user_id: str = None,
         only_picked_items: bool = False,
+        source_order_data: Optional[Dict[str, Any]] = None,
+        source_order_identifier: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Fulfill a sales order by ensuring pickLines, packLines, and shipLines are populated.
@@ -605,6 +608,8 @@ class InflowService:
             only_picked_items: If True, only fulfill items in pickLines (for partial orders from delivery runs).
                               When True, packLines are created from pickLines instead of original order lines,
                               and the "fully picked" validation is skipped.
+            source_order_data: Optional local order snapshot to use as the source for partial-leg fulfillment.
+            source_order_identifier: Optional local order number/identifier for split-leg detection.
         """
         from app.services.audit_service import AuditService
 
@@ -612,8 +617,14 @@ class InflowService:
         if not order:
             raise ValueError(f"Sales order {sales_order_id} not found in Inflow")
 
-        # Require actual pickLines - don't create them artificially
-        if not order.get("pickLines"):
+        # Require actual pickLines - don't create them artificially unless a split
+        # delivery leg provides its own local source snapshot.
+        is_split_delivery_leg = bool(
+            only_picked_items
+            and source_order_identifier
+            and source_order_identifier != order.get("orderNumber")
+        )
+        if not order.get("pickLines") and not is_split_delivery_leg:
             order_number = order.get("orderNumber") or sales_order_id
             raise ValueError(
                 f"Order {order_number} has no pickLines - items were not picked from inventory"
@@ -646,7 +657,34 @@ class InflowService:
             ship_lines = []
 
         if only_picked_items:
-            source_lines = filter_picklines(order, order.get("pickLines", []))
+            source_snapshot = (
+                source_order_data if isinstance(source_order_data, dict) else None
+            )
+            if (
+                is_split_delivery_leg
+                and source_snapshot
+                and (source_snapshot.get("packLines") or source_snapshot.get("shipLines"))
+            ):
+                return order
+
+            if is_split_delivery_leg and source_snapshot:
+                source_pick_lines = source_snapshot.get("pickLines")
+                if not isinstance(source_pick_lines, list) or not source_pick_lines:
+                    source_pick_lines = source_snapshot.get("lines", [])
+                source_lines = [
+                    deepcopy(line)
+                    for line in source_pick_lines
+                    if isinstance(line, dict)
+                ]
+                if not source_lines:
+                    logger.warning(
+                        "Split delivery leg %s has no local pick/line snapshot; falling back to live InFlow pickLines",
+                        source_order_identifier or sales_order_id,
+                    )
+                    source_lines = filter_picklines(order, order.get("pickLines", []))
+            else:
+                source_lines = filter_picklines(order, order.get("pickLines", []))
+
             new_pack_lines = []
             existing_suffixes: List[int] = []
             for existing_pack_line in pack_lines:
@@ -678,12 +716,15 @@ class InflowService:
                 )
 
             if not new_pack_lines:
+                if is_split_delivery_leg and source_snapshot:
+                    raise ValueError(
+                        f"Order {order_number} has no usable split-leg items to fulfill in InFlow"
+                    )
                 raise ValueError(
                     f"Order {order_number} has no newly picked items to fulfill in InFlow"
                 )
 
-            order["packLines"] = pack_lines + new_pack_lines
-            order["shipLines"] = ship_lines + [
+            new_ship_lines = [
                 {
                     "salesOrderShipLineId": str(uuid.uuid4()),
                     "carrier": "TechHub",
@@ -691,6 +732,8 @@ class InflowService:
                     "shippedDate": now,
                 }
             ]
+            order["packLines"] = pack_lines + new_pack_lines
+            order["shipLines"] = ship_lines + new_ship_lines
         else:
             if not pack_lines:
                 container_number = f"DELIVERY-{order_number}"
@@ -771,6 +814,12 @@ class InflowService:
 
         if not isinstance(result, dict) or not result or "lines" not in result:
             result = order
+        elif only_picked_items:
+            result = dict(result)
+
+        if only_picked_items:
+            result["_techhub_partial_leg_pack_lines"] = deepcopy(new_pack_lines)
+            result["_techhub_partial_leg_ship_lines"] = deepcopy(new_ship_lines)
 
         # Audit logging for inFlow fulfillment
         if db:

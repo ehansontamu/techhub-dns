@@ -18,6 +18,10 @@ def test_submit_qa_sets_completed_at_and_transitions_to_pre_delivery(tmp_path, m
 
     # Keep file IO local and deterministic.
     monkeypatch.setattr("app.services.order_service.settings.local_document_storage", str(tmp_path))
+    monkeypatch.setattr(
+        "app.services.order_service.SystemSettingService.is_setting_enabled",
+        lambda key: True,
+    )
 
     # Stub SharePoint so the test stays offline.
     fake_sp = MagicMock()
@@ -80,6 +84,10 @@ def test_submit_qa_routes_shipping_orders_to_shipping(tmp_path, monkeypatch):
     service = OrderService(mock_db)
 
     monkeypatch.setattr("app.services.order_service.settings.local_document_storage", str(tmp_path))
+    monkeypatch.setattr(
+        "app.services.order_service.SystemSettingService.is_setting_enabled",
+        lambda key: True,
+    )
 
     fake_sp = MagicMock()
     fake_sp.is_enabled = True
@@ -133,6 +141,10 @@ def test_submit_qa_allows_parent_partial_leg(tmp_path, monkeypatch):
     service = OrderService(mock_db)
 
     monkeypatch.setattr("app.services.order_service.settings.local_document_storage", str(tmp_path))
+    monkeypatch.setattr(
+        "app.services.order_service.SystemSettingService.is_setting_enabled",
+        lambda key: True,
+    )
 
     fake_sp = MagicMock()
     fake_sp.is_enabled = True
@@ -186,6 +198,10 @@ def test_submit_qa_blocks_picker_from_qcing_own_order(tmp_path, monkeypatch):
     service = OrderService(mock_db)
 
     monkeypatch.setattr("app.services.order_service.settings.local_document_storage", str(tmp_path))
+    monkeypatch.setattr(
+        "app.services.order_service.SystemSettingService.is_setting_enabled",
+        lambda key: True,
+    )
 
     order = MagicMock(spec=Order)
     order.id = "test-order-id"
@@ -226,11 +242,75 @@ def test_submit_qa_blocks_picker_from_qcing_own_order(tmp_path, monkeypatch):
         raise AssertionError("Expected picker to be blocked from QA")
 
 
+def test_submit_qa_allows_picker_when_admin_setting_disabled(tmp_path, monkeypatch):
+    mock_db = MagicMock()
+    service = OrderService(mock_db)
+
+    monkeypatch.setattr("app.services.order_service.settings.local_document_storage", str(tmp_path))
+    monkeypatch.setattr(
+        "app.services.order_service.SystemSettingService.is_setting_enabled",
+        lambda key: False,
+    )
+
+    fake_sp = MagicMock()
+    fake_sp.is_enabled = True
+    fake_sp.upload_file.return_value = "https://sharepoint.example/qa/TH125.json"
+    monkeypatch.setattr("app.services.sharepoint_service.get_sharepoint_service", lambda: fake_sp)
+    monkeypatch.setattr("app.services.order_service.AuditService.log_order_action", lambda *args, **kwargs: None)
+    monkeypatch.setattr("app.services.order_service.OrderService._prep_steps_complete", lambda self, order: True)
+
+    order = MagicMock(spec=Order)
+    order.id = "test-order-id"
+    order.inflow_order_id = "TH125"
+    order.status = OrderStatus.QA.value
+    order.tagged_at = datetime.utcnow()
+    order.picklist_generated_at = datetime.utcnow()
+    order.picklist_generated_by = "picker@example.com"
+    order.qa_completed_at = None
+    order.qa_method = None
+    order.inflow_data = {
+        "shippingAddress": {
+            "city": "Bryan",
+            "address1": "123 Main St",
+            "address2": "",
+            "stateProvince": "TX",
+            "postalCode": "77801",
+        }
+    }
+
+    mock_db.query.return_value.filter.return_value.with_for_update.return_value.first.return_value = order
+
+    qa_data = {
+        "orderNumber": order.inflow_order_id,
+        "technician": "Picker Person",
+        "qaSignature": "Sig",
+        "verifyAssetTagSerialMatch": True,
+        "verifyOrderDetailsTemplateSentAndElectronicPackingSlipSaved": True,
+        "verifyPackagedProperly": True,
+        "verifyPackingSlipSerialsMatch": True,
+        "verifyBoxesLabeledCorrectly": True,
+    }
+
+    result = service.submit_qa(
+        order.id,
+        qa_data,
+        technician="Picker Person",
+        technician_identifier="picker@example.com",
+    )
+
+    assert order.qa_completed_at is not None
+    assert result.status == OrderStatus.PRE_DELIVERY.value
+
+
 def test_submit_qa_blocks_compact_display_name_match(tmp_path, monkeypatch):
     mock_db = MagicMock()
     service = OrderService(mock_db)
 
     monkeypatch.setattr("app.services.order_service.settings.local_document_storage", str(tmp_path))
+    monkeypatch.setattr(
+        "app.services.order_service.SystemSettingService.is_setting_enabled",
+        lambda key: True,
+    )
 
     order = MagicMock(spec=Order)
     order.id = "test-order-id"

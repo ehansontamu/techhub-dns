@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
+import axios from "axios";
 import { toast } from "sonner";
 import { AlertCircle, ArrowDown, ArrowLeft, ArrowUp, CheckCircle, Clock, Package, Truck, User } from "lucide-react";
 
@@ -56,6 +57,31 @@ function getOrderStatusVariant(status: string) {
     default:
       return "outline" as const;
   }
+}
+
+function extractRunCompletionFailureDetail(error: unknown): string | null {
+  if (!axios.isAxiosError(error)) return null;
+
+  const failedOrders = error.response?.data?.error?.details?.failed_orders;
+  if (!Array.isArray(failedOrders) || failedOrders.length === 0) {
+    return null;
+  }
+
+  const firstFailure = failedOrders[0] as {
+    inflow_order_id?: unknown;
+    order_id?: unknown;
+    error?: unknown;
+  };
+  const orderLabel =
+    (typeof firstFailure.inflow_order_id === "string" && firstFailure.inflow_order_id.trim()) ||
+    (typeof firstFailure.order_id === "string" && firstFailure.order_id.trim()) ||
+    "Unknown order";
+  const errorText =
+    typeof firstFailure.error === "string" && firstFailure.error.trim()
+      ? firstFailure.error
+      : "Unknown InFlow fulfillment error";
+
+  return `${orderLabel}: ${errorText}`;
 }
 
 
@@ -141,7 +167,12 @@ export default function DeliveryRunDetailPage() {
       toast.success("Delivery run completed");
       await refetch();
     } catch (error: unknown) {
-      setErrorMessage(extractApiErrorMessage(error, "Failed to complete delivery. Ensure all orders are delivered first."));
+      const baseMessage = extractApiErrorMessage(
+        error,
+        "Failed to complete delivery. Ensure all orders are delivered first.",
+      );
+      const failureDetail = extractRunCompletionFailureDetail(error);
+      setErrorMessage(failureDetail ? `${baseMessage}\n\nFirst failed order: ${failureDetail}` : baseMessage);
       setErrorDialogOpen(true);
       await refetch();
     } finally {

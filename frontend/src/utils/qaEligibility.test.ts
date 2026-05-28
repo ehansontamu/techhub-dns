@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import type { User } from "../contexts/AuthContext";
-import { getOrderPickerLabel, isOrderPickedByUser } from "./qaEligibility";
+import {
+  getOrderPickerLabel,
+  isOrderPickedByUser,
+  isSameUserQaBlocked,
+  requiresDifferentUserForPickAndQa,
+} from "./qaEligibility";
 
 const user: User = {
   id: "user-1",
@@ -40,5 +45,22 @@ describe("qaEligibility", () => {
 
   it("falls back when the picker is missing", () => {
     expect(getOrderPickerLabel({ picklist_generated_by: undefined })).toBe("Not recorded");
+  });
+
+  it("defaults same-user QA protection to enabled when the setting is missing", () => {
+    expect(requiresDifferentUserForPickAndQa(undefined)).toBe(true);
+  });
+
+  it("treats the explicit false setting as disabling same-user QA protection", () => {
+    expect(requiresDifferentUserForPickAndQa("false")).toBe(false);
+  });
+
+  it("blocks same-user QA only when the admin setting is enabled", () => {
+    expect(
+      isSameUserQaBlocked({ picklist_generated_by: "picker@example.com" }, user, "true"),
+    ).toBe(true);
+    expect(
+      isSameUserQaBlocked({ picklist_generated_by: "picker@example.com" }, user, "false"),
+    ).toBe(false);
   });
 });

@@ -51,3 +51,21 @@ export function isOrderPickedByUser(
 
   return false;
 }
+
+export function requiresDifferentUserForPickAndQa(settingValue: string | null | undefined): boolean {
+  const normalized = settingValue?.trim().toLowerCase();
+
+  if (!normalized) {
+    return true;
+  }
+
+  return !["false", "0", "no", "off"].includes(normalized);
+}
+
+export function isSameUserQaBlocked(
+  order: Pick<Order, "picklist_generated_by">,
+  user: User | null | undefined,
+  settingValue: string | null | undefined,
+): boolean {
+  return requiresDifferentUserForPickAndQa(settingValue) && isOrderPickedByUser(order, user);
+}

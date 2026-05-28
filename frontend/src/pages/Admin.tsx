@@ -21,6 +21,7 @@ type RuleKey =
     | "picklist_auto_print_enabled"
     | "require_asset_tags_before_picklist"
     | "require_same_user_for_tagging_and_picklist"
+    | "require_different_user_for_pick_and_qa"
     | "require_partial_picklist_confirmation"
     | "picklist_print_claim_timeout_seconds";
 
@@ -45,6 +46,7 @@ const RULES: RuleMeta[] = [
     { key: "picklist_auto_print_enabled", title: "Picklist auto-print", description: "Push generated picklists to the print queue.", kind: "boolean" },
     { key: "require_asset_tags_before_picklist", title: "Asset tags before picklist", description: "Gate picklist generation on completed tagging.", kind: "boolean" },
     { key: "require_same_user_for_tagging_and_picklist", title: "Same user tag + picklist", description: "Require the same operator for both steps.", kind: "boolean" },
+    { key: "require_different_user_for_pick_and_qa", title: "Different user pick + QA", description: "Require QA to be completed by someone other than the picker.", kind: "boolean" },
     { key: "require_partial_picklist_confirmation", title: "Confirm partial picklists", description: "Prompt before creating a partial-leg picklist.", kind: "boolean" },
     { key: "picklist_print_claim_timeout_seconds", title: "Picklist claim timeout", description: "Seconds before a claimed print job can be reclaimed.", kind: "integer" },
 ];

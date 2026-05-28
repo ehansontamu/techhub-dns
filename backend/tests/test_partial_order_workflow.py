@@ -118,6 +118,190 @@ def test_fulfill_sales_order_appends_new_partial_shipment_lines():
     print("[PASS] InFlow fulfillment appends a second partial-delivery shipment")
 
 
+def test_fulfill_sales_order_uses_local_split_leg_snapshot_for_partial_delivery():
+    """Split delivery legs should fulfill from the local leg snapshot, not cumulative live picks."""
+
+    live_order_payload = {
+        "salesOrderId": "sales-order-4",
+        "orderNumber": "TH1004",
+        "customerId": "customer-1",
+        "lines": [
+            {
+                "productId": "prod-1",
+                "description": "Laptop",
+                "quantity": {"standardQuantity": "3"},
+            }
+        ],
+        "pickLines": [
+            {
+                "productId": "prod-1",
+                "description": "Laptop",
+                "quantity": {"standardQuantity": "2"},
+            }
+        ],
+        "packLines": [
+            {
+                "salesOrderPackLineId": "pack-1",
+                "productId": "prod-1",
+                "description": "Laptop",
+                "containerNumber": "DELIVERY-TH1004-1",
+                "quantity": {"standardQuantity": "2"},
+            }
+        ],
+        "shipLines": [
+            {
+                "salesOrderShipLineId": "ship-1",
+                "carrier": "TechHub",
+                "containers": ["DELIVERY-TH1004-1"],
+                "shippedDate": "2026-03-23T12:00:00Z",
+            }
+        ],
+    }
+    local_leg_snapshot = {
+        "lines": [
+            {
+                "productId": "prod-1",
+                "description": "Laptop",
+                "quantity": {"standardQuantity": "1"},
+            }
+        ],
+        "pickLines": [
+            {
+                "productId": "prod-1",
+                "description": "Laptop",
+                "quantity": {"standardQuantity": "1"},
+            }
+        ],
+        "packLines": [],
+        "shipLines": [],
+    }
+
+    recorded: dict[str, Any] = {}
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, Any]:
+            return {"items": [recorded["payload"]]}
+
+    class FakeAsyncClient:
+        async def __aenter__(self) -> "FakeAsyncClient":
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb) -> None:
+            return None
+
+        async def put(
+            self, url: str, json: dict[str, Any], headers: dict[str, str]
+        ) -> FakeResponse:
+            recorded["payload"] = json
+            return FakeResponse()
+
+    service = InflowService()
+    service._headers = {
+        "Authorization": "Bearer test",
+        "Content-Type": "application/json",
+    }
+
+    with patch.object(
+        service, "get_order_by_id", AsyncMock(return_value=live_order_payload)
+    ):
+        with patch("app.services.inflow_service.httpx.AsyncClient", FakeAsyncClient):
+            result = asyncio.run(
+                service.fulfill_sales_order(
+                    "sales-order-4",
+                    only_picked_items=True,
+                    source_order_data=local_leg_snapshot,
+                    source_order_identifier="TH1004-P2",
+                )
+            )
+
+    assert len(recorded["payload"]["packLines"]) == 2
+    assert recorded["payload"]["packLines"][1]["quantity"]["standardQuantity"] == "1"
+    assert result["_techhub_partial_leg_pack_lines"][0]["quantity"]["standardQuantity"] == "1"
+    assert result["_techhub_partial_leg_ship_lines"][0]["containers"] == ["DELIVERY-TH1004-2"]
+    print("[PASS] Split partial-delivery legs use the local leg snapshot")
+
+
+def test_fulfill_sales_order_falls_back_when_split_leg_snapshot_is_empty():
+    """Split delivery legs with missing local lines should fall back to live InFlow picks."""
+
+    live_order_payload = {
+        "salesOrderId": "sales-order-5",
+        "orderNumber": "TH0149",
+        "customerId": "customer-1",
+        "lines": [
+            {
+                "productId": "prod-1",
+                "description": "Laptop",
+                "quantity": {"standardQuantity": "1"},
+            }
+        ],
+        "pickLines": [
+            {
+                "productId": "prod-1",
+                "description": "Laptop",
+                "quantity": {"standardQuantity": "1"},
+            }
+        ],
+        "packLines": [],
+        "shipLines": [],
+    }
+    empty_local_snapshot = {
+        "lines": [],
+        "pickLines": [],
+        "packLines": [],
+        "shipLines": [],
+    }
+
+    recorded: dict[str, Any] = {}
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, Any]:
+            return {"items": [recorded["payload"]]}
+
+    class FakeAsyncClient:
+        async def __aenter__(self) -> "FakeAsyncClient":
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb) -> None:
+            return None
+
+        async def put(
+            self, url: str, json: dict[str, Any], headers: dict[str, str]
+        ) -> FakeResponse:
+            recorded["payload"] = json
+            return FakeResponse()
+
+    service = InflowService()
+    service._headers = {
+        "Authorization": "Bearer test",
+        "Content-Type": "application/json",
+    }
+
+    with patch.object(
+        service, "get_order_by_id", AsyncMock(return_value=live_order_payload)
+    ):
+        with patch("app.services.inflow_service.httpx.AsyncClient", FakeAsyncClient):
+            result = asyncio.run(
+                service.fulfill_sales_order(
+                    "sales-order-5",
+                    only_picked_items=True,
+                    source_order_data=empty_local_snapshot,
+                    source_order_identifier="TH000149-P",
+                )
+            )
+
+    assert len(recorded["payload"]["packLines"]) == 1
+    assert recorded["payload"]["packLines"][0]["quantity"]["standardQuantity"] == "1.0"
+    assert result["_techhub_partial_leg_pack_lines"][0]["quantity"]["standardQuantity"] == "1.0"
+    print("[PASS] Empty split-leg snapshots fall back to live InFlow picks")
+
+
 def test_asset_tag_serials_only_include_unshipped_remaining_items():
     """Asset-tag prep should only expose serials for the remaining leg."""
 
