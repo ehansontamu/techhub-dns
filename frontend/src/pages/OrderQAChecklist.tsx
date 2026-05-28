@@ -32,8 +32,8 @@ export default function OrderQAChecklist() {
     const location = useLocation();
     const { user } = useAuth();
     const settingsQuery = useQuery({
-        queryKey: ["admin", "settings"],
-        queryFn: () => settingsApi.getSettings(),
+        queryKey: ["workflow-settings"],
+        queryFn: () => settingsApi.getWorkflowSettings(),
     });
 
     const openOrder = (orderId?: string) => {

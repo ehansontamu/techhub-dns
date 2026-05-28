@@ -108,8 +108,8 @@ export default function OrderQAPage() {
         retry: false,
     });
     const settingsQuery = useQuery({
-        queryKey: ["admin", "settings"],
-        queryFn: () => settingsApi.getSettings(),
+        queryKey: ["workflow-settings"],
+        queryFn: () => settingsApi.getWorkflowSettings(),
     });
 
     const order = orderQuery.data ?? null;

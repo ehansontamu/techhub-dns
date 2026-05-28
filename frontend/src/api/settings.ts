@@ -23,6 +23,10 @@ export interface SystemSettings {
     picklist_print_claim_timeout_seconds: SystemSettingValue;
 }
 
+export interface WorkflowSettings {
+    require_different_user_for_pick_and_qa: SystemSettingValue;
+}
+
 export interface SyncHealthResponse {
     server_time: string;
     inflow: {
@@ -105,6 +109,11 @@ export const settingsApi = {
      */
     async getSettings(): Promise<SystemSettings> {
         const response = await apiClient.get("/system/settings");
+        return response.data;
+    },
+
+    async getWorkflowSettings(): Promise<WorkflowSettings> {
+        const response = await apiClient.get("/system/workflow-settings");
         return response.data;
     },
 
