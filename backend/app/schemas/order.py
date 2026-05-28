@@ -147,6 +147,7 @@ class OrderResponse(OrderBase):
     qa_method: Optional[str] = None
     signature_captured_at: Optional[datetime] = None
     signed_picklist_path: Optional[str] = None
+    bundle_path: Optional[str] = None
     parent_order_id: Optional[str] = None
     has_remainder: Optional[str] = None
     remainder_order_id: Optional[str] = None
