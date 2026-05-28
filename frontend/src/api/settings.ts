@@ -18,6 +18,7 @@ export interface SystemSettings {
     picklist_auto_print_enabled: SystemSettingValue;
     require_asset_tags_before_picklist: SystemSettingValue;
     require_same_user_for_tagging_and_picklist: SystemSettingValue;
+    require_different_user_for_pick_and_qa: SystemSettingValue;
     require_partial_picklist_confirmation: SystemSettingValue;
     picklist_print_claim_timeout_seconds: SystemSettingValue;
 }

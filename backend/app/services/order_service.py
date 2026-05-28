@@ -42,6 +42,7 @@ from app.services.order_splitting import OrderSplittingService
 from app.services.system_setting_service import (
     SETTING_PICKLIST_AUTO_PRINT_ENABLED,
     SETTING_REQUIRE_ASSET_TAGS_BEFORE_PICKLIST,
+    SETTING_REQUIRE_DIFFERENT_USER_FOR_PICK_AND_QA,
     SETTING_REQUIRE_PARTIAL_PICKLIST_CONFIRMATION,
     SETTING_REQUIRE_SAME_USER_FOR_TAGGING_AND_PICKLIST,
     SystemSettingService,
@@ -750,10 +751,15 @@ class OrderService:
                 "Picklist must be generated before QA can be completed"
             )
 
-        if self._is_same_actor(
-            order.picklist_generated_by,
-            technician_identifier,
-            technician,
+        if (
+            SystemSettingService.is_setting_enabled(
+                SETTING_REQUIRE_DIFFERENT_USER_FOR_PICK_AND_QA
+            )
+            and self._is_same_actor(
+                order.picklist_generated_by,
+                technician_identifier,
+                technician,
+            )
         ):
             raise ValidationError(
                 "QA must be completed by someone other than the person who picked the order.",
