@@ -1,0 +1,34 @@
+{
+  "dimensions": {
+    "college_unit": {
+      "label": "college/unit",
+      "field": "Recipient College/Unit",
+      "aliases": {
+        "bush school": ["The Bush School"],
+        "engineering": ["College of Engineering"],
+        "arts and sciences": ["College of Arts and Sciences", "Arts & Sciences"],
+        "art sci": ["College of Arts and Sciences", "Arts & Sciences"],
+        "artsci": ["College of Arts and Sciences", "Arts & Sciences"],
+        "artsc": ["College of Arts and Sciences", "Arts & Sciences"],
+        "clas": ["College of Arts and Sciences", "Arts & Sciences"],
+        "health": ["Health - Texas A&M Health"],
+        "galveston": ["Galveston - Texas A&M Galveston"]
+      }
+    },
+    "department_code": {
+      "label": "department code",
+      "field": "Department Code (include system part prefix, e.g. 02-ABCD)",
+      "aliases": {}
+    },
+    "account_number": {
+      "label": "account number",
+      "field": "Recipient Account Number(s) (comma separated)",
+      "aliases": {}
+    },
+    "recipient": {
+      "label": "recipient",
+      "field": "Recipient UIN(s) or Name(s) (comma separated)",
+      "aliases": {}
+    }
+  }
+}

@@ -1,39 +1,12 @@
 from __future__ import annotations
 
-import importlib
-import sys
-from pathlib import Path
 from typing import Any
+
+from app.services.bigcommerce_chat import chat_cli
 
 
 class BigCommerceChatError(RuntimeError):
     """Raised when the BigCommerce chat bridge cannot answer a request."""
-
-
-def _backend_root() -> Path:
-    return Path(__file__).resolve().parents[2]
-
-
-def _bc_ai_path() -> Path:
-    return _backend_root() / "BC_AI"
-
-
-def _ensure_bc_ai_importable() -> None:
-    bc_ai_path = _bc_ai_path()
-    if not bc_ai_path.exists():
-        raise BigCommerceChatError("BC_AI folder was not found under backend/.")
-
-    path_value = str(bc_ai_path)
-    if path_value not in sys.path:
-        sys.path.insert(0, path_value)
-
-
-def _load_chat_module() -> Any:
-    _ensure_bc_ai_importable()
-    try:
-        return importlib.import_module("chat_cli")
-    except Exception as exc:  # pragma: no cover - depends on optional local prototype files
-        raise BigCommerceChatError("Failed to load the BigCommerce chat module.") from exc
 
 
 def _client_history_to_chat_history(
@@ -42,10 +15,7 @@ def _client_history_to_chat_history(
     if not client_history:
         return None
 
-    chat_module = _load_chat_module()
-    history: list[dict[str, Any]] = [
-        {"role": "system", "content": chat_module.SYSTEM_PROMPT}
-    ]
+    history: list[dict[str, Any]] = [{"role": "system", "content": chat_cli.SYSTEM_PROMPT}]
 
     for item in client_history[-20:]:
         role = item.get("role")
@@ -83,11 +53,10 @@ def ask_bigcommerce_chat(
     if not trimmed_question:
         raise BigCommerceChatError("Question is required.")
 
-    chat_module = _load_chat_module()
     chat_history = _client_history_to_chat_history(client_history)
 
     try:
-        answer, history = chat_module.ask(trimmed_question, chat_history)
+        answer, history = chat_cli.ask(trimmed_question, chat_history)
     except Exception as exc:
         raise BigCommerceChatError(str(exc) or "BigCommerce chat request failed.") from exc
 
