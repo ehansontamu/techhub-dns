@@ -17,6 +17,7 @@ from app.utils.broadcast_dedup import broadcast_dedup
 from app.schemas.order import (
     OrderResponse,
     OrderDetailResponse,
+    OrderDismissRequest,
     OrderStatusUpdate,
     OrderRollbackUpdate,
     BulkStatusUpdate,
@@ -387,6 +388,7 @@ def resolve_order_by_number():
     with get_db() as db:
         order = (
             db.query(Order)
+            .filter(Order.hidden_from_ops.is_(False))
             .filter(func.lower(Order.inflow_order_id) == normalized)
             .first()
         )
@@ -413,6 +415,7 @@ def get_tag_request_candidates():
         asset_tag_requirement_cache: dict[tuple[object, ...], bool] = {}
         query = (
             db.query(Order)
+            .filter(Order.hidden_from_ops.is_(False))
             .filter(Order.status == OrderStatus.PICKED.value)
             .filter(Order.tagged_at.is_(None))
         )
@@ -458,6 +461,8 @@ def get_order(order_id):
         service = OrderService(db)
         order = service.get_order_detail(order_id)
         if not order:
+            abort(404, description="Order not found")
+        if order.hidden_from_ops:
             abort(404, description="Order not found")
         response_data = _order_detail_response_json(order, db)
         if order.inflow_data:
@@ -601,6 +606,29 @@ def rollback_order_status(order_id):
             changed_by=changed_by,
             reason=rollback_update.reason,
             expected_updated_at=rollback_update.expected_updated_at,
+        )
+
+        broadcast_dedup.request_broadcast(_broadcast_orders_sync)
+
+        return jsonify(_order_response_json(order, db))
+
+
+@bp.route("/<order_id>/dismiss", methods=["POST"])
+@require_admin
+def dismiss_order(order_id):
+    """Hide an order from operational views and reporting."""
+    data = request.get_json() or {}
+    changed_by = get_current_user_display_name()
+
+    with get_db() as db:
+        service = OrderService(db)
+        dismiss_request = OrderDismissRequest(**data)
+        order = service.dismiss_order(
+            order_id=order_id,
+            changed_by=changed_by,
+            reason=dismiss_request.reason,
+            remove_sharepoint_files=dismiss_request.remove_sharepoint_files,
+            expected_updated_at=dismiss_request.expected_updated_at,
         )
 
         broadcast_dedup.request_broadcast(_broadcast_orders_sync)
