@@ -1576,6 +1576,244 @@ def get_grouped_order_summary(
     }
 
 
+def get_ranked_orders(
+    start_date: str | None = None,
+    end_date: str | None = None,
+    days: int = 90,
+    direction: str = "desc",
+    limit: int = 10,
+    dimension: str | None = None,
+    value: str | None = None,
+    placed_by: str | None = None,
+    billing_contact: str | None = None,
+    include_statuses: list[str] | None = None,
+    exclude_statuses: list[str] | None = None,
+    max_orders: int = DEFAULT_MAX_ORDER_SCAN,
+) -> dict[str, Any]:
+    """Return orders ranked by order total for a filtered date range."""
+
+    if direction not in {"asc", "desc"}:
+        raise ValueError("direction must be 'asc' or 'desc'")
+    if dimension and dimension not in dimension_rules():
+        raise ValueError(f"Unknown dimension: {dimension}")
+
+    orders = _orders_for_analytics_range(start_date, end_date, days, max_orders)
+    filtered_orders, customer_lookup = _filter_orders_for_analytics(
+        orders,
+        dimension=dimension,
+        value=value,
+        placed_by=placed_by,
+        billing_contact=billing_contact,
+        include_statuses=include_statuses,
+        exclude_statuses=exclude_statuses,
+    )
+
+    ranked = sorted(
+        filtered_orders,
+        key=lambda order: (
+            float(order.get("total_inc_tax") or 0),
+            int(order.get("id") or 0),
+        ),
+        reverse=direction == "desc",
+    )
+    selected = ranked[: min(max(limit, 1), 100)]
+
+    return {
+        "start_date": start_date,
+        "end_date": end_date,
+        "days": days if not start_date else None,
+        "direction": direction,
+        "orders_analyzed": len(orders),
+        "matching_order_count": len(filtered_orders),
+        "returned_count": len(selected),
+        "max_orders": max_orders,
+        "is_truncated": len(orders) >= max_orders,
+        "filters": {
+            "dimension": dimension,
+            "value": value,
+            "placed_by": placed_by,
+            "billing_contact": billing_contact,
+            "include_statuses": include_statuses,
+            "exclude_statuses": exclude_statuses or ["Cancelled", "Declined", "Refunded"],
+        },
+        "orders": [_analytics_order_summary(order, customer_lookup) for order in selected],
+    }
+
+
+def get_product_sales_leaderboard(
+    start_date: str | None = None,
+    end_date: str | None = None,
+    days: int = 90,
+    product_keyword: str | None = None,
+    product_group: str | None = None,
+    brand: str | None = None,
+    dimension: str | None = None,
+    value: str | None = None,
+    placed_by: str | None = None,
+    billing_contact: str | None = None,
+    include_statuses: list[str] | None = None,
+    exclude_statuses: list[str] | None = None,
+    limit: int = 10,
+    max_orders: int = DEFAULT_MAX_ORDER_SCAN,
+    max_line_item_orders: int = DEFAULT_MAX_LINE_ITEM_ORDER_SCAN,
+) -> dict[str, Any]:
+    """Rank matching products by quantity sold and include each product's top source order."""
+
+    if dimension and dimension not in dimension_rules():
+        raise ValueError(f"Unknown dimension: {dimension}")
+
+    orders = _orders_for_analytics_range(start_date, end_date, days, max_orders)
+    filtered_orders, customer_lookup = _filter_orders_for_analytics(
+        orders,
+        dimension=dimension,
+        value=value,
+        placed_by=placed_by,
+        billing_contact=billing_contact,
+        include_statuses=include_statuses,
+        exclude_statuses=exclude_statuses,
+    )
+
+    effective_line_item_limit = max(1, min(max_line_item_orders, DEFAULT_MAX_LINE_ITEM_ORDER_SCAN))
+    scanned_orders = filtered_orders[:effective_line_item_limit]
+    product_candidate_order_count = len(filtered_orders)
+
+    quantity_by_product: Counter[str] = Counter()
+    revenue_by_product: defaultdict[str, float] = defaultdict(float)
+    order_ids_by_product: defaultdict[str, set[int]] = defaultdict(set)
+    sku_by_product: defaultdict[str, Counter[str]] = defaultdict(Counter)
+    per_order_by_product: dict[tuple[str, int], dict[str, Any]] = {}
+    overall_order_totals: dict[int, dict[str, Any]] = {}
+
+    for order, products in _products_for_orders(scanned_orders):
+        order_id = int(order["id"])
+        for product in products:
+            if not _product_matches_analytics_filter(product, product_keyword, product_group, brand):
+                continue
+            quantity = int(product.get("quantity") or 0)
+            if quantity <= 0:
+                continue
+
+            product_name = str(product.get("name") or "Unknown product")
+            line_total = float(product.get("total_inc_tax") or 0)
+            quantity_by_product[product_name] += quantity
+            revenue_by_product[product_name] += line_total
+            order_ids_by_product[product_name].add(order_id)
+            sku = str(product.get("sku") or "").strip()
+            if sku:
+                sku_by_product[product_name][sku] += quantity
+
+            row = per_order_by_product.setdefault(
+                (product_name, order_id),
+                {"order": order, "quantity": 0, "line_total": 0.0},
+            )
+            row["quantity"] += quantity
+            row["line_total"] += line_total
+
+            overall = overall_order_totals.setdefault(
+                order_id,
+                {"order": order, "quantity": 0, "line_total": 0.0},
+            )
+            overall["quantity"] += quantity
+            overall["line_total"] += line_total
+
+    def top_order_for_product(product_name: str) -> dict[str, Any] | None:
+        rows = [
+            row
+            for (name, _order_id), row in per_order_by_product.items()
+            if name == product_name
+        ]
+        if not rows:
+            return None
+        rows.sort(
+            key=lambda row: (
+                int(row["quantity"]),
+                float(row["line_total"]),
+                int(row["order"].get("id") or 0),
+            ),
+            reverse=True,
+        )
+        top = rows[0]
+        summary = _analytics_order_summary(top["order"], customer_lookup)
+        summary.update(
+            {
+                "matching_quantity": top["quantity"],
+                "matching_line_total_inc_tax": round(top["line_total"], 2),
+            }
+        )
+        return summary
+
+    sorted_products = sorted(
+        quantity_by_product.keys(),
+        key=lambda name: (
+            -quantity_by_product[name],
+            -revenue_by_product[name],
+            name,
+        ),
+    )
+    selected_products = sorted_products[: min(max(limit, 1), 50)]
+    products = []
+    for product_name in selected_products:
+        skus = [sku for sku, _quantity in sku_by_product[product_name].most_common(5)]
+        products.append(
+            {
+                "product_name": product_name,
+                "skus": skus,
+                "quantity_sold": quantity_by_product[product_name],
+                "total_inc_tax": round(revenue_by_product[product_name], 2),
+                "order_count": len(order_ids_by_product[product_name]),
+                "order_ids_sample": sorted(order_ids_by_product[product_name], reverse=True)[:10],
+                "top_order": top_order_for_product(product_name),
+            }
+        )
+
+    overall_top_order = None
+    if overall_order_totals:
+        top_overall = max(
+            overall_order_totals.values(),
+            key=lambda row: (
+                int(row["quantity"]),
+                float(row["line_total"]),
+                int(row["order"].get("id") or 0),
+            ),
+        )
+        overall_top_order = _analytics_order_summary(top_overall["order"], customer_lookup)
+        overall_top_order.update(
+            {
+                "matching_quantity": top_overall["quantity"],
+                "matching_line_total_inc_tax": round(top_overall["line_total"], 2),
+            }
+        )
+
+    return {
+        "start_date": start_date,
+        "end_date": end_date,
+        "days": days if not start_date else None,
+        "orders_analyzed": len(orders),
+        "matching_order_count": len(
+            {order_id for order_ids in order_ids_by_product.values() for order_id in order_ids}
+        ),
+        "returned_count": len(products),
+        "max_orders": max_orders,
+        "is_truncated": len(orders) >= max_orders,
+        "line_item_orders_scanned": len(scanned_orders),
+        "line_item_scan_limit": effective_line_item_limit,
+        "line_item_scan_truncated": product_candidate_order_count > effective_line_item_limit,
+        "filters": {
+            "dimension": dimension,
+            "value": value,
+            "product_keyword": product_keyword,
+            "product_group": product_group,
+            "brand": brand,
+            "placed_by": placed_by,
+            "billing_contact": billing_contact,
+            "include_statuses": include_statuses,
+            "exclude_statuses": exclude_statuses or ["Cancelled", "Declined", "Refunded"],
+        },
+        "products": products,
+        "overall_top_order": overall_top_order,
+    }
+
+
 def get_source_orders_for_summary(
     start_date: str | None = None,
     end_date: str | None = None,
@@ -3096,6 +3334,8 @@ READ_ONLY_TOOLS = {
     "get_revenue_summary": get_revenue_summary,
     "get_order_summary": get_order_summary,
     "get_grouped_order_summary": get_grouped_order_summary,
+    "get_ranked_orders": get_ranked_orders,
+    "get_product_sales_leaderboard": get_product_sales_leaderboard,
     "get_source_orders_for_summary": get_source_orders_for_summary,
     "get_shipping_spend_by_method": get_shipping_spend_by_method,
     "get_fulfillment_aging_report": get_fulfillment_aging_report,

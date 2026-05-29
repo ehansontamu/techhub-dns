@@ -17,7 +17,12 @@ import { Button } from "../components/ui/button";
 import { extractApiErrorMessage } from "../utils/apiErrors";
 import { cn } from "../lib/utils";
 
-const URL_RE = /(https?:\/\/[^\s)]+)/g;
+const ORDER_ADMIN_BASE_URL = "https://store-jsj7fos9p1.mybigcommerce.com/manage/orders";
+const ORDER_LINK_SECTION_RE = /\n{0,2}Order links:\n(?:- Order \d{4,}: https?:\/\/[^\s\n]+\n?)+\s*$/i;
+const ORDER_URL_AFTER_LABEL_RE = /\s*\(https:\/\/store-jsj7fos9p1\.mybigcommerce\.com\/manage\/orders\/\d{4,}\)/g;
+const ORDER_URL_AFTER_COLON_RE = /\bOrder\s+#?(\d{4,})[:\s-]+https:\/\/store-jsj7fos9p1\.mybigcommerce\.com\/manage\/orders\/\1/g;
+const ORDER_URL_RE = /https:\/\/store-jsj7fos9p1\.mybigcommerce\.com\/manage\/orders\/(\d{4,})/g;
+const MESSAGE_TOKEN_RE = /\bOrder\s+#?(\d{4,})\b|(https?:\/\/[^\s)]+)/gi;
 
 function chatErrorMessage(error: unknown): string {
   if (typeof error === "object" && error !== null && "response" in error) {
@@ -30,26 +35,67 @@ function chatErrorMessage(error: unknown): string {
   return extractApiErrorMessage(error, "BigCommerce chat is unavailable.");
 }
 
+function cleanMessageText(text: string) {
+  return text
+    .replace(ORDER_LINK_SECTION_RE, "")
+    .replace(ORDER_URL_AFTER_LABEL_RE, "")
+    .replace(ORDER_URL_AFTER_COLON_RE, "Order $1")
+    .replace(ORDER_URL_RE, "Order $1")
+    .trimEnd();
+}
+
 function renderMessageText(text: string) {
-  const parts = text.split(URL_RE);
-  return parts.map((part, index) => {
-    if (!part.match(URL_RE)) {
-      return <span key={`${part}-${index}`}>{part}</span>;
+  const cleanedText = cleanMessageText(text);
+  const parts: JSX.Element[] = [];
+  let position = 0;
+
+  for (const match of cleanedText.matchAll(MESSAGE_TOKEN_RE)) {
+    const start = match.index ?? 0;
+    if (start > position) {
+      parts.push(
+        <span key={`text-${start}`}>{cleanedText.slice(position, start)}</span>
+      );
     }
 
-    return (
-      <a
-        key={`${part}-${index}`}
-        href={part}
-        target="_blank"
-        rel="noreferrer"
-        className="inline-flex items-center gap-1 text-primary underline-offset-4 hover:underline"
-      >
-        {part}
-        <ExternalLink className="h-3.5 w-3.5" />
-      </a>
-    );
-  });
+    const orderId = match[1];
+    const url = match[2];
+    if (orderId) {
+      const label = match[0];
+      parts.push(
+        <a
+          key={`order-${orderId}-${start}`}
+          href={`${ORDER_ADMIN_BASE_URL}/${orderId}`}
+          target="_blank"
+          rel="noreferrer"
+          className="inline-flex items-center gap-1 text-primary underline-offset-4 hover:underline"
+        >
+          {label}
+          <ExternalLink className="h-3.5 w-3.5" />
+        </a>
+      );
+    } else if (url) {
+      parts.push(
+        <a
+          key={`url-${start}`}
+          href={url}
+          target="_blank"
+          rel="noreferrer"
+          className="inline-flex items-center gap-1 text-primary underline-offset-4 hover:underline"
+        >
+          Open link
+          <ExternalLink className="h-3.5 w-3.5" />
+        </a>
+      );
+    }
+
+    position = start + match[0].length;
+  }
+
+  if (position < cleanedText.length) {
+    parts.push(<span key="text-end">{cleanedText.slice(position)}</span>);
+  }
+
+  return parts;
 }
 
 export default function BigCommerceChat() {

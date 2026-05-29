@@ -27,13 +27,17 @@ except ZoneInfoNotFoundError:
     DISPLAY_TIMEZONE = None if DISPLAY_TIMEZONE_NAME == "America/Chicago" else timezone.utc
 
 
-SYSTEM_PROMPT = """You are a read-only assistant for a BigCommerce store.
+SYSTEM_PROMPT = f"""You are a read-only assistant for a BigCommerce store.
 Use tools for store facts. Do not guess order statuses, totals, inventory, or customer details.
 Never claim you can change, cancel, refund, edit, fulfill, or update anything.
-When you mention a specific order ID, include the BigCommerce order link using https://store-jsj7fos9p1.mybigcommerce.com/manage/orders/{order_id}.
+Current date: {date.today().isoformat()}.
+When you mention a specific order ID, write it as "Order 1234"; the web UI will make it clickable. Do not print raw BigCommerce admin URLs.
 When asked for total/store-wide revenue, use get_revenue_summary. Do not use college/unit breakdowns unless the user explicitly asks for a breakdown/by college/by unit.
 When asked what customers were charged for shipping by carrier or method, use get_shipping_spend_by_method. Do not treat shipping carriers like product keywords. When asked what the store/team spent or paid to carriers for shipping, explain that the current BigCommerce order API data does not expose actual carrier invoice cost.
-For flexible analytics, prefer get_order_summary for filtered totals, get_grouped_order_summary for "by month/status/customer/college/product" breakdowns, and get_source_orders_for_summary when the user asks to audit or show the orders behind a number.
+For flexible analytics, prefer get_order_summary for filtered totals and get_grouped_order_summary for "by month/status/customer/college/product" breakdowns.
+For biggest/largest/highest-value or smallest/lowest-value order questions, use get_ranked_orders.
+For product popularity, top products, "which product sold most", "which order had the most of a product", or combined product/source-order questions, use get_product_sales_leaderboard. Prefer this over chaining get_grouped_order_summary and get_source_orders_for_summary.
+Use get_source_orders_for_summary only when the user asks to audit, list, or show the source orders behind a result.
 When asked which orders took the longest to fulfill, use get_fulfillment_aging_report so the answer includes both longest completed fulfillment durations and oldest currently-open orders. Use get_oldest_unfulfilled_orders only when the user explicitly asks for currently open/unfulfilled orders.
 When asked how long a specific order took to fulfill, use get_order_fulfillment_timing.
 When a user gives a name like "Jim's order", first search recent orders by customer name.
@@ -314,6 +318,79 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "limit": {"type": "integer", "default": 50},
                     "max_orders": {"type": "integer", "default": 50000},
                     "max_line_item_orders": {"type": "integer", "default": 5000},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_ranked_orders",
+            "description": "Rank orders by total value for a date range or filter. Use for biggest/largest/highest-value and smallest/lowest-value order questions.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "start_date": {"type": "string"},
+                    "end_date": {"type": "string"},
+                    "days": {"type": "integer", "default": 90},
+                    "direction": {
+                        "type": "string",
+                        "enum": ["asc", "desc"],
+                        "default": "desc",
+                        "description": "desc for biggest/highest, asc for smallest/lowest.",
+                    },
+                    "limit": {"type": "integer", "default": 10},
+                    "dimension": {
+                        "type": "string",
+                        "enum": ["college_unit", "department_code", "account_number", "recipient"],
+                    },
+                    "value": {"type": "string"},
+                    "placed_by": {"type": "string"},
+                    "billing_contact": {"type": "string"},
+                    "include_statuses": {"type": "array", "items": {"type": "string"}},
+                    "exclude_statuses": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "default": ["Cancelled", "Declined", "Refunded"],
+                    },
+                    "max_orders": {"type": "integer", "default": 5000},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_product_sales_leaderboard",
+            "description": "Rank matching products by quantity sold and include the order with the most units for each product. Use for product popularity, top computer/product questions, and 'which order had the most of that product'.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "start_date": {"type": "string"},
+                    "end_date": {"type": "string"},
+                    "days": {"type": "integer", "default": 90},
+                    "product_keyword": {"type": "string"},
+                    "product_group": {
+                        "type": "string",
+                        "description": "Use computers for broad computer/laptop/desktop/workstation questions.",
+                    },
+                    "brand": {"type": "string"},
+                    "dimension": {
+                        "type": "string",
+                        "enum": ["college_unit", "department_code", "account_number", "recipient"],
+                    },
+                    "value": {"type": "string"},
+                    "placed_by": {"type": "string"},
+                    "billing_contact": {"type": "string"},
+                    "include_statuses": {"type": "array", "items": {"type": "string"}},
+                    "exclude_statuses": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "default": ["Cancelled", "Declined", "Refunded"],
+                    },
+                    "limit": {"type": "integer", "default": 10},
+                    "max_orders": {"type": "integer", "default": 5000},
+                    "max_line_item_orders": {"type": "integer", "default": 500},
                 },
             },
         },
@@ -761,18 +838,7 @@ def _extract_relevant_order_ids(text: str) -> list[int]:
 
 
 def _add_order_links(answer: str) -> str:
-    order_ids = [
-        order_id
-        for order_id in _extract_relevant_order_ids(answer)
-        if _order_url(order_id) not in answer
-    ]
-    if not order_ids:
-        return answer
-
-    lines = ["", "Order links:"]
-    for order_id in order_ids:
-        lines.append(f"- Order {order_id}: {_order_url(order_id)}")
-    return f"{answer.rstrip()}\n" + "\n".join(lines)
+    return answer
 
 
 def _format_purchase_breakdown(result: dict[str, Any]) -> str:
@@ -1072,32 +1138,80 @@ def _format_grouped_order_summary(result: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _format_popular_product_summary(result: dict[str, Any]) -> str:
-    groups = result.get("groups") or []
-    if not groups:
-        return f"I did not find matching products for {_date_range_label(result)}."
-
-    top = groups[0]
+def _format_ranked_orders(result: dict[str, Any]) -> str:
+    orders = result.get("orders") or []
+    direction = result.get("direction") or "desc"
+    label = "Highest-value" if direction == "desc" else "Lowest-value"
     lines = [
         (
-            f"The most popular matching product for {_date_range_label(result)} was "
-            f"{top.get('group')} with {_format_number(top.get('item_quantity') or 0)} "
-            f"{_plural(top.get('item_quantity') or 0, 'item')} sold."
+            f"{label} orders for {_date_range_label(result)} "
+            f"({result.get('matching_order_count')} matching orders):"
+        )
+    ]
+
+    for index, order in enumerate(orders, start=1):
+        lines.append(
+            (
+                f"{index}. Order {order.get('order_id')} | "
+                f"{_format_money(float(order.get('total_inc_tax') or 0))} | "
+                f"{order.get('status')} | placed by {order.get('placed_by')} | "
+                f"{order.get('college_unit')} | {order.get('date_created')}"
+            )
+        )
+
+    if result.get("is_truncated"):
+        lines.append(
+            f"Warning: order scan hit max_orders={result.get('max_orders')}; ranking may be incomplete."
+        )
+
+    return "\n".join(lines)
+
+
+def _format_product_sales_leaderboard(result: dict[str, Any]) -> str:
+    products = result.get("products") or []
+    if not products:
+        return f"I did not find matching product sales for {_date_range_label(result)}."
+
+    top = products[0]
+    top_order = top.get("top_order") or {}
+    lines = [
+        (
+            f"Top matching product for {_date_range_label(result)}: "
+            f"{top.get('product_name')} with "
+            f"{_format_number(top.get('quantity_sold') or 0)} units sold."
         ),
         (
-            f"Revenue: {_format_money(top.get('total_inc_tax') or 0)} across "
-            f"{top.get('order_count')} {_plural(top.get('order_count') or 0, 'order')}."
+            f"Product revenue: {_format_money(float(top.get('total_inc_tax') or 0))} "
+            f"across {top.get('order_count')} {_plural(top.get('order_count') or 0, 'order')}."
         ),
     ]
 
-    if len(groups) > 1:
-        lines.extend(["", "Next highest:"])
-        for index, group in enumerate(groups[1:5], start=2):
+    if top_order:
+        lines.extend(
+            [
+                "",
+                (
+                    f"Order with the most of that product: Order {top_order.get('order_id')} "
+                    f"with {_format_number(top_order.get('matching_quantity') or 0)} units."
+                ),
+                (
+                    f"Placed by {top_order.get('placed_by') or 'Unknown'} | "
+                    f"{top_order.get('college_unit') or 'Unknown college/unit'} | "
+                    f"{top_order.get('status') or 'Unknown status'} | "
+                    f"matching line total "
+                    f"{_format_money(float(top_order.get('matching_line_total_inc_tax') or 0))}."
+                ),
+            ]
+        )
+
+    if len(products) > 1:
+        lines.extend(["", "Next highest products:"])
+        for index, product in enumerate(products[1:5], start=2):
             lines.append(
                 (
-                    f"{index}. {group.get('group')}: "
-                    f"{_format_number(group.get('item_quantity') or 0)} items, "
-                    f"{_format_money(group.get('total_inc_tax') or 0)}"
+                    f"{index}. {product.get('product_name')}: "
+                    f"{_format_number(product.get('quantity_sold') or 0)} units, "
+                    f"{_format_money(float(product.get('total_inc_tax') or 0))}"
                 )
             )
 
@@ -1106,96 +1220,13 @@ def _format_popular_product_summary(result: dict[str, Any]) -> str:
             (
                 f"Warning: line-item scan was capped at "
                 f"{result.get('line_item_orders_scanned')} orders "
-                f"(limit {result.get('line_item_scan_limit')}); this may miss older orders."
+                f"(limit {result.get('line_item_scan_limit')}); this can miss older orders."
             )
         )
     if result.get("is_truncated"):
         lines.append(
             f"Warning: order scan hit max_orders={result.get('max_orders')}; totals may be incomplete."
         )
-
-    return "\n".join(lines)
-
-
-def _format_popular_product_with_top_order(
-    grouped_result: dict[str, Any],
-    source_result: dict[str, Any],
-) -> str:
-    groups = grouped_result.get("groups") or []
-    if not groups:
-        return f"I did not find matching computer products for {_date_range_label(grouped_result)}."
-
-    top_product = groups[0]
-    product_name = str(top_product.get("group") or "Unknown product")
-
-    order_rows: list[dict[str, Any]] = []
-    for order in source_result.get("orders") or []:
-        matching_products = order.get("matching_products") or []
-        quantity = sum(int(product.get("quantity") or 0) for product in matching_products)
-        line_total = sum(float(product.get("total_inc_tax") or 0) for product in matching_products)
-        if quantity <= 0:
-            continue
-        order_rows.append(
-            {
-                "order": order,
-                "quantity": quantity,
-                "line_total": line_total,
-            }
-        )
-
-    lines = [
-        (
-            f"The computer sold most often for {_date_range_label(grouped_result)} was "
-            f"{product_name}: {_format_number(top_product.get('item_quantity') or 0)} "
-            f"{_plural(top_product.get('item_quantity') or 0, 'unit')} sold."
-        ),
-        (
-            f"That product accounted for {_format_money(top_product.get('total_inc_tax') or 0)} "
-            f"across {top_product.get('order_count')} "
-            f"{_plural(top_product.get('order_count') or 0, 'order')}."
-        ),
-    ]
-
-    if order_rows:
-        order_rows.sort(
-            key=lambda row: (
-                -int(row["quantity"]),
-                -float(row["line_total"]),
-                -int(row["order"].get("order_id") or 0),
-            )
-        )
-        top_row = order_rows[0]
-        top_order = top_row["order"]
-        lines.extend(
-            [
-                "",
-                (
-                    f"The order with the most of that computer was Order "
-                    f"{top_order.get('order_id')} ({_order_url(top_order.get('order_id'))}) "
-                    f"with {_format_number(top_row['quantity'])} "
-                    f"{_plural(top_row['quantity'], 'unit')}."
-                ),
-                (
-                    f"Placed by {top_order.get('placed_by') or 'Unknown'} | "
-                    f"{top_order.get('college_unit') or 'Unknown college/unit'} | "
-                    f"{top_order.get('status') or 'Unknown status'} | "
-                    f"matching line total {_format_money(top_row['line_total'])}."
-                ),
-            ]
-        )
-    else:
-        lines.append("")
-        lines.append("I found the top computer, but could not identify a source order for it within the scan cap.")
-
-    if grouped_result.get("line_item_scan_truncated") or source_result.get("line_item_scan_truncated"):
-        lines.append(
-            (
-                "Warning: the line-item scan was capped, so this can miss older "
-                "orders in the requested range."
-            )
-        )
-    if grouped_result.get("is_truncated") or source_result.get("is_truncated"):
-        lines.append("Warning: the order scan was capped, so totals may be incomplete.")
 
     return "\n".join(lines)
 
@@ -1237,62 +1268,6 @@ def _format_source_orders(result: dict[str, Any]) -> str:
                 f"{result.get('line_item_orders_scanned')} orders "
                 f"(limit {result.get('line_item_scan_limit')})."
             )
-        )
-
-    return "\n".join(lines)
-
-
-def _format_order_extreme(result: dict[str, Any], direction: str) -> str:
-    orders = result.get("orders") or []
-    if not orders:
-        return f"I did not find any matching orders for {_date_range_label(result)}."
-
-    def order_total(order: dict[str, Any]) -> float:
-        try:
-            return float(order.get("total_inc_tax") or 0)
-        except (TypeError, ValueError):
-            return 0.0
-
-    reverse = direction == "largest"
-    ranked_orders = sorted(orders, key=order_total, reverse=reverse)
-    top_order = ranked_orders[0]
-    top_total = order_total(top_order)
-    tied_orders = [
-        order
-        for order in ranked_orders
-        if order.get("order_id") != top_order.get("order_id") and order_total(order) == top_total
-    ]
-
-    adjective = "biggest" if direction == "largest" else "smallest"
-    lines = [
-        (
-            f"The {adjective} order for {_date_range_label(result)} was "
-            f"Order {top_order.get('order_id')} ({_order_url(top_order.get('order_id'))}) "
-            f"at {_format_money(top_total)}."
-        ),
-        (
-            f"Placed by {top_order.get('placed_by') or 'Unknown'} | "
-            f"{top_order.get('college_unit') or 'Unknown college/unit'} | "
-            f"{top_order.get('status') or 'Unknown status'} | "
-            f"{top_order.get('date_created') or 'Unknown date'}."
-        ),
-    ]
-
-    if tied_orders:
-        tied_order_ids = ", ".join(f"Order {order.get('order_id')}" for order in tied_orders)
-        lines.append(f"Tie at {_format_money(top_total)} with: {tied_order_ids}.")
-
-    if result.get("matching_order_count"):
-        lines.append(
-            (
-                f"Compared {result.get('matching_order_count')} matching "
-                f"{_plural(int(result.get('matching_order_count') or 0), 'order')}."
-            )
-        )
-
-    if result.get("is_truncated"):
-        lines.append(
-            f"Warning: this hit max_orders={result.get('max_orders')}; the ranking may be incomplete."
         )
 
     return "\n".join(lines)
@@ -1943,116 +1918,6 @@ def _months_to_days(months: int) -> int:
     return max(1, months * 31)
 
 
-def _extract_basic_date_range(question: str) -> dict[str, Any]:
-    normalized = question.lower()
-
-    year_match = re.search(r"\b(20\d{2})\b", question)
-    if year_match:
-        year = int(year_match.group(1))
-        return {
-            "start_date": f"{year}-01-01",
-            "end_date": None if year == date.today().year else f"{year + 1}-01-01",
-        }
-
-    if "this year" in normalized or "year to date" in normalized or "ytd" in normalized:
-        return {"start_date": f"{date.today().year}-01-01", "end_date": None}
-
-    month_match = re.search(r"\blast\s+(\d+)\s+months?\b", normalized)
-    if month_match:
-        return {"days": _months_to_days(int(month_match.group(1)))}
-
-    day_match = re.search(r"\blast\s+(\d+)\s+days?\b", normalized)
-    if day_match:
-        return {"days": int(day_match.group(1))}
-
-    if "last week" in normalized or "past week" in normalized:
-        return {"days": 7}
-
-    return {"days": 90}
-
-
-def _extract_order_extreme_request(question: str) -> dict[str, Any] | None:
-    normalized = question.lower()
-    if "order" not in normalized:
-        return None
-
-    largest_terms = [
-        "biggest",
-        "largest",
-        "highest value",
-        "highest-value",
-        "highest total",
-        "most expensive",
-        "top order",
-    ]
-    smallest_terms = [
-        "smallest",
-        "lowest value",
-        "lowest-value",
-        "lowest total",
-        "least expensive",
-    ]
-
-    direction = None
-    if any(term in normalized for term in largest_terms):
-        direction = "largest"
-    elif any(term in normalized for term in smallest_terms):
-        direction = "smallest"
-
-    if direction is None:
-        return None
-
-    args = _extract_basic_date_range(question)
-    args.update(
-        {
-            "direction": direction,
-            "limit": 250,
-            "max_orders": 50000,
-            "exclude_statuses": ["Cancelled", "Declined", "Refunded"],
-        }
-    )
-    return args
-
-
-def _extract_popular_brand_product_request(question: str) -> dict[str, Any] | None:
-    normalized = question.lower()
-    if not any(phrase in normalized for phrase in ["most popular", "top selling", "top-selling", "best selling", "best-selling"]):
-        return None
-
-    group = None
-    if any(word in normalized for word in ["machine", "machines", "computer", "computers", "laptop", "laptops", "desktop", "desktops", "workstation", "workstations"]):
-        group = "computers"
-    if not group:
-        return None
-
-    brand = None
-    for candidate in ["Dell", "HP", "Lenovo", "Apple", "Microsoft"]:
-        if re.search(rf"\b{re.escape(candidate.lower())}\b", normalized):
-            brand = candidate
-            break
-
-    args = _extract_basic_date_range(question)
-    args.update({
-        "group_by": "product_name",
-        "product_group": group,
-        "brand": brand,
-        "limit": 10,
-        "sort_by": "items",
-        "max_orders": WEB_MAX_ORDER_SCAN,
-        "max_line_item_orders": min(WEB_MAX_LINE_ITEM_ORDER_SCAN, 250),
-    })
-    return args
-
-
-def _looks_like_popular_product_top_order_request(question: str) -> bool:
-    normalized = question.lower()
-    return (
-        "order" in normalized
-        and any(phrase in normalized for phrase in ["most of that", "which order had", "what order had"])
-        and _extract_popular_brand_product_request(question) is not None
-    )
-
-
 def _resolve_first_name_from_history(
     customer: str,
     messages: list[dict[str, Any]],
@@ -2087,15 +1952,6 @@ def ask(question: str, messages: list[dict[str, Any]] | None = None) -> tuple[st
     if _looks_like_model_info_request(question):
         model = os.getenv("LLM_MODEL", "").strip() or "not set"
         answer = f"This local chat is configured to use `{model}` via `LLM_MODEL`."
-        history.append({"role": "user", "content": question})
-        history.append({"role": "assistant", "content": answer})
-        return answer, history
-
-    order_extreme_args = _extract_order_extreme_request(question)
-    if order_extreme_args:
-        direction = order_extreme_args.pop("direction")
-        result = READ_ONLY_TOOLS["get_source_orders_for_summary"](**order_extreme_args)
-        answer = _format_order_extreme(result, direction)
         history.append({"role": "user", "content": question})
         history.append({"role": "assistant", "content": answer})
         return answer, history
@@ -2145,42 +2001,6 @@ def ask(question: str, messages: list[dict[str, Any]] | None = None) -> tuple[st
     if oldest_unfulfilled_args:
         result = READ_ONLY_TOOLS["get_oldest_unfulfilled_orders"](**oldest_unfulfilled_args)
         answer = _add_order_links(_format_oldest_unfulfilled(result))
-        history.append({"role": "user", "content": question})
-        history.append({"role": "assistant", "content": answer})
-        return answer, history
-
-    popular_brand_args = _extract_popular_brand_product_request(question)
-    if popular_brand_args:
-        result = READ_ONLY_TOOLS["get_grouped_order_summary"](**popular_brand_args)
-        if _looks_like_popular_product_top_order_request(question):
-            top_groups = result.get("groups") or []
-            if top_groups:
-                top_product_name = str(top_groups[0].get("group") or "")
-                source_args = {
-                    key: value
-                    for key, value in popular_brand_args.items()
-                    if key
-                    in {
-                        "start_date",
-                        "end_date",
-                        "days",
-                        "max_orders",
-                        "max_line_item_orders",
-                    }
-                }
-                source_args.update(
-                    {
-                        "product_keyword": top_product_name,
-                        "limit": 250,
-                        "exclude_statuses": ["Cancelled", "Declined", "Refunded"],
-                    }
-                )
-                source_result = READ_ONLY_TOOLS["get_source_orders_for_summary"](**source_args)
-                answer = _format_popular_product_with_top_order(result, source_result)
-            else:
-                answer = _format_popular_product_summary(result)
-        else:
-            answer = _format_popular_product_summary(result)
         history.append({"role": "user", "content": question})
         history.append({"role": "assistant", "content": answer})
         return answer, history
@@ -2246,6 +2066,10 @@ def ask(question: str, messages: list[dict[str, Any]] | None = None) -> tuple[st
                 formatted_direct_answer = _format_order_summary(json.loads(result))
             if name == "get_grouped_order_summary":
                 formatted_direct_answer = _format_grouped_order_summary(json.loads(result))
+            if name == "get_ranked_orders":
+                formatted_direct_answer = _format_ranked_orders(json.loads(result))
+            if name == "get_product_sales_leaderboard":
+                formatted_direct_answer = _format_product_sales_leaderboard(json.loads(result))
             if name == "get_source_orders_for_summary":
                 formatted_direct_answer = _format_source_orders(json.loads(result))
             if name == "get_shipping_spend_by_method":
