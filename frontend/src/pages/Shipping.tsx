@@ -4,7 +4,7 @@ import { isAxiosError } from "axios";
 import { useNavigate } from "react-router-dom";
 import { OrderStatus, ShippingWorkflowStatus, ShippingWorkflowStatusDisplayNames } from "../types/order";
 import { SkeletonTable } from "../components/Skeleton";
-import { PackageSearch, Truck, CheckCircle } from "lucide-react";
+import { PackageSearch, Truck } from "lucide-react";
 import { useOrdersWebSocket } from "../hooks/useOrdersWebSocket";
 import { ordersApi } from "../api/orders";
 import { invalidateOrderQueries } from "../queries/orders";
@@ -79,18 +79,13 @@ export default function Shipping() {
         // Treat undefined/null as WORK_AREA (default state before any workflow action)
         const status = currentStatus ?? ShippingWorkflowStatus.WORK_AREA;
 
-        let nextStatus: ShippingWorkflowStatus | null = null;
-        if (status === ShippingWorkflowStatus.WORK_AREA) {
-            nextStatus = ShippingWorkflowStatus.DOCK;
-        } else if (status === ShippingWorkflowStatus.DOCK) {
-            nextStatus = ShippingWorkflowStatus.SHIPPED;
-        } else {
+        if (status === ShippingWorkflowStatus.SHIPPED) {
             toast.info("Already shipped");
             return;
         }
 
         setPendingOrderIds((prev) => new Set(prev).add(orderId));
-        updateShippingWorkflowMutation.mutate({ orderId, status: nextStatus });
+        updateShippingWorkflowMutation.mutate({ orderId, status: ShippingWorkflowStatus.SHIPPED });
     };
 
     const handleViewDetail = (orderId?: string) => {
@@ -179,7 +174,7 @@ export default function Shipping() {
                                                             const normalized = current ?? ShippingWorkflowStatus.WORK_AREA;
                                                             const isPending = pendingOrderIds.has(order.id);
 
-                                                            if (normalized === ShippingWorkflowStatus.WORK_AREA) {
+                                                            if (normalized !== ShippingWorkflowStatus.SHIPPED) {
                                                                 return (
                                                                     <Button
                                                                         size="sm"
@@ -191,22 +186,6 @@ export default function Shipping() {
                                                                         disabled={isPending}
                                                                     >
                                                                         <Truck className="h-3.5 w-3.5 mr-1" />
-                                                                        Move to Dock
-                                                                    </Button>
-                                                                );
-                                                            }
-                                                            if (normalized === ShippingWorkflowStatus.DOCK) {
-                                                                return (
-                                                                    <Button
-                                                                        size="sm"
-                                                                        variant="default"
-                                                                        onClick={(e) => {
-                                                                            e.stopPropagation();
-                                                                            handleAdvanceWorkflow(order.id, normalized);
-                                                                        }}
-                                                                        disabled={isPending}
-                                                                    >
-                                                                        <CheckCircle className="h-3.5 w-3.5 mr-1" />
                                                                         Mark Shipped
                                                                     </Button>
                                                                 );
