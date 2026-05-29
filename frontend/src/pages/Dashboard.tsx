@@ -65,9 +65,10 @@ interface StatCardProps {
   icon: React.ElementType;
   loading: boolean;
   accent?: "maroon" | "slate" | "green";
+  to?: string;
 }
 
-function StatCard({ title, value, icon: Icon, loading, accent = "slate" }: StatCardProps) {
+function StatCard({ title, value, icon: Icon, loading, accent = "slate", to }: StatCardProps) {
   const animatedValue = useAnimatedCounter(loading ? 0 : value);
 
   const accentClasses = {
@@ -76,8 +77,8 @@ function StatCard({ title, value, icon: Icon, loading, accent = "slate" }: StatC
     green: "bg-emerald-600 text-white",
   };
 
-  return (
-    <div className="group relative overflow-hidden rounded-2xl border border-border/70 bg-card/80 p-5 shadow-none transition-colors hover:bg-card">
+  const cardContent = (
+    <div className="group relative h-full overflow-hidden rounded-2xl border border-border/70 bg-card/80 p-5 shadow-none transition-colors hover:bg-card">
       <div className={`absolute bottom-0 right-0 rounded-tl-2xl p-3 ${accentClasses[accent]}`}>
         <Icon className="h-5 w-5" />
       </div>
@@ -92,6 +93,19 @@ function StatCard({ title, value, icon: Icon, loading, accent = "slate" }: StatC
         )}
       </div>
     </div>
+  );
+
+  if (!to) {
+    return <div className="h-full">{cardContent}</div>;
+  }
+
+  return (
+    <Link
+      to={to}
+      className="block h-full rounded-2xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+    >
+      {cardContent}
+    </Link>
   );
 }
 
@@ -364,6 +378,7 @@ export default function Dashboard() {
             icon={Package}
             loading={statusLoading}
             accent="slate"
+            to="/orders"
           />
           <StatCard
             title="Ready for QA"
@@ -371,6 +386,7 @@ export default function Dashboard() {
             icon={CheckCircle2}
             loading={statusLoading}
             accent="maroon"
+            to="/order-qa"
           />
           <StatCard
             title="Completed Today"
@@ -385,6 +401,7 @@ export default function Dashboard() {
             icon={Activity}
             loading={perfLoading}
             accent="slate"
+            to="/delivery/dispatch"
           />
         </div>
       </div>
