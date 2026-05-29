@@ -920,10 +920,10 @@ def _format_direct_tool_answer(name: str, result: dict[str, Any]) -> str | None:
 
 
 def _cache_tool_result_failed(name: str, result: dict[str, Any]) -> bool:
+    if name in CACHE_TOOL_NAMES and result.get("error"):
+        return True
     if name != "run_bigcommerce_readonly_query":
         return False
-    if result.get("error"):
-        return True
     cache_status = result.get("cache_status") or {}
     return int(result.get("row_count") or 0) == 0 and int(cache_status.get("order_count") or 0) == 0
 
@@ -2078,6 +2078,77 @@ def _extract_revenue_summary_request(question: str) -> dict[str, Any] | None:
     return None
 
 
+def _extract_ranked_order_request(question: str) -> dict[str, Any] | None:
+    normalized = question.lower()
+    if "order" not in normalized:
+        return None
+
+    sort_by = "total_inc_tax"
+    direction = "desc"
+    if any(word in normalized for word in ["largest", "biggest", "highest", "highest-value", "expensive"]):
+        sort_by = "total_inc_tax"
+        direction = "desc"
+    elif any(word in normalized for word in ["smallest", "lowest", "lowest-value", "cheapest"]):
+        sort_by = "total_inc_tax"
+        direction = "asc"
+    elif any(word in normalized for word in ["first", "earliest", "oldest"]):
+        sort_by = "date_created"
+        direction = "asc"
+    elif any(phrase in normalized for phrase in ["latest", "newest", "most recent"]):
+        sort_by = "date_created"
+        direction = "desc"
+    elif any(phrase in normalized for phrase in ["most items", "largest item", "most units"]):
+        sort_by = "items_total"
+        direction = "desc"
+    else:
+        return None
+
+    args: dict[str, Any] = {
+        "sort_by": sort_by,
+        "direction": direction,
+        "limit": 10,
+        "max_orders": 5000,
+        "exclude_statuses": ["Cancelled", "Declined", "Refunded"],
+    }
+
+    year_match = re.search(r"\b(20\d{2})\b", question)
+    if year_match:
+        year = int(year_match.group(1))
+        args["start_date"] = f"{year}-01-01"
+        args["end_date"] = None if year == date.today().year else f"{year + 1}-01-01"
+        return args
+
+    day_match = re.search(r"\blast\s+(\d+)\s+days?\b", normalized)
+    if day_match:
+        args["days"] = int(day_match.group(1))
+        return args
+
+    month_match = re.search(r"\blast\s+(\d+)\s+months?\b", normalized)
+    if month_match:
+        args["days"] = _months_to_days(int(month_match.group(1)))
+        return args
+
+    if "last week" in normalized:
+        args["days"] = 7
+        return args
+
+    if "last month" in normalized:
+        args["days"] = 31
+        return args
+
+    if "this year" in normalized or "year to date" in normalized or "ytd" in normalized:
+        args["start_date"] = f"{date.today().year}-01-01"
+        args["end_date"] = None
+        return args
+
+    if "all time" in normalized or "all-time" in normalized or "ever" in normalized:
+        args["start_date"] = "2000-01-01"
+        args["end_date"] = None
+        return args
+
+    return args
+
+
 def _extract_shipping_spend_request(question: str) -> dict[str, Any] | None:
     normalized = question.lower()
     if "shipping" not in normalized and "fedex" not in normalized and "ups" not in normalized:
@@ -2200,6 +2271,14 @@ def ask(question: str, messages: list[dict[str, Any]] | None = None) -> tuple[st
     if _looks_like_model_info_request(question):
         model = os.getenv("LLM_MODEL", "").strip() or "not set"
         answer = f"This local chat is configured to use `{model}` via `LLM_MODEL`."
+        history.append({"role": "user", "content": question})
+        history.append({"role": "assistant", "content": answer})
+        return answer, history
+
+    ranked_order_args = _extract_ranked_order_request(question)
+    if ranked_order_args:
+        result = READ_ONLY_TOOLS["get_ranked_orders"](**ranked_order_args)
+        answer = _add_order_links(_format_ranked_orders(result))
         history.append({"role": "user", "content": question})
         history.append({"role": "assistant", "content": answer})
         return answer, history
