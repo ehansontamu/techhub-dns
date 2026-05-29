@@ -31,11 +31,12 @@ SYSTEM_PROMPT = f"""You are a read-only assistant for a BigCommerce store.
 Use tools for store facts. Do not guess order statuses, totals, inventory, or customer details.
 Never claim you can change, cancel, refund, edit, fulfill, or update anything.
 Current date: {date.today().isoformat()}.
+Before choosing tools for analytics questions, identify the entity being ranked or counted, the metric, the date range, and any customer/product/checkout filters. Choose the smallest tool call that directly answers that metric.
 When you mention a specific order ID, write it as "Order 1234"; the web UI will make it clickable. Do not print raw BigCommerce admin URLs.
 When asked for total/store-wide revenue, use get_revenue_summary. Do not use college/unit breakdowns unless the user explicitly asks for a breakdown/by college/by unit.
 When asked what customers were charged for shipping by carrier or method, use get_shipping_spend_by_method. Do not treat shipping carriers like product keywords. When asked what the store/team spent or paid to carriers for shipping, explain that the current BigCommerce order API data does not expose actual carrier invoice cost.
 For flexible analytics, prefer get_order_summary for filtered totals and get_grouped_order_summary for "by month/status/customer/college/product" breakdowns.
-For biggest/largest/highest-value or smallest/lowest-value order questions, use get_ranked_orders. If the user says "all time", "ever", or gives no date range, do not pass days; let get_ranked_orders use its all-time default. If the user says last week/month/N days, pass days or explicit start_date/end_date.
+For order ranking questions, use get_ranked_orders and choose the rank metric from the user's words: dollars/value/amount means sort_by="total_inc_tax"; first/earliest/submitted date means sort_by="date_created", direction="asc"; latest/newest/most recent means sort_by="date_created", direction="desc"; first order number means sort_by="order_id", direction="asc"; most/fewest items means sort_by="items_total". If the user says "all time", "ever", or gives no date range, do not pass days; let get_ranked_orders use its all-time default. If the user says last week/month/N days, pass days or explicit start_date/end_date.
 For product popularity, top products, "which product sold most", "which order had the most of a product", or combined product/source-order questions, use get_product_sales_leaderboard. Prefer this over chaining get_grouped_order_summary and get_source_orders_for_summary.
 Use get_source_orders_for_summary only when the user asks to audit, list, or show the source orders behind a result.
 When asked which orders took the longest to fulfill, use get_fulfillment_aging_report so the answer includes both longest completed fulfillment durations and oldest currently-open orders. Use get_oldest_unfulfilled_orders only when the user explicitly asks for currently open/unfulfilled orders.
@@ -327,7 +328,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "get_ranked_orders",
-            "description": "Rank orders by total value for a date range or filter. Use for biggest/largest/highest-value and smallest/lowest-value order questions. If no start_date and no days are supplied, this tool searches all time from 2000-01-01.",
+            "description": "Rank orders by a chosen order-level metric for a date range or filter. Use for biggest/largest/highest-value orders, smallest/lowest-value orders, earliest/first submitted order, latest/newest order, first order number, and most/fewest item orders. If no start_date and no days are supplied, this tool searches all time from 2000-01-01.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -343,11 +344,17 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                         "type": "integer",
                         "description": "Use only for relative ranges such as last 7 days or last month. Do not pass this for all-time/ever questions.",
                     },
+                    "sort_by": {
+                        "type": "string",
+                        "enum": ["total_inc_tax", "date_created", "order_id", "items_total"],
+                        "default": "total_inc_tax",
+                        "description": "total_inc_tax for dollar value; date_created for first/earliest/latest submitted order; order_id for lowest/highest order number; items_total for most/fewest items.",
+                    },
                     "direction": {
                         "type": "string",
                         "enum": ["asc", "desc"],
                         "default": "desc",
-                        "description": "desc for biggest/highest, asc for smallest/lowest.",
+                        "description": "desc for biggest/highest/latest/newest/most; asc for smallest/lowest/first/earliest/fewest.",
                     },
                     "limit": {"type": "integer", "default": 10},
                     "dimension": {
@@ -834,7 +841,7 @@ def _extract_relevant_order_ids(text: str) -> list[int]:
             seen.add(order_id)
             order_ids.append(order_id)
 
-    for match in re.finditer(r"\bOrder\s+#?(\d{4,})\b", text, re.IGNORECASE):
+    for match in re.finditer(r"\bOrder\s+#?(\d{1,})\b", text, re.IGNORECASE):
         add(match.group(1))
 
     for match in re.finditer(
@@ -842,15 +849,15 @@ def _extract_relevant_order_ids(text: str) -> list[int]:
         text,
         re.IGNORECASE,
     ):
-        for order_id in re.findall(r"\d{4,}", match.group(1)):
+        for order_id in re.findall(r"\d{1,}", match.group(1)):
             add(order_id)
 
     for match in re.finditer(
-        r"\border(?:s)?\s+((?:\d{4,}(?:\s*,\s*|\s+and\s+)?)+)",
+        r"\border(?:s)?\s+((?:\d{1,}(?:\s*,\s*|\s+and\s+)?)+)",
         text,
         re.IGNORECASE,
     ):
-        for order_id in re.findall(r"\d{4,}", match.group(1)):
+        for order_id in re.findall(r"\d{1,}", match.group(1)):
             add(order_id)
 
     return order_ids
@@ -1160,7 +1167,18 @@ def _format_grouped_order_summary(result: dict[str, Any]) -> str:
 def _format_ranked_orders(result: dict[str, Any]) -> str:
     orders = result.get("orders") or []
     direction = result.get("direction") or "desc"
-    label = "Highest-value" if direction == "desc" else "Lowest-value"
+    sort_by = result.get("sort_by") or "total_inc_tax"
+    labels = {
+        ("total_inc_tax", "desc"): "Highest-value",
+        ("total_inc_tax", "asc"): "Lowest-value",
+        ("date_created", "asc"): "Earliest submitted",
+        ("date_created", "desc"): "Latest submitted",
+        ("order_id", "asc"): "Lowest order-number",
+        ("order_id", "desc"): "Highest order-number",
+        ("items_total", "desc"): "Most-item",
+        ("items_total", "asc"): "Fewest-item",
+    }
+    label = labels.get((sort_by, direction), "Ranked")
     lines = [
         (
             f"{label} orders for {_date_range_label(result)} "
@@ -1168,11 +1186,16 @@ def _format_ranked_orders(result: dict[str, Any]) -> str:
         )
     ]
 
+    if not orders:
+        return "\n".join(lines + ["No matching orders found."])
+
     for index, order in enumerate(orders, start=1):
+        item_count = int(order.get("items_total") or 0)
         lines.append(
             (
                 f"{index}. Order {order.get('order_id')} | "
                 f"{_format_money(float(order.get('total_inc_tax') or 0))} | "
+                f"{_format_number(item_count)} {_plural(item_count, 'item')} | "
                 f"{order.get('status')} | placed by {order.get('placed_by')} | "
                 f"{order.get('college_unit')} | {order.get('date_created')}"
             )
@@ -1261,7 +1284,7 @@ def _format_source_orders(result: dict[str, Any]) -> str:
     for order in result.get("orders") or []:
         lines.append(
             (
-                f"- Order {order.get('order_id')} ({_order_url(order.get('order_id'))}) | "
+                f"- Order {order.get('order_id')} | "
                 f"{order.get('date_created')} | {order.get('status')} | "
                 f"placed by {order.get('placed_by')} | {order.get('college_unit')} | "
                 f"total {order.get('total_inc_tax')}"
@@ -1361,7 +1384,7 @@ def _format_oldest_unfulfilled(result: dict[str, Any]) -> str:
     for index, order in enumerate(result.get("orders") or [], start=1):
         lines.append(
             (
-                f"{index}. Order {order.get('order_id')} ({_order_url(order.get('order_id'))}) | "
+                f"{index}. Order {order.get('order_id')} | "
                 f"{order.get('status')} | age {order.get('age_days')} days "
                 f"({order.get('age_hours')} hours) | placed by {order.get('placed_by')} | "
                 f"{order.get('college_unit')} | {order.get('items_total')} items"
@@ -1400,7 +1423,7 @@ def _format_fulfillment_aging_report(result: dict[str, Any]) -> str:
     for index, order in enumerate(result.get("longest_fulfilled_orders") or [], start=1):
         lines.append(
             (
-                f"{index}. Order {order.get('order_id')} ({_order_url(order.get('order_id'))}) | "
+                f"{index}. Order {order.get('order_id')} | "
                 f"{order.get('status')} | took {order.get('days')} days "
                 f"({order.get('hours')} hours) | placed by {order.get('placed_by')} | "
                 f"{order.get('college_unit')} | {order.get('items_total')} items"
@@ -1419,7 +1442,7 @@ def _format_fulfillment_aging_report(result: dict[str, Any]) -> str:
     for index, order in enumerate(result.get("oldest_open_orders") or [], start=1):
         lines.append(
             (
-                f"{index}. Order {order.get('order_id')} ({_order_url(order.get('order_id'))}) | "
+                f"{index}. Order {order.get('order_id')} | "
                 f"{order.get('status')} | open {order.get('days')} days "
                 f"({order.get('hours')} hours) | placed by {order.get('placed_by')} | "
                 f"{order.get('college_unit')} | {order.get('items_total')} items"
@@ -1446,7 +1469,7 @@ def _format_fulfillment_timing(result: dict[str, Any]) -> str:
         duration = _format_age(result.get("fulfillment_duration"))
         lines = [
             (
-                f"Order {order_id} ({_order_url(order_id)}) took {duration} "
+                f"Order {order_id} took {duration} "
                 "from order creation to first shipment."
             ),
             f"Status: {result.get('status')}. Basis: {result.get('timing_basis')}.",
@@ -1470,7 +1493,7 @@ def _format_fulfillment_timing(result: dict[str, Any]) -> str:
         age = _format_age(result.get("age_if_unfulfilled"))
         lines = [
             (
-                f"Order {order_id} ({_order_url(order_id)}) is not fulfilled yet. "
+                f"Order {order_id} is not fulfilled yet. "
                 f"It has been open for {age} since it was created on "
                 f"{_format_timestamp(result.get('created_at') or result.get('date_created'))}. "
                 f"Status: {result.get('status')}."
@@ -1484,7 +1507,7 @@ def _format_fulfillment_timing(result: dict[str, Any]) -> str:
         return "\n".join(lines)
 
     return (
-        f"Order {order_id} ({_order_url(order_id)}) has status {result.get('status')}, "
+        f"Order {order_id} has status {result.get('status')}, "
         "but I could not determine a fulfillment duration from the available timestamps."
     )
 
@@ -1505,7 +1528,7 @@ def _format_order_contents(result: dict[str, Any]) -> str:
             [
                 "",
                 (
-                    f"Order {order.get('id')} ({_order_url(order.get('id'))}) | "
+                    f"Order {order.get('id')} | "
                     f"{order.get('date_created')} | "
                     f"{order.get('status')} | placed by {order.get('placed_by') or order.get('customer')} | "
                     f"billing {order.get('billing_contact') or 'Unknown'} | "
@@ -1556,7 +1579,6 @@ def _format_order_contents(result: dict[str, Any]) -> str:
             lines.append(
                 (
                     f"- Order {order.get('order_id')} | placed by {order.get('placed_by')} | "
-                    f"{_order_url(order.get('order_id'))} | "
                     f"billing {order.get('billing_contact')} | {order.get('college_unit')} | "
                     f"Total {order.get('total_inc_tax')}"
                 )
@@ -1599,7 +1621,7 @@ def _format_order_identity(result: dict[str, Any]) -> str:
         placed_by_suffix += f" (customer ID {placed_by.get('id')})"
 
     lines = [
-        f"Order {result.get('order_id')} identity: {_order_url(result.get('order_id'))}",
+        f"Order {result.get('order_id')} identity:",
         f"- Placed by: {placed_by.get('name') or 'Unknown'}{placed_by_suffix}",
         f"- Billing/contact: {_format_address(result.get('billing_contact'))}",
         (
@@ -1649,7 +1671,7 @@ def _extract_order_ids_from_history(messages: list[dict[str, Any]] | None) -> li
             order_ids.append(order_id)
 
     def scan(content: str) -> None:
-        for match in re.finditer(r"\bOrder\s+(\d{4,})\b", content, re.IGNORECASE):
+        for match in re.finditer(r"\bOrder\s+(\d{1,})\b", content, re.IGNORECASE):
             add(int(match.group(1)))
 
         for match in re.finditer(
@@ -1657,15 +1679,15 @@ def _extract_order_ids_from_history(messages: list[dict[str, Any]] | None) -> li
             content,
             re.IGNORECASE,
         ):
-            for order_id in re.findall(r"\d{4,}", match.group(1)):
+            for order_id in re.findall(r"\d{1,}", match.group(1)):
                 add(int(order_id))
 
         for match in re.finditer(
-            r"\border(?:s)?\s+((?:\d{4,}(?:\s*,\s*|\s+and\s+)?)+)",
+            r"\border(?:s)?\s+((?:\d{1,}(?:\s*,\s*|\s+and\s+)?)+)",
             content,
             re.IGNORECASE,
         ):
-            for order_id in re.findall(r"\d{4,}", match.group(1)):
+            for order_id in re.findall(r"\d{1,}", match.group(1)):
                 add(int(order_id))
 
     if not messages:
@@ -1721,7 +1743,7 @@ def _extract_order_identity_request(question: str) -> int | None:
     normalized = question.lower()
     if not any(phrase in normalized for phrase in ["who placed", "who ordered", "who put in"]):
         return None
-    match = re.search(r"\border\s+#?(\d{4,})\b", question, re.IGNORECASE)
+    match = re.search(r"\border\s+#?(\d{1,})\b", question, re.IGNORECASE)
     if match:
         return int(match.group(1))
     return None
@@ -1733,7 +1755,7 @@ def _extract_fulfillment_timing_request(question: str) -> int | None:
         return None
     if not any(phrase in normalized for phrase in ["how long", "take", "took", "duration"]):
         return None
-    match = re.search(r"\border\s+#?(\d{4,})\b", question, re.IGNORECASE)
+    match = re.search(r"\border\s+#?(\d{1,})\b", question, re.IGNORECASE)
     if match:
         return int(match.group(1))
     return None

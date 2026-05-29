@@ -1580,6 +1580,7 @@ def get_ranked_orders(
     start_date: str | None = None,
     end_date: str | None = None,
     days: int | None = None,
+    sort_by: str = "total_inc_tax",
     direction: str = "desc",
     limit: int = 10,
     dimension: str | None = None,
@@ -1590,8 +1591,11 @@ def get_ranked_orders(
     exclude_statuses: list[str] | None = None,
     max_orders: int = DEFAULT_MAX_ORDER_SCAN,
 ) -> dict[str, Any]:
-    """Return orders ranked by order total for a filtered date range."""
+    """Return orders ranked by a selected order-level metric for a filtered date range."""
 
+    sort_fields = {"total_inc_tax", "date_created", "order_id", "items_total"}
+    if sort_by not in sort_fields:
+        raise ValueError(f"sort_by must be one of: {', '.join(sorted(sort_fields))}")
     if direction not in {"asc", "desc"}:
         raise ValueError("direction must be 'asc' or 'desc'")
     if dimension and dimension not in dimension_rules():
@@ -1612,20 +1616,49 @@ def get_ranked_orders(
         exclude_statuses=exclude_statuses,
     )
 
-    ranked = sorted(
-        filtered_orders,
-        key=lambda order: (
-            float(order.get("total_inc_tax") or 0),
-            int(order.get("id") or 0),
-        ),
+    def rank_value(order: dict[str, Any]) -> int | float | datetime | None:
+        if sort_by == "date_created":
+            return _order_datetime(order)
+        if sort_by == "order_id":
+            try:
+                return int(order.get("id") or 0)
+            except (TypeError, ValueError):
+                return None
+        if sort_by == "items_total":
+            try:
+                return int(order.get("items_total") or 0)
+            except (TypeError, ValueError):
+                return None
+        try:
+            return float(order.get("total_inc_tax") or 0)
+        except (TypeError, ValueError):
+            return None
+
+    ranked_values: list[tuple[int | float | datetime, int, dict[str, Any]]] = []
+    missing_value_orders: list[dict[str, Any]] = []
+    for order in filtered_orders:
+        value_to_rank = rank_value(order)
+        if value_to_rank is None:
+            missing_value_orders.append(order)
+            continue
+        try:
+            order_id = int(order.get("id") or 0)
+        except (TypeError, ValueError):
+            order_id = 0
+        ranked_values.append((value_to_rank, order_id, order))
+
+    ranked_values.sort(
+        key=lambda item: (item[0], item[1]),
         reverse=direction == "desc",
     )
+    ranked = [item[2] for item in ranked_values] + missing_value_orders
     selected = ranked[: min(max(limit, 1), 100)]
 
     return {
         "start_date": effective_start_date,
         "end_date": end_date,
         "days": effective_days if not effective_start_date else None,
+        "sort_by": sort_by,
         "direction": direction,
         "orders_analyzed": len(orders),
         "matching_order_count": len(filtered_orders),
