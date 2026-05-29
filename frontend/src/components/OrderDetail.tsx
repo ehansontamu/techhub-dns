@@ -56,7 +56,9 @@ interface OrderDetailProps {
   order: OrderDetailType;
   auditLogs: AuditLog[];
   notifications: TeamsNotification[];
+  canDismissOrder: boolean;
   onStatusChange: (newStatus: OrderStatus, reason?: string) => void;
+  onDismissOrder: (reason: string, removeSharePointFiles: boolean) => Promise<void>;
   onRollbackStatus: (newStatus: OrderStatus) => void;
   onTagOrder: (tagIds: string[]) => Promise<void>;
   onRequestTags: () => Promise<void>;
@@ -68,6 +70,8 @@ export default function OrderDetail({
   order,
   auditLogs,
   notifications,
+  canDismissOrder,
+  onDismissOrder,
   onTagOrder,
   onRequestTags,
   onGeneratePicklist,
@@ -83,6 +87,11 @@ export default function OrderDetail({
   const [statusDropdownOpen, setStatusDropdownOpen] = useState(false);
 
   const [issueDialogOpen, setIssueDialogOpen] = useState(false);
+  const [issueReason, setIssueReason] = useState("");
+  const [dismissDialogOpen, setDismissDialogOpen] = useState(false);
+  const [dismissReason, setDismissReason] = useState("");
+  const [removeSharePointFiles, setRemoveSharePointFiles] = useState(true);
+  const [dismissingOrder, setDismissingOrder] = useState(false);
   const [partialConfirmOpen, setPartialConfirmOpen] = useState(false);
   const [partialConfirmSubmitting, setPartialConfirmSubmitting] = useState(false);
 
@@ -168,6 +177,26 @@ export default function OrderDetail({
     }
   };
 
+  const handleDismissOrder = async () => {
+    const trimmedReason = dismissReason.trim();
+    if (!trimmedReason) {
+      toast.error("Dismiss reason is required");
+      return;
+    }
+
+    setDismissingOrder(true);
+    try {
+      await onDismissOrder(trimmedReason, removeSharePointFiles);
+      setDismissDialogOpen(false);
+      setDismissReason("");
+      setRemoveSharePointFiles(true);
+    } catch (_error) {
+      // Error toast is handled by the parent mutation callback.
+    } finally {
+      setDismissingOrder(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <section className="rounded-2xl border border-transparent bg-card p-6 shadow-none">
@@ -196,12 +225,27 @@ export default function OrderDetail({
                         <button
                           onClick={() => {
                             setIssueDialogOpen(true);
+                            setIssueReason("");
                             setStatusDropdownOpen(false);
                           }}
                           className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-accent"
                         >
                           <AlertTriangle className="h-4 w-4 text-destructive" />
                           <span>Raise Issue</span>
+                        </button>
+                      )}
+                      {canDismissOrder && (
+                        <button
+                          onClick={() => {
+                            setDismissDialogOpen(true);
+                            setDismissReason("");
+                            setRemoveSharePointFiles(true);
+                            setStatusDropdownOpen(false);
+                          }}
+                          className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-accent"
+                        >
+                          <AlertTriangle className="h-4 w-4 text-amber-600" />
+                          <span>Dismiss Test Order</span>
                         </button>
                       )}
                       {/* For ISSUE orders: recovery targets */}
@@ -238,6 +282,8 @@ export default function OrderDetail({
                       <textarea
                         id="issue-reason"
                         placeholder="Describe the issue..."
+                        value={issueReason}
+                        onChange={(event) => setIssueReason(event.target.value)}
                         className="mt-2 w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary"
                         rows={3}
                       />
@@ -249,12 +295,69 @@ export default function OrderDetail({
                       <Button
                         variant="destructive"
                         onClick={() => {
-                          const reason = (document.getElementById("issue-reason") as HTMLTextAreaElement)?.value;
-                          onStatusChange(OrderStatus.ISSUE, reason || "");
+                          onStatusChange(OrderStatus.ISSUE, issueReason.trim());
                           setIssueDialogOpen(false);
+                          setIssueReason("");
                         }}
                       >
                         Confirm Issue
+                      </Button>
+                    </DialogFooter>
+                  </DialogContent>
+                </Dialog>
+
+                <Dialog
+                  open={dismissDialogOpen}
+                  onOpenChange={(open) => {
+                    if (dismissingOrder) return;
+                    setDismissDialogOpen(open);
+                  }}
+                >
+                  <DialogContent>
+                    <DialogHeader>
+                      <DialogTitle>Dismiss Test Order</DialogTitle>
+                      <DialogDescription>
+                        Hide this order from operational views and reporting. This is intended for test or junk orders that should stop affecting the app.
+                      </DialogDescription>
+                    </DialogHeader>
+                    <div className="space-y-4 py-4">
+                      <div>
+                        <label htmlFor="dismiss-reason" className="text-sm font-medium text-foreground">
+                          Reason
+                        </label>
+                        <textarea
+                          id="dismiss-reason"
+                          placeholder="Example: Test order - exclude from operations"
+                          value={dismissReason}
+                          onChange={(event) => setDismissReason(event.target.value)}
+                          className="mt-2 w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary"
+                          rows={3}
+                        />
+                      </div>
+                      <label className="flex items-start gap-3 rounded-md border border-border p-3 text-sm text-foreground">
+                        <input
+                          type="checkbox"
+                          checked={removeSharePointFiles}
+                          onChange={(event) => setRemoveSharePointFiles(event.target.checked)}
+                          className="mt-0.5 h-4 w-4 rounded border-border"
+                        />
+                        <span>Also remove this order&apos;s SharePoint PDFs when available.</span>
+                      </label>
+                    </div>
+                    <DialogFooter>
+                      <Button
+                        variant="outline"
+                        onClick={() => setDismissDialogOpen(false)}
+                        disabled={dismissingOrder}
+                      >
+                        Cancel
+                      </Button>
+                      <Button
+                        variant="destructive"
+                        onClick={() => void handleDismissOrder()}
+                        disabled={dismissingOrder}
+                      >
+                        {dismissingOrder ? "Dismissing..." : "Dismiss Order"}
                       </Button>
                     </DialogFooter>
                   </DialogContent>

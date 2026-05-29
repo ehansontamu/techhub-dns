@@ -25,6 +25,9 @@ class AnalyticsService:
 
         return target_date.weekday() < 5
 
+    def _visible_orders_query(self, *entities):
+        return self.db.query(*entities).filter(Order.hidden_from_ops.is_(False))
+
     def get_order_status_counts(self) -> Dict[str, int]:
         """
         Get count of orders grouped by status.
@@ -33,7 +36,7 @@ class AnalyticsService:
             Dict mapping status names to counts, e.g. {"picked": 5, "qa": 3, "delivered": 10}
         """
         results = (
-            self.db.query(Order.status, func.count(Order.id).label("count"))
+            self._visible_orders_query(Order.status, func.count(Order.id).label("count"))
             .group_by(Order.status)
             .all()
         )
@@ -66,7 +69,7 @@ class AnalyticsService:
             hour=0, minute=0, second=0, microsecond=0
         )
         completed_today = (
-            self.db.query(func.count(Order.id))
+            self._visible_orders_query(func.count(Order.id))
             .filter(
                 Order.status == OrderStatus.DELIVERED.value,
                 Order.updated_at >= today_start,
@@ -77,7 +80,7 @@ class AnalyticsService:
 
         # Count orders ready for delivery (pre-delivery status)
         ready_for_delivery = (
-            self.db.query(func.count(Order.id))
+            self._visible_orders_query(func.count(Order.id))
             .filter(Order.status == OrderStatus.PRE_DELIVERY.value)
             .scalar()
             or 0
@@ -106,7 +109,7 @@ class AnalyticsService:
 
         # Get recent orders
         recent_orders = (
-            self.db.query(Order)
+            self._visible_orders_query(Order)
             .order_by(Order.created_at.desc())
             .limit(limit * 2)
             .all()
@@ -126,6 +129,8 @@ class AnalyticsService:
         # Get recent audit log entries (status changes)
         recent_changes = (
             self.db.query(AuditLog)
+            .join(Order, AuditLog.order_id == Order.id)
+            .filter(Order.hidden_from_ops.is_(False))
             .order_by(AuditLog.timestamp.desc())
             .limit(limit * 2)
             .all()
@@ -143,7 +148,7 @@ class AnalyticsService:
         order_number_by_id: Dict[str, Optional[str]] = {}
         if unique_order_ids:
             rows = (
-                self.db.query(Order.id, Order.inflow_order_id)
+                self._visible_orders_query(Order.id, Order.inflow_order_id)
                 .filter(Order.id.in_(unique_order_ids))
                 .all()
             )
@@ -156,7 +161,7 @@ class AnalyticsService:
             # If the direct lookup misses rows, retry with a lower() predicate.
             if len(order_number_by_id) < len(unique_order_ids_lower):
                 rows_fallback = (
-                    self.db.query(Order.id, Order.inflow_order_id)
+                    self._visible_orders_query(Order.id, Order.inflow_order_id)
                     .filter(func.lower(Order.id).in_(unique_order_ids_lower))
                     .all()
                 )
@@ -210,7 +215,7 @@ class AnalyticsService:
 
         # Query orders grouped by date
         results = (
-            self.db.query(
+            self._visible_orders_query(
                 func.date(Order.signature_captured_at).label("date"),
                 Order.status,
                 func.count(Order.id).label("count"),
@@ -281,7 +286,9 @@ class AnalyticsService:
                     )
                 ).label("picked_count"),
             )
+            .join(Order, AuditLog.order_id == Order.id)
             .filter(AuditLog.timestamp >= cutoff_date)
+            .filter(Order.hidden_from_ops.is_(False))
             .group_by(func.date(AuditLog.timestamp))
             .order_by(func.date(AuditLog.timestamp).asc())
             .all()
@@ -334,8 +341,10 @@ class AnalyticsService:
                 func.extract("month", AuditLog.timestamp).label("month"),
                 func.count(AuditLog.id).label("fulfilled_count"),
             )
+            .join(Order, AuditLog.order_id == Order.id)
             .filter(
                 AuditLog.timestamp >= cutoff_date,
+                Order.hidden_from_ops.is_(False),
                 func.lower(AuditLog.to_status).in_(
                     [OrderStatus.SHIPPING.value, OrderStatus.DELIVERED.value]
                 ),
@@ -371,8 +380,10 @@ class AnalyticsService:
                 func.extract("year", AuditLog.timestamp).label("year"),
                 func.count(AuditLog.id).label("fulfilled_count"),
             )
+            .join(Order, AuditLog.order_id == Order.id)
             .filter(
                 AuditLog.timestamp >= cutoff_date,
+                Order.hidden_from_ops.is_(False),
                 func.lower(AuditLog.to_status).in_(
                     [OrderStatus.SHIPPING.value, OrderStatus.DELIVERED.value]
                 ),
