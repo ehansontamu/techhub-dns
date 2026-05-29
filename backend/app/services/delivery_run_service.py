@@ -745,9 +745,16 @@ class DeliveryRunService:
                     },
                 )
 
-        # Validate ALL orders are already delivered
+        active_orders = [
+            order for order in run.orders if not getattr(order, "hidden_from_ops", False)
+        ]
+        dismissed_orders = [
+            order for order in run.orders if getattr(order, "hidden_from_ops", False)
+        ]
+
+        # Validate ALL visible orders are already delivered
         undelivered_orders = [
-            o for o in run.orders if o.status != OrderStatus.DELIVERED.value
+            o for o in active_orders if o.status != OrderStatus.DELIVERED.value
         ]
         if undelivered_orders:
             raise ValidationError(
@@ -760,7 +767,7 @@ class DeliveryRunService:
 
         # Phase 2: fulfill in InFlow (no DB lock held during network I/O)
         inflow_successes, inflow_failures = self._fulfill_orders_in_inflow(
-            run.orders, user_id
+            active_orders, user_id
         )
 
         if inflow_failures:
@@ -777,7 +784,14 @@ class DeliveryRunService:
                 user_id=user_id,
                 description="Delivery run completion failed during inFlow fulfillment",
                 audit_metadata={
-                    "order_count": len(run.orders),
+                    "order_count": len(active_orders),
+                    "dismissed_orders_skipped": [
+                        {
+                            "order_id": str(order.id),
+                            "inflow_order_id": order.inflow_order_id,
+                        }
+                        for order in dismissed_orders
+                    ],
                     "fulfilled_orders": inflow_successes,
                     "failed_orders": inflow_failures,
                 },
@@ -788,6 +802,13 @@ class DeliveryRunService:
                 details={
                     "failed_orders": inflow_failures,
                     "fulfilled_count": len(inflow_successes),
+                    "dismissed_orders_skipped": [
+                        {
+                            "order_id": str(order.id),
+                            "inflow_order_id": order.inflow_order_id,
+                        }
+                        for order in dismissed_orders
+                    ],
                 },
             )
 
@@ -823,6 +844,13 @@ class DeliveryRunService:
                 "order_count": len(inflow_successes),
                 "completed_at": to_utc_iso_z(run.end_time),
                 "fulfilled_orders": inflow_successes,
+                "dismissed_orders_skipped": [
+                    {
+                        "order_id": str(order.id),
+                        "inflow_order_id": order.inflow_order_id,
+                    }
+                    for order in dismissed_orders
+                ],
                 "create_remainders_requested": create_remainders,
                 "partial_orders_requeued": 0,
                 "requeued_orders": [],
