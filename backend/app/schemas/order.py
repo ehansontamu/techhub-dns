@@ -54,6 +54,12 @@ class OrderUpdate(BaseModel):
     expected_updated_at: Optional[datetime] = None
 
 
+class OrderDismissRequest(BaseModel):
+    reason: str = Field(min_length=1)
+    remove_sharepoint_files: bool = True
+    expected_updated_at: Optional[datetime] = None
+
+
 class OrderStatusUpdate(BaseModel):
     status: OrderStatus
     reason: Optional[str] = None

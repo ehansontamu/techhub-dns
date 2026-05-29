@@ -1,5 +1,5 @@
 import apiClient from "./client";
-import { Order, OrderDetail, OrderStatus, OrderStatusUpdate, OrderRollbackUpdate, BulkStatusUpdate, AuditLog, ShippingWorkflowStatus } from "../types/order";
+import { Order, OrderDetail, OrderStatus, OrderStatusUpdate, OrderRollbackUpdate, BulkStatusUpdate, AuditLog, ShippingWorkflowStatus, OrderDismissUpdate } from "../types/order";
 import { normalizeExpectedUpdatedAt } from "./expectedUpdatedAt";
 
 function safeArray<T>(value: unknown): T[] {
@@ -41,6 +41,11 @@ export const ordersApi = {
         params: changedBy ? { changed_by: changedBy } : undefined,
       }
     );
+    return response.data;
+  },
+
+  dismissOrder: async (orderId: string, update: OrderDismissUpdate): Promise<Order> => {
+    const response = await apiClient.post<Order>(`/orders/${orderId}/dismiss`, normalizeExpectedUpdatedAt(update));
     return response.data;
   },
 

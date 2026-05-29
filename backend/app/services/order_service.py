@@ -3,6 +3,7 @@ import json
 import logging
 import shutil
 from copy import deepcopy
+from urllib.parse import unquote, urlparse
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timezone
 from pathlib import Path
@@ -352,6 +353,10 @@ class OrderService:
             order = query.filter(Order.inflow_order_id == order_id).first()
         return order
 
+    @staticmethod
+    def _visible_order_filter(query):
+        return query.filter(Order.hidden_from_ops.is_(False))
+
     def _cleanup_order_documents(self, order: Order) -> None:
         """Delete local document files for an order after delivery completion."""
         paths = [
@@ -371,6 +376,59 @@ class OrderService:
                         logger.info(f"Cleaned up document: {p}")
                 except Exception as e:
                     logger.warning(f"Failed to cleanup {p_str}: {e}")
+
+    @staticmethod
+    def _sharepoint_filename_from_path(path_value: Optional[str]) -> Optional[str]:
+        if not path_value or not isinstance(path_value, str) or not path_value.startswith("http"):
+            return None
+
+        parsed = urlparse(path_value)
+        filename = Path(unquote(parsed.path)).name
+        return filename or None
+
+    def _remove_order_documents(
+        self, order: Order, remove_sharepoint_files: bool = True
+    ) -> Dict[str, Any]:
+        cleanup_results: Dict[str, Any] = {
+            "local_cleanup_attempted": False,
+            "sharepoint_cleanup_requested": remove_sharepoint_files,
+            "sharepoint_deleted": [],
+            "sharepoint_failed": [],
+        }
+
+        document_fields = [
+            ("picklist_path", "picklists"),
+            ("qa_path", "qa"),
+            ("signed_picklist_path", "signed"),
+            ("bundle_path", "bundles"),
+            ("order_details_path", "order-details"),
+        ]
+
+        self._cleanup_order_documents(order)
+        cleanup_results["local_cleanup_attempted"] = True
+
+        if remove_sharepoint_files:
+            from app.services.sharepoint_service import get_sharepoint_service
+
+            sp_service = get_sharepoint_service()
+            for field_name, subfolder in document_fields:
+                path_value = getattr(order, field_name)
+                filename = self._sharepoint_filename_from_path(path_value)
+                if not filename:
+                    continue
+                if sp_service.delete_file_safe(subfolder, filename):
+                    cleanup_results["sharepoint_deleted"].append(
+                        {"field": field_name, "filename": filename, "subfolder": subfolder}
+                    )
+                else:
+                    cleanup_results["sharepoint_failed"].append(
+                        {"field": field_name, "filename": filename, "subfolder": subfolder}
+                    )
+
+        for field_name, _subfolder in document_fields:
+            setattr(order, field_name, None)
+
+        return cleanup_results
 
 
     @staticmethod
@@ -959,7 +1017,7 @@ class OrderService:
         limit: int = 100,
     ) -> tuple[List[Order], int]:
         """Get orders with filters and pagination"""
-        query = self.db.query(Order)
+        query = self._visible_order_filter(self.db.query(Order))
 
         if status:
             query = query.filter(Order.status == status.value)
@@ -1179,6 +1237,88 @@ class OrderService:
         self.db.commit()
         self.db.refresh(order)
 
+        return order
+
+    def dismiss_order(
+        self,
+        order_id: Union[UUID, str],
+        *,
+        changed_by: Optional[str],
+        reason: str,
+        remove_sharepoint_files: bool = True,
+        expected_updated_at: Optional[datetime] = None,
+    ) -> Order:
+        order = self._resolve_order(str(order_id), lock=True)
+        if not order:
+            raise NotFoundError("Order", str(order_id))
+
+        if order.hidden_from_ops:
+            raise ValidationError("Order is already dismissed from operational views")
+
+        reason = reason.strip()
+        if not reason:
+            raise ValidationError("Reason is required when dismissing an order")
+
+        self.assert_not_stale(order, expected_updated_at)
+
+        prior_state = {
+            "status": order.status,
+            "delivery_run_id": order.delivery_run_id,
+            "picklist_path": order.picklist_path,
+            "qa_path": order.qa_path,
+            "signed_picklist_path": order.signed_picklist_path,
+            "bundle_path": order.bundle_path,
+            "order_details_path": order.order_details_path,
+        }
+
+        cleanup_results = self._remove_order_documents(
+            order, remove_sharepoint_files=remove_sharepoint_files
+        )
+
+        order.hidden_from_ops = True
+        order.hidden_reason = reason
+        order.hidden_at = datetime.utcnow()
+        order.hidden_by = changed_by
+        order.updated_at = datetime.utcnow()
+
+        audit_log = AuditLog(
+            order_id=order.id,
+            changed_by=changed_by,
+            from_status=order.status,
+            to_status=order.status,
+            reason=f"Order dismissed from operational views: {reason}",
+            timestamp=datetime.utcnow(),
+            extra_metadata={
+                "action": "dismissed_from_ops",
+                "remove_sharepoint_files": remove_sharepoint_files,
+                "cleanup_results": cleanup_results,
+            },
+        )
+        self.db.add(audit_log)
+
+        audit_service = AuditService(self.db)
+        audit_service.log_order_action(
+            order_id=str(order.id),
+            action="dismissed_from_ops",
+            user_id=changed_by or "system",
+            description="Order dismissed from operational views and reporting",
+            old_value=prior_state,
+            new_value={
+                "hidden_from_ops": True,
+                "hidden_reason": reason,
+                "hidden_at": to_utc_iso_z(order.hidden_at),
+                "hidden_by": changed_by,
+                "picklist_path": order.picklist_path,
+                "qa_path": order.qa_path,
+                "signed_picklist_path": order.signed_picklist_path,
+                "bundle_path": order.bundle_path,
+                "order_details_path": order.order_details_path,
+            },
+            audit_metadata=cleanup_results,
+        )
+
+        self.db.commit()
+        self.db.refresh(order)
         return order
 
     def _rollback_targets_for_status(self, current_status: str) -> set[str]:

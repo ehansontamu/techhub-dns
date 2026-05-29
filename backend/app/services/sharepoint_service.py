@@ -350,6 +350,46 @@ class SharePointService:
             logger.error(f"Error downloading file from SharePoint: {e}")
             return None
 
+    def delete_file(self, subfolder: str, filename: str) -> bool:
+        """Delete a file from SharePoint.
+
+        Returns True when the file was deleted or did not exist.
+        """
+        if not self.is_enabled:
+            return False
+
+        drive_id = self._get_drive_id()
+        folder_path = self._get_folder_path(subfolder)
+        url = f"{GRAPH_BASE_URL}/drives/{drive_id}/root:/{folder_path}/{filename}"
+
+        with httpx.Client(timeout=60.0) as client:
+            response = client.delete(url, headers=self._get_headers())
+            if response.status_code in {204, 404}:
+                logger.info(
+                    "Deleted SharePoint file (or it was already absent): %s/%s",
+                    folder_path,
+                    filename,
+                )
+                return True
+            response.raise_for_status()
+            return True
+
+    def delete_file_safe(self, subfolder: str, filename: str) -> bool:
+        """Delete a file from SharePoint without raising."""
+        if not self.is_enabled:
+            return False
+
+        try:
+            return self.delete_file(subfolder, filename)
+        except Exception as exc:
+            logger.error(
+                "SharePoint delete failed for %s/%s: %s",
+                subfolder,
+                filename,
+                exc,
+            )
+            return False
+
     def file_exists(self, subfolder: str, filename: str) -> bool:
         """Check if a file exists in SharePoint."""
         if not self.is_enabled:

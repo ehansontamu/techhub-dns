@@ -154,6 +154,12 @@ export interface OrderMutationPayload {
   expected_updated_at?: string;
 }
 
+export interface OrderDismissUpdate {
+  reason: string;
+  remove_sharepoint_files?: boolean;
+  expected_updated_at?: string;
+}
+
 export interface BulkStatusUpdate {
   order_ids: string[];
   status: OrderStatus;
