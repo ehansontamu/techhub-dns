@@ -11,6 +11,7 @@ import {
 
 import {
   bigcommerceChatApi,
+  type BigCommerceCacheStatus,
   type BigCommerceChatMessage,
 } from "../api/bigcommerceChat";
 import { Button } from "../components/ui/button";
@@ -98,11 +99,30 @@ function renderMessageText(text: string) {
   return parts;
 }
 
+function formatCacheTimestamp(value: string | null) {
+  if (!value) {
+    return "not synced yet";
+  }
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+
+  return parsed.toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
 export default function BigCommerceChat() {
   const [messages, setMessages] = useState<BigCommerceChatMessage[]>([]);
   const [draft, setDraft] = useState("");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isSending, setIsSending] = useState(false);
+  const [cacheStatus, setCacheStatus] = useState<BigCommerceCacheStatus | null>(null);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
 
@@ -114,6 +134,33 @@ export default function BigCommerceChat() {
       behavior: "smooth",
     });
   }, [messages, isSending]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const loadStatus = async () => {
+      try {
+        const status = await bigcommerceChatApi.cacheStatus();
+        if (isMounted) {
+          setCacheStatus(status);
+        }
+      } catch {
+        if (isMounted) {
+          setCacheStatus(null);
+        }
+      }
+    };
+
+    void loadStatus();
+    const interval = window.setInterval(() => {
+      void loadStatus();
+    }, 60000);
+
+    return () => {
+      isMounted = false;
+      window.clearInterval(interval);
+    };
+  }, []);
 
   const sendQuestion = async () => {
     const question = draft.trim();
@@ -158,6 +205,18 @@ export default function BigCommerceChat() {
           <p className="mt-1 text-sm text-muted-foreground">
             Read-only store assistant; information can and will be wrong. Double check what you can. This is a preliminary test of functionality.
           </p>
+          {cacheStatus && (
+            <p
+              className={cn(
+                "mt-1 text-xs",
+                cacheStatus.is_stale ? "text-amber-600" : "text-muted-foreground"
+              )}
+            >
+              Data last synced {formatCacheTimestamp(cacheStatus.last_successful_sync?.completed_at ?? null)} ·{" "}
+              {cacheStatus.order_count.toLocaleString()} orders ·{" "}
+              {cacheStatus.line_item_count.toLocaleString()} line items
+            </p>
+          )}
         </div>
         <Button
           type="button"

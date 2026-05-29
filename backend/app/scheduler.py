@@ -5,17 +5,20 @@ from datetime import datetime, timedelta
 import asyncio
 from app.database import get_db_session
 from app.services.inflow_service import InflowService
+from app.services.bigcommerce_analytics_cache import sync_bigcommerce_analytics_cache
 from app.models.inflow_webhook import InflowWebhook, WebhookStatus
 from app.config import settings
 from app.api.routes.inflow import _run_inflow_sync
 import logging
 import threading
+import os
 
 logger = logging.getLogger(__name__)
 
 _WEBHOOK_HEALTH_STALE_THRESHOLD = timedelta(hours=2)
 _WEBHOOK_RECONCILE_INTERVAL_MINUTES = 30
 _WEBHOOK_HEALTH_CHECK_INTERVAL_MINUTES = 60
+_BIGCOMMERCE_ANALYTICS_SYNC_INTERVAL_MINUTES = 15
 _INFLOW_EVENT_MAPPING = {
     "orderCreated": "salesOrder.created",
     "orderUpdated": "salesOrder.updated",
@@ -170,6 +173,20 @@ def webhook_health_check():
         logger.error(f"Webhook health check failed: {e}", exc_info=True)
     finally:
         db.close()
+
+
+def sync_bigcommerce_analytics_cache_job() -> None:
+    """Background task to keep local BigCommerce analytics tables fresh."""
+
+    if not os.getenv("BC_STORE_HASH") or not os.getenv("BC_ACCESS_TOKEN"):
+        logger.info("BigCommerce analytics sync skipped: credentials are not configured")
+        return
+
+    try:
+        result = sync_bigcommerce_analytics_cache(full_backfill=False)
+        logger.info("BigCommerce analytics sync finished: %s", result)
+    except Exception as exc:
+        logger.error("BigCommerce analytics sync failed: %s", exc, exc_info=True)
 
 
 def reconcile_inflow_webhook_state() -> None:
@@ -369,6 +386,15 @@ def start_scheduler():
             replace_existing=True,
             next_run_time=datetime.now() + timedelta(minutes=_WEBHOOK_HEALTH_CHECK_INTERVAL_MINUTES),
         )
+
+    scheduler.add_job(
+        sync_bigcommerce_analytics_cache_job,
+        trigger=IntervalTrigger(minutes=_BIGCOMMERCE_ANALYTICS_SYNC_INTERVAL_MINUTES),
+        id="bigcommerce_analytics_sync",
+        name="Sync BigCommerce analytics cache",
+        replace_existing=True,
+        next_run_time=datetime.now() + timedelta(minutes=1),
+    )
 
     scheduler.start()
     if settings.inflow_polling_sync_enabled and poll_interval:

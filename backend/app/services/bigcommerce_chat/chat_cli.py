@@ -11,9 +11,21 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from dotenv import load_dotenv
 
 from app.services.bigcommerce_chat.bigcommerce_tools import READ_ONLY_TOOLS
+from app.services.bigcommerce_analytics_cache import (
+    get_bigcommerce_analytics_schema,
+    get_bigcommerce_cache_status,
+    run_bigcommerce_readonly_query,
+)
 from app.services.bigcommerce_chat.llm_client import chat_completion
 
 load_dotenv()
+
+CHAT_TOOLS = {
+    **READ_ONLY_TOOLS,
+    "get_bigcommerce_analytics_schema": get_bigcommerce_analytics_schema,
+    "get_bigcommerce_cache_status": get_bigcommerce_cache_status,
+    "run_bigcommerce_readonly_query": run_bigcommerce_readonly_query,
+}
 
 ORDER_ADMIN_BASE_URL = os.getenv(
     "BC_ORDER_ADMIN_BASE_URL",
@@ -33,12 +45,14 @@ Never claim you can change, cancel, refund, edit, fulfill, or update anything.
 Current date: {date.today().isoformat()}.
 Before choosing tools for analytics questions, identify the entity being ranked or counted, the metric, the date range, and any customer/product/checkout filters. Choose the smallest tool call that directly answers that metric.
 When you mention a specific order ID, write it as "Order 1234"; the web UI will make it clickable. Do not print raw BigCommerce admin URLs.
-When asked for total/store-wide revenue, use get_revenue_summary. Do not use college/unit breakdowns unless the user explicitly asks for a breakdown/by college/by unit.
+For BigCommerce analytics over orders, products, customers, dates, statuses, colleges/units, departments, account numbers, recipients, or line items, prefer the local analytics cache: first use get_bigcommerce_analytics_schema if you need column names, then use run_bigcommerce_readonly_query. This is usually better than live BigCommerce API tools because it lets you sort, join, group, and filter precisely in SQL.
+When using run_bigcommerce_readonly_query, write one read-only SELECT against bc_orders, bc_order_items, bc_customers, bc_order_addresses, bc_order_custom_fields, or bc_sync_runs. Exclude Cancelled, Declined, and Refunded orders for sales analytics unless the user asks otherwise. Include bc_orders.id in results when specific orders matter.
+Use get_bigcommerce_cache_status when the user asks about data freshness or when an answer depends on whether the local cache is current. If the cache is empty or stale, say so briefly and either answer with that limitation or use a live read-only tool if it can answer the question.
+When asked for total/store-wide revenue, prefer run_bigcommerce_readonly_query against bc_orders. Do not use college/unit breakdowns unless the user explicitly asks for a breakdown/by college/by unit.
 When asked what customers were charged for shipping by carrier or method, use get_shipping_spend_by_method. Do not treat shipping carriers like product keywords. When asked what the store/team spent or paid to carriers for shipping, explain that the current BigCommerce order API data does not expose actual carrier invoice cost.
-For flexible analytics, prefer get_order_summary for filtered totals and get_grouped_order_summary for "by month/status/customer/college/product" breakdowns.
-For order ranking questions, use get_ranked_orders and choose the rank metric from the user's words: dollars/value/amount means sort_by="total_inc_tax"; first/earliest/submitted date means sort_by="date_created", direction="asc"; latest/newest/most recent means sort_by="date_created", direction="desc"; first order number means sort_by="order_id", direction="asc"; most/fewest items means sort_by="items_total". If the user says "all time", "ever", or gives no date range, do not pass days; let get_ranked_orders use its all-time default. If the user says last week/month/N days, pass days or explicit start_date/end_date.
-For product popularity, top products, "which product sold most", "which order had the most of a product", or combined product/source-order questions, use get_product_sales_leaderboard. Prefer this over chaining get_grouped_order_summary and get_source_orders_for_summary.
-Use get_source_orders_for_summary only when the user asks to audit, list, or show the source orders behind a result.
+For flexible analytics, prefer run_bigcommerce_readonly_query. Use get_order_summary, get_grouped_order_summary, get_ranked_orders, get_product_sales_leaderboard, and get_source_orders_for_summary only as live API fallbacks when the cache cannot answer.
+For order ranking questions, prefer SQL over bc_orders. Choose the rank metric from the user's words: dollars/value/amount means total_inc_tax; first/earliest/submitted date means date_created ascending; latest/newest/most recent means date_created descending; first order number means id ascending; most/fewest items means items_total.
+For product popularity, top products, "which product sold most", "which order had the most of a product", or combined product/source-order questions, prefer SQL joining bc_orders to bc_order_items.
 When asked which orders took the longest to fulfill, use get_fulfillment_aging_report so the answer includes both longest completed fulfillment durations and oldest currently-open orders. Use get_oldest_unfulfilled_orders only when the user explicitly asks for currently open/unfulfilled orders.
 When asked how long a specific order took to fulfill, use get_order_fulfillment_timing.
 When a user gives a name like "Jim's order", first search recent orders by customer name.
@@ -81,6 +95,44 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "type": "object",
                 "properties": {"order_id": {"type": "integer"}},
                 "required": ["order_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_bigcommerce_analytics_schema",
+            "description": "Return the allowed local BigCommerce analytics cache tables, columns, field hints, cache freshness, and SQL rules. Use before writing SQL when you need schema details.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_bigcommerce_cache_status",
+            "description": "Return local BigCommerce analytics cache freshness, row counts, and the last successful sync.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_bigcommerce_readonly_query",
+            "description": "Run a bounded read-only SQL SELECT against the local BigCommerce analytics cache. Use this for precise analytics that require grouping, sorting, joining orders to line items, date ranges, or finding first/latest/largest/top records.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "sql": {
+                        "type": "string",
+                        "description": "A single SELECT query using only bc_orders, bc_order_items, bc_customers, bc_order_addresses, bc_order_custom_fields, and bc_sync_runs.",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "default": 100,
+                        "description": "Maximum rows to return. The backend caps this at 200.",
+                    },
+                },
+                "required": ["sql"],
             },
         },
     },
@@ -803,11 +855,14 @@ def _clamp_tool_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
 
 
 def _call_tool(name: str, arguments_json: str) -> str:
-    if name not in READ_ONLY_TOOLS:
+    if name not in CHAT_TOOLS:
         return json.dumps({"error": f"Tool is not allowed: {name}"})
 
     arguments = _clamp_tool_arguments(json.loads(arguments_json or "{}"))
-    result = READ_ONLY_TOOLS[name](**arguments)
+    try:
+        result = CHAT_TOOLS[name](**arguments)
+    except Exception as exc:
+        return json.dumps({"error": str(exc)})
     return json.dumps(result, default=str)
 
 
@@ -1993,31 +2048,6 @@ def ask(question: str, messages: list[dict[str, Any]] | None = None) -> tuple[st
     if _looks_like_model_info_request(question):
         model = os.getenv("LLM_MODEL", "").strip() or "not set"
         answer = f"This local chat is configured to use `{model}` via `LLM_MODEL`."
-        history.append({"role": "user", "content": question})
-        history.append({"role": "assistant", "content": answer})
-        return answer, history
-
-    shipping_spend_args = _extract_shipping_spend_request(question)
-    if shipping_spend_args:
-        if shipping_spend_args.pop("unsupported_actual_carrier_spend", False):
-            answer = (
-                "I can't answer actual carrier shipping spend from the current BigCommerce "
-                "order API data. BigCommerce orders can show what customers were charged "
-                "for shipping, but they do not expose what your team paid FedEx/UPS/etc. "
-                "To answer that, we'd need a carrier invoice/export source or another "
-                "read-only table that contains actual carrier charges."
-            )
-        else:
-            result = READ_ONLY_TOOLS["get_shipping_spend_by_method"](**shipping_spend_args)
-            answer = _format_shipping_spend(result)
-        history.append({"role": "user", "content": question})
-        history.append({"role": "assistant", "content": answer})
-        return answer, history
-
-    revenue_args = _extract_revenue_summary_request(question)
-    if revenue_args:
-        result = READ_ONLY_TOOLS["get_revenue_summary"](**revenue_args)
-        answer = _format_revenue_summary(result)
         history.append({"role": "user", "content": question})
         history.append({"role": "assistant", "content": answer})
         return answer, history

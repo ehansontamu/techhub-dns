@@ -1,0 +1,158 @@
+import uuid
+from datetime import datetime
+
+import sqlalchemy as sa
+from sqlalchemy import Column, DateTime, ForeignKey, Index, Integer, JSON, Numeric, String, Text
+
+from app.database import Base
+
+
+class BigCommerceSyncRun(Base):
+    __tablename__ = "bc_sync_runs"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    mode = Column(String(50), nullable=False, default="incremental")
+    status = Column(String(50), nullable=False, default="running", index=True)
+    started_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    completed_at = Column(DateTime, nullable=True)
+    min_date_modified = Column(DateTime, nullable=True)
+    max_date_modified = Column(DateTime, nullable=True)
+    orders_scanned = Column(Integer, nullable=False, default=0)
+    orders_upserted = Column(Integer, nullable=False, default=0)
+    line_items_upserted = Column(Integer, nullable=False, default=0)
+    addresses_upserted = Column(Integer, nullable=False, default=0)
+    customers_upserted = Column(Integer, nullable=False, default=0)
+    error = Column(Text, nullable=True)
+    sync_metadata = Column(JSON, nullable=True)
+
+
+class BigCommerceCustomer(Base):
+    __tablename__ = "bc_customers"
+
+    id = Column(Integer, primary_key=True)
+    first_name = Column(String(255), nullable=True)
+    last_name = Column(String(255), nullable=True)
+    full_name = Column(String(511), nullable=True, index=True)
+    email = Column(String(255), nullable=True, index=True)
+    company = Column(String(255), nullable=True, index=True)
+    raw_customer = Column(JSON, nullable=True)
+    synced_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class BigCommerceOrder(Base):
+    __tablename__ = "bc_orders"
+
+    __table_args__ = (
+        Index("ix_bc_orders_date_created", "date_created"),
+        Index("ix_bc_orders_date_modified", "date_modified"),
+        Index("ix_bc_orders_status_date_created", "status", "date_created"),
+        Index("ix_bc_orders_customer_date_created", "customer_id", "date_created"),
+        Index("ix_bc_orders_college_date_created", "college_unit", "date_created"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    customer_id = Column(Integer, ForeignKey("bc_customers.id"), nullable=True, index=True)
+    date_created = Column(DateTime, nullable=True)
+    date_modified = Column(DateTime, nullable=True)
+    date_shipped = Column(DateTime, nullable=True)
+    status = Column(String(100), nullable=True, index=True)
+    status_id = Column(Integer, nullable=True)
+    total_inc_tax = Column(Numeric(18, 4), nullable=False, server_default="0")
+    subtotal_inc_tax = Column(Numeric(18, 4), nullable=False, server_default="0")
+    shipping_cost_inc_tax = Column(Numeric(18, 4), nullable=False, server_default="0")
+    items_total = Column(Integer, nullable=False, server_default="0")
+    payment_method = Column(String(255), nullable=True)
+    customer_message = Column(Text, nullable=True)
+    staff_notes = Column(Text, nullable=True)
+    billing_first_name = Column(String(255), nullable=True)
+    billing_last_name = Column(String(255), nullable=True)
+    billing_email = Column(String(255), nullable=True, index=True)
+    billing_company = Column(String(255), nullable=True, index=True)
+    placed_by_name = Column(String(511), nullable=True, index=True)
+    placed_by_email = Column(String(255), nullable=True, index=True)
+    placed_by_company = Column(String(255), nullable=True, index=True)
+    college_unit = Column(String(255), nullable=True, index=True)
+    department_code = Column(String(255), nullable=True, index=True)
+    account_numbers = Column(Text, nullable=True)
+    recipients = Column(Text, nullable=True)
+    form_fields = Column(JSON, nullable=True)
+    raw_order = Column(JSON, nullable=True)
+    synced_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class BigCommerceOrderItem(Base):
+    __tablename__ = "bc_order_items"
+
+    __table_args__ = (
+        Index("ix_bc_order_items_order_id", "order_id"),
+        Index("ix_bc_order_items_product_id", "product_id"),
+        Index("ix_bc_order_items_sku", "sku"),
+        Index("ix_bc_order_items_name", "name"),
+    )
+
+    id = Column(String(80), primary_key=True)
+    bigcommerce_line_item_id = Column(Integer, nullable=True)
+    order_id = Column(Integer, ForeignKey("bc_orders.id", ondelete="CASCADE"), nullable=False)
+    product_id = Column(Integer, nullable=True)
+    variant_id = Column(Integer, nullable=True)
+    name = Column(String(500), nullable=True)
+    sku = Column(String(255), nullable=True)
+    quantity = Column(Integer, nullable=False, server_default="0")
+    total_inc_tax = Column(Numeric(18, 4), nullable=False, server_default="0")
+    base_total = Column(Numeric(18, 4), nullable=False, server_default="0")
+    raw_product = Column(JSON, nullable=True)
+    synced_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class BigCommerceOrderAddress(Base):
+    __tablename__ = "bc_order_addresses"
+
+    __table_args__ = (
+        Index("ix_bc_order_addresses_order_type", "order_id", "address_type"),
+        sa.UniqueConstraint(
+            "order_id",
+            "address_type",
+            "source_index",
+            name="uq_bc_order_addresses_order_type_index",
+        ),
+    )
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    order_id = Column(Integer, ForeignKey("bc_orders.id", ondelete="CASCADE"), nullable=False)
+    address_type = Column(String(50), nullable=False)
+    source_index = Column(Integer, nullable=False, default=0)
+    bigcommerce_address_id = Column(Integer, nullable=True)
+    first_name = Column(String(255), nullable=True)
+    last_name = Column(String(255), nullable=True)
+    full_name = Column(String(511), nullable=True, index=True)
+    email = Column(String(255), nullable=True, index=True)
+    company = Column(String(255), nullable=True, index=True)
+    street_1 = Column(String(500), nullable=True)
+    street_2 = Column(String(500), nullable=True)
+    city = Column(String(255), nullable=True)
+    state = Column(String(255), nullable=True)
+    zip = Column(String(50), nullable=True)
+    country = Column(String(255), nullable=True)
+    phone = Column(String(100), nullable=True)
+    shipping_method = Column(String(255), nullable=True, index=True)
+    form_fields = Column(JSON, nullable=True)
+    raw_address = Column(JSON, nullable=True)
+    synced_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class BigCommerceOrderCustomField(Base):
+    __tablename__ = "bc_order_custom_fields"
+
+    __table_args__ = (
+        Index("ix_bc_order_custom_fields_order_id", "order_id"),
+        Index("ix_bc_order_custom_fields_name", "normalized_name"),
+        Index("ix_bc_order_custom_fields_value", "field_value"),
+    )
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    order_id = Column(Integer, ForeignKey("bc_orders.id", ondelete="CASCADE"), nullable=False)
+    source = Column(String(100), nullable=False)
+    field_name = Column(String(255), nullable=False)
+    normalized_name = Column(String(255), nullable=False)
+    field_value = Column(Text, nullable=True)
+    synced_at = Column(DateTime, nullable=False, default=datetime.utcnow)

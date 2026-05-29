@@ -10,6 +10,10 @@ from app.services.bigcommerce_chat_service import (
     BigCommerceChatError,
     ask_bigcommerce_chat,
 )
+from app.services.bigcommerce_analytics_cache import (
+    get_bigcommerce_cache_status,
+    sync_bigcommerce_analytics_cache,
+)
 
 
 bp = Blueprint("bigcommerce_chat", __name__)
@@ -33,4 +37,32 @@ def chat() -> Any:
         return jsonify(ask_bigcommerce_chat(question, messages))
     except BigCommerceChatError as exc:
         logger.warning("BigCommerce chat request failed: %s", exc)
+        return jsonify({"error": str(exc)}), 502
+
+
+@bp.route("/cache/status", methods=["GET"])
+@require_admin
+def cache_status() -> Any:
+    return jsonify(get_bigcommerce_cache_status())
+
+
+@bp.route("/cache/sync", methods=["POST"])
+@require_admin
+def cache_sync() -> Any:
+    payload = request.get_json(silent=True) or {}
+    full_backfill = bool(payload.get("full_backfill", False))
+    max_orders = payload.get("max_orders", 5000)
+    try:
+        max_orders = int(max_orders)
+    except (TypeError, ValueError):
+        return jsonify({"error": "max_orders must be an integer."}), 400
+    try:
+        return jsonify(
+            sync_bigcommerce_analytics_cache(
+                full_backfill=full_backfill,
+                max_orders=max_orders,
+            )
+        )
+    except Exception as exc:
+        logger.warning("BigCommerce cache sync failed: %s", exc, exc_info=True)
         return jsonify({"error": str(exc)}), 502
