@@ -826,6 +826,23 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     },
 ]
 
+CACHE_TOOL_NAMES = {
+    "get_bigcommerce_analytics_schema",
+    "get_bigcommerce_cache_status",
+    "run_bigcommerce_readonly_query",
+}
+
+LIVE_TOOL_SCHEMAS = [
+    schema
+    for schema in TOOL_SCHEMAS
+    if schema.get("function", {}).get("name") not in CACHE_TOOL_NAMES
+]
+LIVE_TOOL_NAMES = {
+    schema.get("function", {}).get("name")
+    for schema in LIVE_TOOL_SCHEMAS
+    if schema.get("function", {}).get("name")
+}
+
 
 WEB_MAX_ORDER_SCAN = 5000
 WEB_MAX_LINE_ITEM_ORDER_SCAN = 500
@@ -864,6 +881,80 @@ def _call_tool(name: str, arguments_json: str) -> str:
     except Exception as exc:
         return json.dumps({"error": str(exc)})
     return json.dumps(result, default=str)
+
+
+def _format_direct_tool_answer(name: str, result: dict[str, Any]) -> str | None:
+    if result.get("error"):
+        return None
+    if name in {"get_purchase_breakdown_by_college_unit", "get_sales_by_dimension"}:
+        return _format_purchase_breakdown(result)
+    if name == "get_revenue_summary":
+        return _format_revenue_summary(result)
+    if name == "get_order_summary":
+        return _format_order_summary(result)
+    if name == "get_grouped_order_summary":
+        return _format_grouped_order_summary(result)
+    if name == "get_ranked_orders":
+        return _format_ranked_orders(result)
+    if name == "get_product_sales_leaderboard":
+        return _format_product_sales_leaderboard(result)
+    if name == "get_source_orders_for_summary":
+        return _format_source_orders(result)
+    if name == "get_shipping_spend_by_method":
+        return _format_shipping_spend(result)
+    if name == "get_oldest_unfulfilled_orders":
+        return _format_oldest_unfulfilled(result)
+    if name == "get_fulfillment_aging_report":
+        return _format_fulfillment_aging_report(result)
+    if name == "get_order_fulfillment_timing":
+        return _format_fulfillment_timing(result)
+    if name == "get_order_identity":
+        return _format_order_identity(result)
+    if name in {
+        "get_full_order_contents",
+        "get_full_order_contents_for_customer_product_in_dimension",
+        "get_full_order_contents_for_placed_by_customer",
+    }:
+        return _format_order_contents(result)
+    return None
+
+
+def _cache_tool_result_failed(name: str, result: dict[str, Any]) -> bool:
+    if name != "run_bigcommerce_readonly_query":
+        return False
+    if result.get("error"):
+        return True
+    cache_status = result.get("cache_status") or {}
+    return int(result.get("row_count") or 0) == 0 and int(cache_status.get("order_count") or 0) == 0
+
+
+def _run_tool_calls(
+    tool_calls: list[dict[str, Any]],
+    history: list[dict[str, Any]],
+) -> tuple[str | None, bool]:
+    formatted_direct_answer: str | None = None
+    cache_failed = False
+
+    for tool_call in tool_calls:
+        function = tool_call.get("function") or {}
+        name = function.get("name", "")
+        arguments = function.get("arguments", "{}")
+        if os.getenv("DEBUG_TOOLS") == "1":
+            print(f"[tool] {name}({arguments})")
+        result = _call_tool(name, arguments)
+        parsed = json.loads(result)
+        cache_failed = cache_failed or _cache_tool_result_failed(name, parsed)
+        formatted_direct_answer = _format_direct_tool_answer(name, parsed) or formatted_direct_answer
+        history.append(
+            {
+                "role": "tool",
+                "tool_call_id": tool_call.get("id", name),
+                "name": name,
+                "content": result,
+            }
+        )
+
+    return formatted_direct_answer, cache_failed
 
 
 def _format_money(value: float | int) -> str:
@@ -1716,6 +1807,67 @@ def _assistant_history_message(message: dict[str, Any]) -> dict[str, Any]:
     return clean
 
 
+def _extract_json_object(text_value: str, start_index: int) -> str | None:
+    decoder = json.JSONDecoder()
+    for index in range(start_index, len(text_value)):
+        if text_value[index] != "{":
+            continue
+        try:
+            _, end = decoder.raw_decode(text_value[index:])
+        except json.JSONDecodeError:
+            continue
+        return text_value[index : index + end]
+    return None
+
+
+def _coerce_text_tool_call(
+    message: dict[str, Any],
+    allowed_tool_names: set[str] | None = None,
+) -> dict[str, Any]:
+    """Handle local OpenAI-compatible servers that emit tool calls as text."""
+
+    if message.get("tool_calls"):
+        return message
+
+    content = message.get("content")
+    if not isinstance(content, str):
+        return message
+
+    match = re.search(r"\bto=functions\.([A-Za-z_][\w]*)\b", content)
+    if not match:
+        return message
+
+    name = match.group(1)
+    allowed = allowed_tool_names or set(CHAT_TOOLS)
+    if name not in allowed or name not in CHAT_TOOLS:
+        return message
+
+    arguments = _extract_json_object(content, match.end())
+    if not arguments:
+        return message
+
+    coerced = dict(message)
+    coerced["content"] = ""
+    coerced["tool_calls"] = [
+        {
+            "id": f"text_tool_call_{name}",
+            "type": "function",
+            "function": {"name": name, "arguments": arguments},
+        }
+    ]
+    return coerced
+
+
+def _sanitize_assistant_answer(answer: str) -> str:
+    cleaned = re.sub(
+        r"\bto=functions\.[A-Za-z_][\w]*\b.*?(?=\n\n|$)",
+        "",
+        answer,
+        flags=re.DOTALL,
+    )
+    return cleaned.strip()
+
+
 def _extract_order_ids_from_history(messages: list[dict[str, Any]] | None) -> list[int]:
     seen: set[int] = set()
     order_ids: list[int] = []
@@ -2111,74 +2263,66 @@ def ask(question: str, messages: list[dict[str, Any]] | None = None) -> tuple[st
         return answer, history
 
     history.append({"role": "user", "content": question})
+    history_before_model = list(history)
 
-    message = chat_completion(
+    message = _coerce_text_tool_call(chat_completion(
         messages=history,
         tools=TOOL_SCHEMAS,
         tool_choice="auto",
-    )
+    ))
     history.append(_assistant_history_message(message))
 
     tool_calls = message.get("tool_calls") or []
     if tool_calls:
-        formatted_direct_answer: str | None = None
-        for tool_call in tool_calls:
-            function = tool_call.get("function") or {}
-            name = function.get("name", "")
-            arguments = function.get("arguments", "{}")
-            if os.getenv("DEBUG_TOOLS") == "1":
-                print(f"[tool] {name}({arguments})")
-            result = _call_tool(name, arguments)
-            if name in {"get_purchase_breakdown_by_college_unit", "get_sales_by_dimension"}:
-                formatted_direct_answer = _format_purchase_breakdown(json.loads(result))
-            if name == "get_revenue_summary":
-                formatted_direct_answer = _format_revenue_summary(json.loads(result))
-            if name == "get_order_summary":
-                formatted_direct_answer = _format_order_summary(json.loads(result))
-            if name == "get_grouped_order_summary":
-                formatted_direct_answer = _format_grouped_order_summary(json.loads(result))
-            if name == "get_ranked_orders":
-                formatted_direct_answer = _format_ranked_orders(json.loads(result))
-            if name == "get_product_sales_leaderboard":
-                formatted_direct_answer = _format_product_sales_leaderboard(json.loads(result))
-            if name == "get_source_orders_for_summary":
-                formatted_direct_answer = _format_source_orders(json.loads(result))
-            if name == "get_shipping_spend_by_method":
-                formatted_direct_answer = _format_shipping_spend(json.loads(result))
-            if name == "get_oldest_unfulfilled_orders":
-                formatted_direct_answer = _format_oldest_unfulfilled(json.loads(result))
-            if name == "get_fulfillment_aging_report":
-                formatted_direct_answer = _format_fulfillment_aging_report(json.loads(result))
-            if name == "get_order_fulfillment_timing":
-                formatted_direct_answer = _format_fulfillment_timing(json.loads(result))
-            if name == "get_order_identity":
-                formatted_direct_answer = _format_order_identity(json.loads(result))
-            if name in {
-                "get_full_order_contents",
-                "get_full_order_contents_for_customer_product_in_dimension",
-                "get_full_order_contents_for_placed_by_customer",
-            }:
-                formatted_direct_answer = _format_order_contents(json.loads(result))
-            history.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": tool_call.get("id", name),
-                    "name": name,
-                    "content": result,
-                }
-            )
+        formatted_direct_answer, cache_failed = _run_tool_calls(tool_calls, history)
 
         if formatted_direct_answer:
             formatted_direct_answer = _add_order_links(formatted_direct_answer)
             history.append({"role": "assistant", "content": formatted_direct_answer})
             return formatted_direct_answer, history
 
+        if cache_failed:
+            fallback_history = [dict(item) for item in history_before_model]
+            if fallback_history and fallback_history[0].get("role") == "system":
+                fallback_history[0]["content"] = (
+                    f"{SYSTEM_PROMPT}\n"
+                    "The local BigCommerce analytics cache could not answer this request. "
+                    "Use the live read-only BigCommerce API tools for this turn. Do not use cache SQL tools."
+                )
+            fallback_message = _coerce_text_tool_call(
+                chat_completion(
+                    messages=fallback_history,
+                    tools=LIVE_TOOL_SCHEMAS,
+                    tool_choice="auto",
+                ),
+                allowed_tool_names=LIVE_TOOL_NAMES,
+            )
+            history.append(_assistant_history_message(fallback_message))
+            fallback_tool_calls = fallback_message.get("tool_calls") or []
+            if fallback_tool_calls:
+                fallback_answer, _ = _run_tool_calls(fallback_tool_calls, history)
+                if fallback_answer:
+                    fallback_answer = _add_order_links(fallback_answer)
+                    history.append({"role": "assistant", "content": fallback_answer})
+                    return fallback_answer, history
+            fallback_answer = _sanitize_assistant_answer(fallback_message.get("content") or "")
+            if fallback_answer:
+                fallback_answer = _add_order_links(fallback_answer)
+                history.append({"role": "assistant", "content": fallback_answer})
+                return fallback_answer, history
+
         second = chat_completion(messages=history)
-        answer = _add_order_links(second.get("content") or "")
+        answer = _add_order_links(_sanitize_assistant_answer(second.get("content") or ""))
         history.append({"role": "assistant", "content": answer})
         return answer, history
 
-    answer = _add_order_links(message.get("content") or "")
+    answer = _add_order_links(_sanitize_assistant_answer(message.get("content") or ""))
+    if not answer:
+        answer = "I couldn't turn that into a clean answer. Please try the question again."
+    if history and history[-1].get("role") == "assistant":
+        history[-1]["content"] = answer
+    else:
+        history.append({"role": "assistant", "content": answer})
     return answer, history
 
 

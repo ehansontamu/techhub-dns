@@ -23,6 +23,7 @@ const ORDER_LINK_SECTION_RE = /\n{0,2}Order links:\n(?:- Order \d{1,}: https?:\/
 const ORDER_URL_AFTER_LABEL_RE = /\s*\(https:\/\/store-jsj7fos9p1\.mybigcommerce\.com\/manage\/orders\/\d{1,}\)/g;
 const ORDER_URL_AFTER_COLON_RE = /\bOrder\s+#?(\d{1,})[:\s-]+https:\/\/store-jsj7fos9p1\.mybigcommerce\.com\/manage\/orders\/\1/g;
 const ORDER_URL_RE = /https:\/\/store-jsj7fos9p1\.mybigcommerce\.com\/manage\/orders\/(\d{1,})/g;
+const TOOL_CALL_TEXT_RE = /\bto=functions\.[A-Za-z_]\w*\b.*?(?=\n\n|$)/gs;
 const MESSAGE_TOKEN_RE = /\bOrder\s+#?(\d{1,})\b|(https?:\/\/[^\s)]+)/gi;
 
 function chatErrorMessage(error: unknown): string {
@@ -42,6 +43,7 @@ function cleanMessageText(text: string) {
     .replace(ORDER_URL_AFTER_LABEL_RE, "")
     .replace(ORDER_URL_AFTER_COLON_RE, "Order $1")
     .replace(ORDER_URL_RE, "Order $1")
+    .replace(TOOL_CALL_TEXT_RE, "")
     .trimEnd();
 }
 

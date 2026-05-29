@@ -1,12 +1,22 @@
 from __future__ import annotations
 
 from typing import Any
+import re
 
 from app.services.bigcommerce_chat import chat_cli
 
 
 class BigCommerceChatError(RuntimeError):
     """Raised when the BigCommerce chat bridge cannot answer a request."""
+
+
+def _strip_tool_call_noise(content: str) -> str:
+    return re.sub(
+        r"\bto=functions\.[A-Za-z_][\w]*\b.*?(?=\n\n|$)",
+        "",
+        content,
+        flags=re.DOTALL,
+    ).strip()
 
 
 def _client_history_to_chat_history(
@@ -23,7 +33,7 @@ def _client_history_to_chat_history(
         if role not in {"user", "assistant"} or not isinstance(content, str):
             continue
 
-        trimmed = content.strip()
+        trimmed = _strip_tool_call_noise(content)
         if trimmed:
             history.append({"role": role, "content": trimmed[:8000]})
 
@@ -38,7 +48,7 @@ def _chat_history_to_client_history(history: list[dict[str, Any]]) -> list[dict[
         if role not in {"user", "assistant"} or not isinstance(content, str):
             continue
 
-        trimmed = content.strip()
+        trimmed = _strip_tool_call_noise(content)
         if trimmed:
             client_history.append({"role": role, "content": trimmed})
 
