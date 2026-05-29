@@ -1117,6 +1117,89 @@ def _format_popular_product_summary(result: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _format_popular_product_with_top_order(
+    grouped_result: dict[str, Any],
+    source_result: dict[str, Any],
+) -> str:
+    groups = grouped_result.get("groups") or []
+    if not groups:
+        return f"I did not find matching computer products for {_date_range_label(grouped_result)}."
+
+    top_product = groups[0]
+    product_name = str(top_product.get("group") or "Unknown product")
+
+    order_rows: list[dict[str, Any]] = []
+    for order in source_result.get("orders") or []:
+        matching_products = order.get("matching_products") or []
+        quantity = sum(int(product.get("quantity") or 0) for product in matching_products)
+        line_total = sum(float(product.get("total_inc_tax") or 0) for product in matching_products)
+        if quantity <= 0:
+            continue
+        order_rows.append(
+            {
+                "order": order,
+                "quantity": quantity,
+                "line_total": line_total,
+            }
+        )
+
+    lines = [
+        (
+            f"The computer sold most often for {_date_range_label(grouped_result)} was "
+            f"{product_name}: {_format_number(top_product.get('item_quantity') or 0)} "
+            f"{_plural(top_product.get('item_quantity') or 0, 'unit')} sold."
+        ),
+        (
+            f"That product accounted for {_format_money(top_product.get('total_inc_tax') or 0)} "
+            f"across {top_product.get('order_count')} "
+            f"{_plural(top_product.get('order_count') or 0, 'order')}."
+        ),
+    ]
+
+    if order_rows:
+        order_rows.sort(
+            key=lambda row: (
+                -int(row["quantity"]),
+                -float(row["line_total"]),
+                -int(row["order"].get("order_id") or 0),
+            )
+        )
+        top_row = order_rows[0]
+        top_order = top_row["order"]
+        lines.extend(
+            [
+                "",
+                (
+                    f"The order with the most of that computer was Order "
+                    f"{top_order.get('order_id')} ({_order_url(top_order.get('order_id'))}) "
+                    f"with {_format_number(top_row['quantity'])} "
+                    f"{_plural(top_row['quantity'], 'unit')}."
+                ),
+                (
+                    f"Placed by {top_order.get('placed_by') or 'Unknown'} | "
+                    f"{top_order.get('college_unit') or 'Unknown college/unit'} | "
+                    f"{top_order.get('status') or 'Unknown status'} | "
+                    f"matching line total {_format_money(top_row['line_total'])}."
+                ),
+            ]
+        )
+    else:
+        lines.append("")
+        lines.append("I found the top computer, but could not identify a source order for it within the scan cap.")
+
+    if grouped_result.get("line_item_scan_truncated") or source_result.get("line_item_scan_truncated"):
+        lines.append(
+            (
+                "Warning: the line-item scan was capped, so this can miss older "
+                "orders in the requested range."
+            )
+        )
+    if grouped_result.get("is_truncated") or source_result.get("is_truncated"):
+        lines.append("Warning: the order scan was capped, so totals may be incomplete.")
+
+    return "\n".join(lines)
+
+
 def _format_source_orders(result: dict[str, Any]) -> str:
     lines = [
         (
@@ -1961,6 +2044,15 @@ def _extract_popular_brand_product_request(question: str) -> dict[str, Any] | No
     return args
 
 
+def _looks_like_popular_product_top_order_request(question: str) -> bool:
+    normalized = question.lower()
+    return (
+        "order" in normalized
+        and any(phrase in normalized for phrase in ["most of that", "which order had", "what order had"])
+        and _extract_popular_brand_product_request(question) is not None
+    )
+
+
 def _resolve_first_name_from_history(
     customer: str,
     messages: list[dict[str, Any]],
@@ -2060,7 +2152,35 @@ def ask(question: str, messages: list[dict[str, Any]] | None = None) -> tuple[st
     popular_brand_args = _extract_popular_brand_product_request(question)
     if popular_brand_args:
         result = READ_ONLY_TOOLS["get_grouped_order_summary"](**popular_brand_args)
-        answer = _format_popular_product_summary(result)
+        if _looks_like_popular_product_top_order_request(question):
+            top_groups = result.get("groups") or []
+            if top_groups:
+                top_product_name = str(top_groups[0].get("group") or "")
+                source_args = {
+                    key: value
+                    for key, value in popular_brand_args.items()
+                    if key
+                    in {
+                        "start_date",
+                        "end_date",
+                        "days",
+                        "max_orders",
+                        "max_line_item_orders",
+                    }
+                }
+                source_args.update(
+                    {
+                        "product_keyword": top_product_name,
+                        "limit": 250,
+                        "exclude_statuses": ["Cancelled", "Declined", "Refunded"],
+                    }
+                )
+                source_result = READ_ONLY_TOOLS["get_source_orders_for_summary"](**source_args)
+                answer = _format_popular_product_with_top_order(result, source_result)
+            else:
+                answer = _format_popular_product_summary(result)
+        else:
+            answer = _format_popular_product_summary(result)
         history.append({"role": "user", "content": question})
         history.append({"role": "assistant", "content": answer})
         return answer, history
