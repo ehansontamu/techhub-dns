@@ -36,7 +36,7 @@ export default function OrderDetailPage() {
         locationState?.statusFilter ?? [OrderStatus.PICKED, OrderStatus.QA],
     );
     const sidebarSearch = locationState?.search ?? "";
-    const { user } = useAuth();
+    const { user, isAdmin } = useAuth();
     const [transitioningStatus, setTransitioningStatus] = useState<{
         newStatus: OrderStatus;
         requireReason: boolean;
@@ -232,6 +232,39 @@ export default function OrderDetailPage() {
         },
     });
 
+    const dismissOrderMutation = useMutation({
+        mutationFn: ({ reason, removeSharePointFiles }: { reason: string; removeSharePointFiles: boolean }) => {
+            if (!orderId || !order) {
+                throw new Error("Order is unavailable");
+            }
+
+            return ordersApi.dismissOrder(orderId, {
+                reason,
+                remove_sharepoint_files: removeSharePointFiles,
+                expected_updated_at: order.updated_at,
+            });
+        },
+        onSuccess: async () => {
+            await queryClient.invalidateQueries({ queryKey: ["orders"] });
+            navigate("/orders", {
+                state: locationState ?? undefined,
+                replace: true,
+            });
+            toast.success("Order dismissed from operational views");
+        },
+        onError: async (error: unknown) => {
+            console.error("Failed to dismiss order:", error);
+            if (isAxiosError(error) && error.response?.status === 409) {
+                toast.error("Order changed by another user. Reloaded the latest details.");
+                await refreshOrder();
+                return;
+            }
+
+            const message = extractApiErrorMessage(error, "Failed to dismiss order");
+            toast.error(message);
+        },
+    });
+
     const handleRequestTags = async () => {
         if (!order) return;
         const inflowOrderId = order.inflow_order_id;
@@ -338,6 +371,11 @@ export default function OrderDetailPage() {
         }
     };
 
+    const handleDismissOrder = async (reason: string, removeSharePointFiles: boolean) => {
+        if (!order) return;
+        await dismissOrderMutation.mutateAsync({ reason, removeSharePointFiles });
+    };
+
     const handleSelectOrder = (nextOrderId: string) => {
         navigate(`/orders/${nextOrderId}`, {
             state: locationState ?? undefined,
@@ -413,6 +451,8 @@ export default function OrderDetailPage() {
                             order={order}
                             auditLogs={auditLogs}
                             notifications={notifications}
+                            canDismissOrder={isAdmin}
+                            onDismissOrder={handleDismissOrder}
                             onStatusChange={handleStatusChange}
                             onRollbackStatus={handleRollbackStatus}
                             onTagOrder={handleTagOrder}

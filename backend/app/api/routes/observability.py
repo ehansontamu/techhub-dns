@@ -642,6 +642,7 @@ def get_runtime_summary():
         open_orders = int(
             db.query(func.count())
             .select_from(Order)
+            .filter(Order.hidden_from_ops.is_(False))
             .filter(Order.status.notin_(["delivered", "cancelled"]))
             .scalar()
             or 0

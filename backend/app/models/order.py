@@ -4,6 +4,7 @@ import enum
 
 import sqlalchemy as sa
 from sqlalchemy import (
+    Boolean,
     Column,
     String,
     Text,
@@ -66,6 +67,7 @@ class Order(Base):
         Index("ix_orders_created_at", "created_at"),
         Index("ix_orders_updated_at", "updated_at"),
         Index("ix_orders_signature_captured_at", "signature_captured_at"),
+        Index("ix_orders_hidden_from_ops", "hidden_from_ops"),
         Index("ix_orders_status_updated_at", "status", "updated_at"),
         Index(
             "ix_orders_status_tagged_at_updated_at", "status", "tagged_at", "updated_at"
@@ -101,6 +103,10 @@ class Order(Base):
     )
     assigned_deliverer = Column(String(255), nullable=True)
     issue_reason = Column(Text, nullable=True)
+    hidden_from_ops = Column(Boolean, nullable=False, default=False)
+    hidden_reason = Column(Text, nullable=True)
+    hidden_at = Column(DateTime, nullable=True)
+    hidden_by = Column(String(255), nullable=True)
     tagged_at = Column(DateTime, nullable=True)
     tagged_by = Column(String(255), nullable=True)
     tag_data = Column(JSON, nullable=True)
