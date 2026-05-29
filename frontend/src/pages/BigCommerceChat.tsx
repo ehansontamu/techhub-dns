@@ -19,6 +19,17 @@ import { cn } from "../lib/utils";
 
 const URL_RE = /(https?:\/\/[^\s)]+)/g;
 
+function chatErrorMessage(error: unknown): string {
+  if (typeof error === "object" && error !== null && "response" in error) {
+    const candidate = error as { response?: { status?: unknown } };
+    if (candidate.response?.status === 504) {
+      return "BigCommerce chat timed out. Try a narrower question or a shorter date range.";
+    }
+  }
+
+  return extractApiErrorMessage(error, "BigCommerce chat is unavailable.");
+}
+
 function renderMessageText(text: string) {
   const parts = text.split(URL_RE);
   return parts.map((part, index) => {
@@ -79,9 +90,7 @@ export default function BigCommerceChat() {
       setMessages(response.messages);
     } catch (error) {
       setMessages(nextMessages);
-      setErrorMessage(
-        extractApiErrorMessage(error, "BigCommerce chat is unavailable.")
-      );
+      setErrorMessage(chatErrorMessage(error));
     } finally {
       setIsSending(false);
       inputRef.current?.focus();

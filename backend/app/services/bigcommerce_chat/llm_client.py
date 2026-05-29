@@ -14,6 +14,9 @@ class LLMConfigError(RuntimeError):
     pass
 
 
+LLM_REQUEST_TIMEOUT_SECONDS = 25
+
+
 def _config() -> tuple[str, str, str]:
     base_url = os.getenv("LLM_BASE_URL", "").strip().rstrip("/")
     api_key = os.getenv("LLM_API_KEY", "").strip()
@@ -120,7 +123,7 @@ def chat_completion(
             "Accept": "application/json",
         },
         json=payload,
-        timeout=60,
+        timeout=LLM_REQUEST_TIMEOUT_SECONDS,
     )
     response.raise_for_status()
 

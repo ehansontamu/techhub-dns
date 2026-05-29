@@ -672,11 +672,38 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
 ]
 
 
+WEB_MAX_ORDER_SCAN = 5000
+WEB_MAX_LINE_ITEM_ORDER_SCAN = 500
+
+
+def _clamp_tool_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
+    clamped = dict(arguments)
+    if "max_orders" in clamped:
+        try:
+            clamped["max_orders"] = max(1, min(int(clamped["max_orders"]), WEB_MAX_ORDER_SCAN))
+        except (TypeError, ValueError):
+            clamped["max_orders"] = WEB_MAX_ORDER_SCAN
+
+    line_item_keys = [
+        "max_line_item_orders",
+        "max_shipping_address_orders",
+    ]
+    for key in line_item_keys:
+        if key not in clamped:
+            continue
+        try:
+            clamped[key] = max(1, min(int(clamped[key]), WEB_MAX_LINE_ITEM_ORDER_SCAN))
+        except (TypeError, ValueError):
+            clamped[key] = WEB_MAX_LINE_ITEM_ORDER_SCAN
+
+    return clamped
+
+
 def _call_tool(name: str, arguments_json: str) -> str:
     if name not in READ_ONLY_TOOLS:
         return json.dumps({"error": f"Tool is not allowed: {name}"})
 
-    arguments = json.loads(arguments_json or "{}")
+    arguments = _clamp_tool_arguments(json.loads(arguments_json or "{}"))
     result = READ_ONLY_TOOLS[name](**arguments)
     return json.dumps(result, default=str)
 
@@ -1040,6 +1067,51 @@ def _format_grouped_order_summary(result: dict[str, Any]) -> str:
                 f"{result.get('line_item_orders_scanned')} orders "
                 f"(limit {result.get('line_item_scan_limit')}); product/group metrics may be incomplete."
             )
+        )
+
+    return "\n".join(lines)
+
+
+def _format_popular_product_summary(result: dict[str, Any]) -> str:
+    groups = result.get("groups") or []
+    if not groups:
+        return f"I did not find matching products for {_date_range_label(result)}."
+
+    top = groups[0]
+    lines = [
+        (
+            f"The most popular matching product for {_date_range_label(result)} was "
+            f"{top.get('group')} with {_format_number(top.get('item_quantity') or 0)} "
+            f"{_plural(top.get('item_quantity') or 0, 'item')} sold."
+        ),
+        (
+            f"Revenue: {_format_money(top.get('total_inc_tax') or 0)} across "
+            f"{top.get('order_count')} {_plural(top.get('order_count') or 0, 'order')}."
+        ),
+    ]
+
+    if len(groups) > 1:
+        lines.extend(["", "Next highest:"])
+        for index, group in enumerate(groups[1:5], start=2):
+            lines.append(
+                (
+                    f"{index}. {group.get('group')}: "
+                    f"{_format_number(group.get('item_quantity') or 0)} items, "
+                    f"{_format_money(group.get('total_inc_tax') or 0)}"
+                )
+            )
+
+    if result.get("line_item_scan_truncated"):
+        lines.append(
+            (
+                f"Warning: line-item scan was capped at "
+                f"{result.get('line_item_orders_scanned')} orders "
+                f"(limit {result.get('line_item_scan_limit')}); this may miss older orders."
+            )
+        )
+    if result.get("is_truncated"):
+        lines.append(
+            f"Warning: order scan hit max_orders={result.get('max_orders')}; totals may be incomplete."
         )
 
     return "\n".join(lines)
@@ -1875,27 +1947,18 @@ def _extract_popular_brand_product_request(question: str) -> dict[str, Any] | No
         if re.search(rf"\b{re.escape(candidate.lower())}\b", normalized):
             brand = candidate
             break
-    if not brand:
-        return None
 
-    days = 90
-    month_match = re.search(r"\blast\s+(\d+)\s+months?\b", normalized)
-    if month_match:
-        days = _months_to_days(int(month_match.group(1)))
-    day_match = re.search(r"\blast\s+(\d+)\s+days?\b", normalized)
-    if day_match:
-        days = int(day_match.group(1))
-
-    return {
+    args = _extract_basic_date_range(question)
+    args.update({
         "group_by": "product_name",
-        "days": days,
         "product_group": group,
         "brand": brand,
         "limit": 10,
         "sort_by": "items",
-        "max_orders": 50000,
-        "max_line_item_orders": 5000,
-    }
+        "max_orders": WEB_MAX_ORDER_SCAN,
+        "max_line_item_orders": min(WEB_MAX_LINE_ITEM_ORDER_SCAN, 250),
+    })
+    return args
 
 
 def _resolve_first_name_from_history(
@@ -1997,7 +2060,7 @@ def ask(question: str, messages: list[dict[str, Any]] | None = None) -> tuple[st
     popular_brand_args = _extract_popular_brand_product_request(question)
     if popular_brand_args:
         result = READ_ONLY_TOOLS["get_grouped_order_summary"](**popular_brand_args)
-        answer = _format_grouped_order_summary(result)
+        answer = _format_popular_product_summary(result)
         history.append({"role": "user", "content": question})
         history.append({"role": "assistant", "content": answer})
         return answer, history

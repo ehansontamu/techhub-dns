@@ -49,8 +49,10 @@ PRODUCT_ALIASES: dict[str, list[str]] = {
     "macs": ["mac", "macbook", "imac"],
 }
 
-DEFAULT_MAX_ORDER_SCAN = 50000
-DEFAULT_MAX_LINE_ITEM_ORDER_SCAN = 5000
+
+DEFAULT_MAX_ORDER_SCAN = 5000
+DEFAULT_MAX_LINE_ITEM_ORDER_SCAN = 500
+BC_REQUEST_TIMEOUT_SECONDS = 15
 RATE_LIMIT_RETRY_ATTEMPTS = 3
 RATE_LIMIT_LOW_WATERMARK = 5
 RATE_LIMIT_MAX_SLEEP_SECONDS = 30
@@ -132,7 +134,7 @@ class BigCommerceClient:
             response = self.session.get(
                 f"{self.base_url}{path}",
                 params=params or {},
-                timeout=30,
+                timeout=BC_REQUEST_TIMEOUT_SECONDS,
             )
             if response.status_code == 429 and attempt < RATE_LIMIT_RETRY_ATTEMPTS:
                 time.sleep(self._rate_limit_sleep_seconds(response))
