@@ -35,7 +35,7 @@ When you mention a specific order ID, write it as "Order 1234"; the web UI will 
 When asked for total/store-wide revenue, use get_revenue_summary. Do not use college/unit breakdowns unless the user explicitly asks for a breakdown/by college/by unit.
 When asked what customers were charged for shipping by carrier or method, use get_shipping_spend_by_method. Do not treat shipping carriers like product keywords. When asked what the store/team spent or paid to carriers for shipping, explain that the current BigCommerce order API data does not expose actual carrier invoice cost.
 For flexible analytics, prefer get_order_summary for filtered totals and get_grouped_order_summary for "by month/status/customer/college/product" breakdowns.
-For biggest/largest/highest-value or smallest/lowest-value order questions, use get_ranked_orders.
+For biggest/largest/highest-value or smallest/lowest-value order questions, use get_ranked_orders. If the user says "all time", "ever", or gives no date range, do not pass days; let get_ranked_orders use its all-time default. If the user says last week/month/N days, pass days or explicit start_date/end_date.
 For product popularity, top products, "which product sold most", "which order had the most of a product", or combined product/source-order questions, use get_product_sales_leaderboard. Prefer this over chaining get_grouped_order_summary and get_source_orders_for_summary.
 Use get_source_orders_for_summary only when the user asks to audit, list, or show the source orders behind a result.
 When asked which orders took the longest to fulfill, use get_fulfillment_aging_report so the answer includes both longest completed fulfillment durations and oldest currently-open orders. Use get_oldest_unfulfilled_orders only when the user explicitly asks for currently open/unfulfilled orders.
@@ -63,6 +63,7 @@ When asked for recipient breakdowns, use get_sales_by_dimension with dimension="
 When asked for orders, top products, or comparisons for a checkout dimension value such as a college/unit, department code, account number, or recipient, use the dimension tools. Valid dimensions are college_unit, department_code, account_number, and recipient.
 For these breakdowns, clearly say how many groups are displayed, how many total groups exist, how many displayed orders are covered, and include an "All other groups" summary when remaining_totals is nonzero.
 For "since the beginning of 2026", pass start_date="2026-01-01".
+For "all time", "all-time", or "ever", pass start_date="2000-01-01" unless the selected tool explicitly says it defaults to all-time.
 Non-precise names can be aliases. "Bush School" can mean Bush or Bush School of Government and Public Service.
 "Arts and Sciences" can mean College of Arts and Sciences or Arts & Sciences.
 Keep answers concise and include order IDs when relevant.
@@ -326,13 +327,22 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "get_ranked_orders",
-            "description": "Rank orders by total value for a date range or filter. Use for biggest/largest/highest-value and smallest/lowest-value order questions.",
+            "description": "Rank orders by total value for a date range or filter. Use for biggest/largest/highest-value and smallest/lowest-value order questions. If no start_date and no days are supplied, this tool searches all time from 2000-01-01.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "start_date": {"type": "string"},
-                    "end_date": {"type": "string"},
-                    "days": {"type": "integer", "default": 90},
+                    "start_date": {
+                        "type": "string",
+                        "description": "YYYY-MM-DD inclusive start date. For all-time questions, omit this or use 2000-01-01.",
+                    },
+                    "end_date": {
+                        "type": "string",
+                        "description": "YYYY-MM-DD exclusive end date.",
+                    },
+                    "days": {
+                        "type": "integer",
+                        "description": "Use only for relative ranges such as last 7 days or last month. Do not pass this for all-time/ever questions.",
+                    },
                     "direction": {
                         "type": "string",
                         "enum": ["asc", "desc"],
@@ -362,13 +372,22 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "get_product_sales_leaderboard",
-            "description": "Rank matching products by quantity sold and include the order with the most units for each product. Use for product popularity, top computer/product questions, and 'which order had the most of that product'.",
+            "description": "Rank matching products by quantity sold and include the order with the most units for each product. Use for product popularity, top computer/product questions, and 'which order had the most of that product'. For all-time/ever product questions, pass start_date='2000-01-01'.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "start_date": {"type": "string"},
-                    "end_date": {"type": "string"},
-                    "days": {"type": "integer", "default": 90},
+                    "start_date": {
+                        "type": "string",
+                        "description": "YYYY-MM-DD inclusive start date. Use 2000-01-01 for all-time questions.",
+                    },
+                    "end_date": {
+                        "type": "string",
+                        "description": "YYYY-MM-DD exclusive end date.",
+                    },
+                    "days": {
+                        "type": "integer",
+                        "description": "Use only for relative ranges such as last 7 days or last month. Do not pass this for all-time/ever questions.",
+                    },
                     "product_keyword": {"type": "string"},
                     "product_group": {
                         "type": "string",

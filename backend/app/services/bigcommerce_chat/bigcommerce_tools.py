@@ -1579,7 +1579,7 @@ def get_grouped_order_summary(
 def get_ranked_orders(
     start_date: str | None = None,
     end_date: str | None = None,
-    days: int = 90,
+    days: int | None = None,
     direction: str = "desc",
     limit: int = 10,
     dimension: str | None = None,
@@ -1597,7 +1597,11 @@ def get_ranked_orders(
     if dimension and dimension not in dimension_rules():
         raise ValueError(f"Unknown dimension: {dimension}")
 
-    orders = _orders_for_analytics_range(start_date, end_date, days, max_orders)
+    effective_start_date = start_date or ("2000-01-01" if days is None else None)
+    effective_days = days or 90
+    orders = _orders_for_analytics_range(
+        effective_start_date, end_date, effective_days, max_orders
+    )
     filtered_orders, customer_lookup = _filter_orders_for_analytics(
         orders,
         dimension=dimension,
@@ -1619,9 +1623,9 @@ def get_ranked_orders(
     selected = ranked[: min(max(limit, 1), 100)]
 
     return {
-        "start_date": start_date,
+        "start_date": effective_start_date,
         "end_date": end_date,
-        "days": days if not start_date else None,
+        "days": effective_days if not effective_start_date else None,
         "direction": direction,
         "orders_analyzed": len(orders),
         "matching_order_count": len(filtered_orders),
