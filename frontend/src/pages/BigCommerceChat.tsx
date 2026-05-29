@@ -18,11 +18,11 @@ import { extractApiErrorMessage } from "../utils/apiErrors";
 import { cn } from "../lib/utils";
 
 const ORDER_ADMIN_BASE_URL = "https://store-jsj7fos9p1.mybigcommerce.com/manage/orders";
-const ORDER_LINK_SECTION_RE = /\n{0,2}Order links:\n(?:- Order \d{4,}: https?:\/\/[^\s\n]+\n?)+\s*$/i;
-const ORDER_URL_AFTER_LABEL_RE = /\s*\(https:\/\/store-jsj7fos9p1\.mybigcommerce\.com\/manage\/orders\/\d{4,}\)/g;
-const ORDER_URL_AFTER_COLON_RE = /\bOrder\s+#?(\d{4,})[:\s-]+https:\/\/store-jsj7fos9p1\.mybigcommerce\.com\/manage\/orders\/\1/g;
-const ORDER_URL_RE = /https:\/\/store-jsj7fos9p1\.mybigcommerce\.com\/manage\/orders\/(\d{4,})/g;
-const MESSAGE_TOKEN_RE = /\bOrder\s+#?(\d{4,})\b|(https?:\/\/[^\s)]+)/gi;
+const ORDER_LINK_SECTION_RE = /\n{0,2}Order links:\n(?:- Order \d{1,}: https?:\/\/[^\s\n]+\n?)+\s*$/i;
+const ORDER_URL_AFTER_LABEL_RE = /\s*\(https:\/\/store-jsj7fos9p1\.mybigcommerce\.com\/manage\/orders\/\d{1,}\)/g;
+const ORDER_URL_AFTER_COLON_RE = /\bOrder\s+#?(\d{1,})[:\s-]+https:\/\/store-jsj7fos9p1\.mybigcommerce\.com\/manage\/orders\/\1/g;
+const ORDER_URL_RE = /https:\/\/store-jsj7fos9p1\.mybigcommerce\.com\/manage\/orders\/(\d{1,})/g;
+const MESSAGE_TOKEN_RE = /\bOrder\s+#?(\d{1,})\b|(https?:\/\/[^\s)]+)/gi;
 
 function chatErrorMessage(error: unknown): string {
   if (typeof error === "object" && error !== null && "response" in error) {
