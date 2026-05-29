@@ -17,6 +17,7 @@ from reportlab.pdfgen import canvas
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
 
+from app.models.delivery_run import DeliveryRun, DeliveryRunStatus
 from app.models.order import Order, OrderStatus, ShippingWorkflowStatus
 from app.models.order_status_history import OrderStatusHistory
 from app.models.user import User
@@ -1264,12 +1265,32 @@ class OrderService:
         prior_state = {
             "status": order.status,
             "delivery_run_id": order.delivery_run_id,
+            "delivery_sequence": order.delivery_sequence,
             "picklist_path": order.picklist_path,
             "qa_path": order.qa_path,
             "signed_picklist_path": order.signed_picklist_path,
             "bundle_path": order.bundle_path,
             "order_details_path": order.order_details_path,
         }
+        detached_from_active_run = False
+        active_run_id: Optional[str] = None
+
+        if order.delivery_run_id:
+            active_run = (
+                self.db.query(DeliveryRun)
+                .filter(DeliveryRun.id == order.delivery_run_id)
+                .with_for_update()
+                .first()
+            )
+            if (
+                active_run is not None
+                and active_run.status == DeliveryRunStatus.ACTIVE.value
+            ):
+                active_run_id = str(active_run.id)
+                active_run.updated_at = datetime.utcnow()
+                order.delivery_run_id = None
+                order.delivery_sequence = None
+                detached_from_active_run = True
 
         cleanup_results = self._remove_order_documents(
             order, remove_sharepoint_files=remove_sharepoint_files
@@ -1291,6 +1312,8 @@ class OrderService:
             extra_metadata={
                 "action": "dismissed_from_ops",
                 "remove_sharepoint_files": remove_sharepoint_files,
+                "detached_from_active_run": detached_from_active_run,
+                "active_run_id": active_run_id,
                 "cleanup_results": cleanup_results,
             },
         )
@@ -1308,6 +1331,8 @@ class OrderService:
                 "hidden_reason": reason,
                 "hidden_at": to_utc_iso_z(order.hidden_at),
                 "hidden_by": changed_by,
+                "delivery_run_id": order.delivery_run_id,
+                "delivery_sequence": order.delivery_sequence,
                 "picklist_path": order.picklist_path,
                 "qa_path": order.qa_path,
                 "signed_picklist_path": order.signed_picklist_path,
@@ -1316,6 +1341,18 @@ class OrderService:
             },
             audit_metadata=cleanup_results,
         )
+        if detached_from_active_run and active_run_id:
+            audit_service.log_delivery_run_action(
+                run_id=active_run_id,
+                action="order_dismissed",
+                user_id=changed_by or "system",
+                description="Dismissed order removed from active run",
+                audit_metadata={
+                    "order_id": str(order.id),
+                    "inflow_order_id": order.inflow_order_id,
+                    "reason": reason,
+                },
+            )
 
         self.db.commit()
         self.db.refresh(order)
