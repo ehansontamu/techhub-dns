@@ -1087,6 +1087,62 @@ def _format_source_orders(result: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _format_order_extreme(result: dict[str, Any], direction: str) -> str:
+    orders = result.get("orders") or []
+    if not orders:
+        return f"I did not find any matching orders for {_date_range_label(result)}."
+
+    def order_total(order: dict[str, Any]) -> float:
+        try:
+            return float(order.get("total_inc_tax") or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    reverse = direction == "largest"
+    ranked_orders = sorted(orders, key=order_total, reverse=reverse)
+    top_order = ranked_orders[0]
+    top_total = order_total(top_order)
+    tied_orders = [
+        order
+        for order in ranked_orders
+        if order.get("order_id") != top_order.get("order_id") and order_total(order) == top_total
+    ]
+
+    adjective = "biggest" if direction == "largest" else "smallest"
+    lines = [
+        (
+            f"The {adjective} order for {_date_range_label(result)} was "
+            f"Order {top_order.get('order_id')} ({_order_url(top_order.get('order_id'))}) "
+            f"at {_format_money(top_total)}."
+        ),
+        (
+            f"Placed by {top_order.get('placed_by') or 'Unknown'} | "
+            f"{top_order.get('college_unit') or 'Unknown college/unit'} | "
+            f"{top_order.get('status') or 'Unknown status'} | "
+            f"{top_order.get('date_created') or 'Unknown date'}."
+        ),
+    ]
+
+    if tied_orders:
+        tied_order_ids = ", ".join(f"Order {order.get('order_id')}" for order in tied_orders)
+        lines.append(f"Tie at {_format_money(top_total)} with: {tied_order_ids}.")
+
+    if result.get("matching_order_count"):
+        lines.append(
+            (
+                f"Compared {result.get('matching_order_count')} matching "
+                f"{_plural(int(result.get('matching_order_count') or 0), 'order')}."
+            )
+        )
+
+    if result.get("is_truncated"):
+        lines.append(
+            f"Warning: this hit max_orders={result.get('max_orders')}; the ranking may be incomplete."
+        )
+
+    return "\n".join(lines)
+
+
 def _format_age(age: dict[str, Any] | None) -> str:
     if not age:
         return "Unknown"
@@ -1732,6 +1788,77 @@ def _months_to_days(months: int) -> int:
     return max(1, months * 31)
 
 
+def _extract_basic_date_range(question: str) -> dict[str, Any]:
+    normalized = question.lower()
+
+    year_match = re.search(r"\b(20\d{2})\b", question)
+    if year_match:
+        year = int(year_match.group(1))
+        return {
+            "start_date": f"{year}-01-01",
+            "end_date": None if year == date.today().year else f"{year + 1}-01-01",
+        }
+
+    if "this year" in normalized or "year to date" in normalized or "ytd" in normalized:
+        return {"start_date": f"{date.today().year}-01-01", "end_date": None}
+
+    month_match = re.search(r"\blast\s+(\d+)\s+months?\b", normalized)
+    if month_match:
+        return {"days": _months_to_days(int(month_match.group(1)))}
+
+    day_match = re.search(r"\blast\s+(\d+)\s+days?\b", normalized)
+    if day_match:
+        return {"days": int(day_match.group(1))}
+
+    if "last week" in normalized or "past week" in normalized:
+        return {"days": 7}
+
+    return {"days": 90}
+
+
+def _extract_order_extreme_request(question: str) -> dict[str, Any] | None:
+    normalized = question.lower()
+    if "order" not in normalized:
+        return None
+
+    largest_terms = [
+        "biggest",
+        "largest",
+        "highest value",
+        "highest-value",
+        "highest total",
+        "most expensive",
+        "top order",
+    ]
+    smallest_terms = [
+        "smallest",
+        "lowest value",
+        "lowest-value",
+        "lowest total",
+        "least expensive",
+    ]
+
+    direction = None
+    if any(term in normalized for term in largest_terms):
+        direction = "largest"
+    elif any(term in normalized for term in smallest_terms):
+        direction = "smallest"
+
+    if direction is None:
+        return None
+
+    args = _extract_basic_date_range(question)
+    args.update(
+        {
+            "direction": direction,
+            "limit": 250,
+            "max_orders": 50000,
+            "exclude_statuses": ["Cancelled", "Declined", "Refunded"],
+        }
+    )
+    return args
+
+
 def _extract_popular_brand_product_request(question: str) -> dict[str, Any] | None:
     normalized = question.lower()
     if not any(phrase in normalized for phrase in ["most popular", "top selling", "top-selling", "best selling", "best-selling"]):
@@ -1805,6 +1932,15 @@ def ask(question: str, messages: list[dict[str, Any]] | None = None) -> tuple[st
     if _looks_like_model_info_request(question):
         model = os.getenv("LLM_MODEL", "").strip() or "not set"
         answer = f"This local chat is configured to use `{model}` via `LLM_MODEL`."
+        history.append({"role": "user", "content": question})
+        history.append({"role": "assistant", "content": answer})
+        return answer, history
+
+    order_extreme_args = _extract_order_extreme_request(question)
+    if order_extreme_args:
+        direction = order_extreme_args.pop("direction")
+        result = READ_ONLY_TOOLS["get_source_orders_for_summary"](**order_extreme_args)
+        answer = _format_order_extreme(result, direction)
         history.append({"role": "user", "content": question})
         history.append({"role": "assistant", "content": answer})
         return answer, history

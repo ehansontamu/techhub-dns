@@ -101,7 +101,7 @@ export default function BigCommerceChat() {
             BigCommerce Chat
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Read-only store assistant
+            Read-only store assistant; information can and will be wrong. Double check what you can. This is a preliminary test of functionality.
           </p>
         </div>
         <Button
