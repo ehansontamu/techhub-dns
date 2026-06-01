@@ -1094,6 +1094,56 @@ def get_shipping_spend_by_method(
     }
 
 
+def get_shipping_charge_total(
+    start_date: str | None = "2000-01-01",
+    end_date: str | None = None,
+    days: int = 90,
+    max_orders: int = DEFAULT_MAX_ORDER_SCAN,
+    include_statuses: list[str] | None = None,
+    exclude_statuses: list[str] | None = None,
+    exclude_order_ids: list[int] | None = None,
+) -> dict[str, Any]:
+    """Return total customer-facing shipping charges without address/shipment fan-out."""
+
+    included = set(include_statuses or [])
+    excluded = set(exclude_statuses or ["Cancelled", "Declined", "Refunded"])
+    excluded_order_ids = {int(order_id) for order_id in exclude_order_ids or []}
+    orders = _orders_for_analytics_range(start_date, end_date, days, max_orders)
+    included_orders = [
+        order
+        for order in orders
+        if (not included or str(order.get("status") or "Unknown") in included)
+        and str(order.get("status") or "Unknown") not in excluded
+        and int(order.get("id") or 0) not in excluded_order_ids
+    ]
+    shipping_orders = [
+        order
+        for order in included_orders
+        if float(order.get("shipping_cost_inc_tax") or order.get("base_shipping_cost") or 0) != 0
+    ]
+    total = sum(
+        float(order.get("shipping_cost_inc_tax") or order.get("base_shipping_cost") or 0)
+        for order in included_orders
+    )
+
+    return {
+        "start_date": start_date,
+        "end_date": end_date,
+        "days": days if not start_date else None,
+        "orders_analyzed": len(orders),
+        "included_order_count": len(included_orders),
+        "shipping_cost_order_count": len(shipping_orders),
+        "matched_order_count": len(included_orders),
+        "matched_shipping_total_inc_tax": round(total, 2),
+        "max_orders": max_orders,
+        "is_truncated": len(orders) >= max_orders,
+        "included_statuses": sorted(included),
+        "excluded_statuses": sorted(excluded),
+        "excluded_order_ids": sorted(excluded_order_ids),
+        "metric_basis": "sum of customer-facing order shipping_cost_inc_tax for filtered orders; not carrier invoice spend",
+    }
+
+
 def _parse_bc_datetime(value: Any) -> datetime | None:
     if not value:
         return None
@@ -3393,6 +3443,7 @@ READ_ONLY_TOOLS = {
     "get_product_sales_leaderboard": get_product_sales_leaderboard,
     "get_source_orders_for_summary": get_source_orders_for_summary,
     "get_shipping_spend_by_method": get_shipping_spend_by_method,
+    "get_shipping_charge_total": get_shipping_charge_total,
     "get_fulfillment_aging_report": get_fulfillment_aging_report,
     "get_oldest_unfulfilled_orders": get_oldest_unfulfilled_orders,
     "get_order_fulfillment_timing": get_order_fulfillment_timing,

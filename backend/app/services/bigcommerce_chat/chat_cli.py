@@ -2295,12 +2295,10 @@ def _extract_shipping_total_request(question: str) -> dict[str, Any] | None:
     return {
         "sql": sql,
         "live_args": {
-            "method_keyword": None,
             "start_date": start_date,
             "end_date": end_date,
             "days": 90,
             "max_orders": 5000,
-            "max_shipping_address_orders": 5000,
             "include_statuses": include_statuses,
             "exclude_statuses": ["Cancelled", "Declined", "Refunded"],
             "exclude_order_ids": exclude_order_ids,
@@ -2401,7 +2399,7 @@ def ask(question: str, messages: list[dict[str, Any]] | None = None) -> tuple[st
             answer = None
 
         if answer is None:
-            live_result = READ_ONLY_TOOLS["get_shipping_spend_by_method"](
+            live_result = READ_ONLY_TOOLS["get_shipping_charge_total"](
                 **shipping_total_request["live_args"]
             )
             answer = _format_shipping_total_result(
