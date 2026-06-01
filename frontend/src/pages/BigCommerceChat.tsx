@@ -24,7 +24,7 @@ const ORDER_URL_AFTER_LABEL_RE = /\s*\(https:\/\/store-jsj7fos9p1\.mybigcommerce
 const ORDER_URL_AFTER_COLON_RE = /\bOrder\s+#?(\d{1,})[:\s-]+https:\/\/store-jsj7fos9p1\.mybigcommerce\.com\/manage\/orders\/\1/g;
 const ORDER_URL_RE = /https:\/\/store-jsj7fos9p1\.mybigcommerce\.com\/manage\/orders\/(\d{1,})/g;
 const TOOL_CALL_TEXT_RE = /\bto=functions\.[A-Za-z_]\w*\b.*?(?=\n\n|$)/gs;
-const MESSAGE_TOKEN_RE = /\bOrder\s+#?(\d{1,})\b|(https?:\/\/[^\s)]+)/gi;
+const MESSAGE_TOKEN_RE = /\*\*([^*\n]+)\*\*|\bOrder\s+#?(\d{1,})\b|(https?:\/\/[^\s)]+)/gi;
 
 function chatErrorMessage(error: unknown): string {
   if (typeof error === "object" && error !== null && "response" in error) {
@@ -60,9 +60,16 @@ function renderMessageText(text: string) {
       );
     }
 
-    const orderId = match[1];
-    const url = match[2];
-    if (orderId) {
+    const boldText = match[1];
+    const orderId = match[2];
+    const url = match[3];
+    if (boldText) {
+      parts.push(
+        <strong key={`bold-${start}`} className="font-semibold">
+          {boldText}
+        </strong>
+      );
+    } else if (orderId) {
       const label = match[0];
       parts.push(
         <a

@@ -79,6 +79,7 @@ When asked for orders, top products, or comparisons for a checkout dimension val
 For these breakdowns, clearly say how many groups are displayed, how many total groups exist, how many displayed orders are covered, and include an "All other groups" summary when remaining_totals is nonzero.
 For "since the beginning of 2026", pass start_date="2026-01-01".
 For "all time", "all-time", or "ever", pass start_date="2000-01-01" unless the selected tool explicitly says it defaults to all-time.
+The fiscal year runs from September 1 through August 31. For example, fiscal year 2026 means 2025-09-01 through 2026-09-01 as a half-open date range.
 Non-precise names can be aliases. "Bush School" can mean Bush or Bush School of Government and Public Service.
 "Arts and Sciences" can mean College of Arts and Sciences or Arts & Sciences.
 Keep answers concise and include order IDs when relevant.
@@ -865,6 +866,7 @@ Rules:
 - For sales/revenue analytics, exclude statuses 'Cancelled', 'Declined', and 'Refunded' unless the user explicitly asks to include them. For "complete only", filter status IN ('Completed', 'Complete').
 - For all-time/ever, use a broad lower bound such as date_created >= '2000-01-01' or omit the date bound if the question truly asks all rows.
 - For calendar years/months, use half-open ranges: date_created >= '2025-01-01' AND date_created < '2026-01-01'.
+- The fiscal year runs from September 1 through August 31. Use half-open ranges for fiscal years: fiscal year 2026 is date_created >= '2025-09-01' AND date_created < '2026-09-01'.
 - For "last week", use the previous Monday through current Monday unless the user says "last 7 days". For "last month", use the previous calendar month.
 - When ranking orders by dollars/value/largest/biggest, use bc_orders.total_inc_tax DESC. First/earliest/submitted means date_created ASC. Latest/newest means date_created DESC. Most items means items_total DESC.
 - For product popularity, join bc_orders to bc_order_items and rank by SUM(bc_order_items.quantity), not revenue, unless the user asks for revenue.
