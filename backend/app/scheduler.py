@@ -1,4 +1,5 @@
 from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
@@ -19,6 +20,8 @@ _WEBHOOK_HEALTH_STALE_THRESHOLD = timedelta(hours=2)
 _WEBHOOK_RECONCILE_INTERVAL_MINUTES = 30
 _WEBHOOK_HEALTH_CHECK_INTERVAL_MINUTES = 60
 _BIGCOMMERCE_ANALYTICS_SYNC_INTERVAL_MINUTES = 15
+_BIGCOMMERCE_ANALYTICS_NIGHTLY_BACKFILL_HOUR = 0
+_BIGCOMMERCE_ANALYTICS_NIGHTLY_BACKFILL_MINUTE = 0
 _INFLOW_EVENT_MAPPING = {
     "orderCreated": "salesOrder.created",
     "orderUpdated": "salesOrder.updated",
@@ -187,6 +190,24 @@ def sync_bigcommerce_analytics_cache_job() -> None:
         logger.info("BigCommerce analytics sync finished: %s", result)
     except Exception as exc:
         logger.error("BigCommerce analytics sync failed: %s", exc, exc_info=True)
+
+
+def backfill_bigcommerce_analytics_cache_job() -> None:
+    """Nightly broad refresh for local BigCommerce analytics tables."""
+
+    if not os.getenv("BC_STORE_HASH") or not os.getenv("BC_ACCESS_TOKEN"):
+        logger.info("BigCommerce analytics backfill skipped: credentials are not configured")
+        return
+
+    try:
+        result = sync_bigcommerce_analytics_cache(full_backfill=True)
+        logger.info("BigCommerce analytics nightly backfill finished: %s", result)
+    except Exception as exc:
+        logger.error(
+            "BigCommerce analytics nightly backfill failed: %s",
+            exc,
+            exc_info=True,
+        )
 
 
 def reconcile_inflow_webhook_state() -> None:
@@ -394,6 +415,16 @@ def start_scheduler():
         name="Sync BigCommerce analytics cache",
         replace_existing=True,
         next_run_time=datetime.now() + timedelta(minutes=1),
+    )
+    scheduler.add_job(
+        backfill_bigcommerce_analytics_cache_job,
+        trigger=CronTrigger(
+            hour=_BIGCOMMERCE_ANALYTICS_NIGHTLY_BACKFILL_HOUR,
+            minute=_BIGCOMMERCE_ANALYTICS_NIGHTLY_BACKFILL_MINUTE,
+        ),
+        id="bigcommerce_analytics_nightly_backfill",
+        name="Nightly BigCommerce analytics cache backfill",
+        replace_existing=True,
     )
 
     scheduler.start()
