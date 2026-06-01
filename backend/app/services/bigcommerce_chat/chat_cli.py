@@ -276,9 +276,17 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "days": {"type": "integer", "default": 90},
                     "max_orders": {"type": "integer", "default": 50000},
                     "max_shipping_address_orders": {"type": "integer", "default": 5000},
+                    "include_statuses": {
+                        "type": ["array", "null"],
+                        "items": {"type": "string"},
+                    },
                     "exclude_statuses": {
                         "type": ["array", "null"],
                         "items": {"type": "string"},
+                    },
+                    "exclude_order_ids": {
+                        "type": ["array", "null"],
+                        "items": {"type": "integer"},
                     },
                 },
             },
@@ -2233,6 +2241,102 @@ def _extract_shipping_spend_request(question: str) -> dict[str, Any] | None:
     }
 
 
+def _extract_shipping_total_request(question: str) -> dict[str, Any] | None:
+    normalized = question.lower()
+    if "shipping" not in normalized:
+        return None
+    if not any(term in normalized for term in ["charged", "charge", "charges", "revenue"]):
+        return None
+    if not any(term in normalized for term in ["total", "all time", "all-time", "ever"]):
+        return None
+
+    exclude_order_ids = [
+        int(match.group(1))
+        for match in re.finditer(
+            r"\bexclud(?:e|ing)\s+(?:order\s+#?)?(\d{1,})\b",
+            question,
+            re.IGNORECASE,
+        )
+    ]
+
+    include_statuses: list[str] | None = None
+    if re.search(r"\bcomplete(?:d)?\s+status\b|\bstatus\s+(?:is\s+)?complete(?:d)?\b", normalized):
+        include_statuses = ["Completed", "Complete"]
+
+    start_date = "2000-01-01"
+    end_date = None
+    year_match = re.search(r"\b(20\d{2})\b", question)
+    if year_match:
+        year = int(year_match.group(1))
+        start_date = f"{year}-01-01"
+        end_date = None if year == date.today().year else f"{year + 1}-01-01"
+
+    where_clauses = ["1 = 1"]
+    if start_date:
+        where_clauses.append(f"date_created >= '{start_date}'")
+    if end_date:
+        where_clauses.append(f"date_created < '{end_date}'")
+    if include_statuses:
+        statuses = ", ".join(f"'{status}'" for status in include_statuses)
+        where_clauses.append(f"status IN ({statuses})")
+    else:
+        where_clauses.append("status NOT IN ('Cancelled', 'Declined', 'Refunded')")
+    if exclude_order_ids:
+        ids = ", ".join(str(order_id) for order_id in sorted(set(exclude_order_ids)))
+        where_clauses.append(f"id NOT IN ({ids})")
+
+    sql = (
+        "SELECT COALESCE(SUM(shipping_cost_inc_tax), 0) AS total_shipping_charged, "
+        "COUNT(*) AS order_count "
+        "FROM bc_orders WHERE "
+        + " AND ".join(where_clauses)
+    )
+
+    return {
+        "sql": sql,
+        "live_args": {
+            "method_keyword": None,
+            "start_date": start_date,
+            "end_date": end_date,
+            "days": 90,
+            "max_orders": 5000,
+            "max_shipping_address_orders": 5000,
+            "include_statuses": include_statuses,
+            "exclude_statuses": ["Cancelled", "Declined", "Refunded"],
+            "exclude_order_ids": exclude_order_ids,
+        },
+        "include_statuses": include_statuses,
+        "exclude_order_ids": exclude_order_ids,
+        "start_date": start_date,
+        "end_date": end_date,
+    }
+
+
+def _format_shipping_total_result(
+    total_shipping_charged: Any,
+    order_count: Any,
+    request: dict[str, Any],
+    source: str,
+) -> str:
+    filters: list[str] = []
+    if request.get("include_statuses"):
+        filters.append("status Completed/Complete only")
+    if request.get("exclude_order_ids"):
+        excluded = ", ".join(f"Order {order_id}" for order_id in request["exclude_order_ids"])
+        filters.append(f"excluding {excluded}")
+    range_label = (
+        f"{request.get('start_date')} through {request.get('end_date') or 'now'}"
+        if request.get("start_date") != "2000-01-01"
+        else "all time"
+    )
+    filter_label = f" ({'; '.join(filters)})" if filters else ""
+    return (
+        f"Total customer shipping charges for {range_label}{filter_label}: "
+        f"{_format_money(float(total_shipping_charged or 0))} across "
+        f"{_format_number(int(order_count or 0))} orders. Source: {source}."
+    )
+
+
 def _months_to_days(months: int) -> int:
     return max(1, months * 31)
 
@@ -2271,6 +2375,44 @@ def ask(question: str, messages: list[dict[str, Any]] | None = None) -> tuple[st
     if _looks_like_model_info_request(question):
         model = os.getenv("LLM_MODEL", "").strip() or "not set"
         answer = f"This local chat is configured to use `{model}` via `LLM_MODEL`."
+        history.append({"role": "user", "content": question})
+        history.append({"role": "assistant", "content": answer})
+        return answer, history
+
+    shipping_total_request = _extract_shipping_total_request(question)
+    if shipping_total_request:
+        answer = None
+        try:
+            cache_result = run_bigcommerce_readonly_query(
+                shipping_total_request["sql"],
+                limit=1,
+            )
+            cache_status = cache_result.get("cache_status") or {}
+            rows = cache_result.get("rows") or []
+            if int(cache_status.get("order_count") or 0) > 0 and rows:
+                row = rows[0]
+                answer = _format_shipping_total_result(
+                    row.get("total_shipping_charged"),
+                    row.get("order_count"),
+                    shipping_total_request,
+                    "local analytics cache",
+                )
+        except Exception:
+            answer = None
+
+        if answer is None:
+            live_result = READ_ONLY_TOOLS["get_shipping_spend_by_method"](
+                **shipping_total_request["live_args"]
+            )
+            answer = _format_shipping_total_result(
+                live_result.get("matched_shipping_total_inc_tax"),
+                live_result.get("matched_order_count"),
+                shipping_total_request,
+                "live BigCommerce API",
+            )
+            if live_result.get("is_truncated"):
+                answer += f" Warning: order scan hit max_orders={live_result.get('max_orders')}; total may be incomplete."
+
         history.append({"role": "user", "content": question})
         history.append({"role": "assistant", "content": answer})
         return answer, history

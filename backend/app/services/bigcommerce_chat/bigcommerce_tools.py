@@ -929,7 +929,9 @@ def get_shipping_spend_by_method(
     days: int = 90,
     max_orders: int = DEFAULT_MAX_ORDER_SCAN,
     max_shipping_address_orders: int = DEFAULT_MAX_LINE_ITEM_ORDER_SCAN,
+    include_statuses: list[str] | None = None,
     exclude_statuses: list[str] | None = None,
+    exclude_order_ids: list[int] | None = None,
 ) -> dict[str, Any]:
     """Summarize customer-facing shipping charges by method using read-only orders."""
 
@@ -950,10 +952,16 @@ def get_shipping_spend_by_method(
                 labels.append(str(value))
         return labels
 
+    included = set(include_statuses or [])
     excluded = set(exclude_statuses or ["Cancelled", "Declined", "Refunded"])
+    excluded_order_ids = {int(order_id) for order_id in exclude_order_ids or []}
     orders = _orders_for_analytics_range(start_date, end_date, days, max_orders)
     included_orders = [
-        order for order in orders if str(order.get("status") or "Unknown") not in excluded
+        order
+        for order in orders
+        if (not included or str(order.get("status") or "Unknown") in included)
+        and str(order.get("status") or "Unknown") not in excluded
+        and int(order.get("id") or 0) not in excluded_order_ids
     ]
     shipping_orders = [
         order
@@ -978,6 +986,13 @@ def get_shipping_spend_by_method(
     ) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
         order_id = int(order["id"])
         return order, _shipping_addresses_for_order(order_id), _shipments_for_order(order_id)
+
+    if not keyword:
+        matched_order_ids.update(int(order["id"]) for order in shipping_orders if order.get("id"))
+        matched_shipping_total = sum(
+            float(order.get("shipping_cost_inc_tax") or order.get("base_shipping_cost") or 0)
+            for order in shipping_orders
+        )
 
     with ThreadPoolExecutor(max_workers=min(8, max(1, len(scanned_orders)))) as executor:
         future_to_order = {
@@ -1023,7 +1038,8 @@ def get_shipping_spend_by_method(
 
             if order_matched:
                 matched_order_ids.add(int(order["id"]))
-                matched_shipping_total += customer_shipping_total
+                if keyword:
+                    matched_shipping_total += customer_shipping_total
                 if matched_methods:
                     method_share = customer_shipping_total / len(matched_methods)
                     for method in matched_methods:
@@ -1045,7 +1061,9 @@ def get_shipping_spend_by_method(
         "shipping_address_scan_truncated": len(shipping_orders) > address_scan_limit,
         "max_orders": max_orders,
         "is_truncated": len(orders) >= max_orders,
+        "included_statuses": sorted(included),
         "excluded_statuses": sorted(excluded),
+        "excluded_order_ids": sorted(excluded_order_ids),
         "matched_order_count": len(matched_order_ids),
         "matched_shipping_address_count": matched_address_count,
         "matched_shipping_total_inc_tax": round(matched_shipping_total, 2),
