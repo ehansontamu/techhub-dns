@@ -839,6 +839,39 @@ CACHE_TOOL_NAMES = {
     "get_bigcommerce_cache_status",
     "run_bigcommerce_readonly_query",
 }
+PRIMARY_TOOL_NAMES = set(CACHE_TOOL_NAMES)
+PRIMARY_TOOL_SCHEMAS = [
+    schema
+    for schema in TOOL_SCHEMAS
+    if schema.get("function", {}).get("name") in PRIMARY_TOOL_NAMES
+]
+
+ANALYTICS_CACHE_PROMPT = f"""You are a read-only BigCommerce analytics assistant.
+Use the local analytics cache for store facts. Your default job is to translate the user's question into a safe read-only SQL query, inspect the results, and answer in plain English.
+
+Available tables:
+- bc_orders: one row per order. Important fields: id, date_created, status, total_inc_tax, subtotal_inc_tax, shipping_cost_inc_tax, items_total, customer_id, customer_name, company, billing_*.
+- bc_order_items: one row per order line. Important fields: order_id, product_id, name, sku, quantity, total_inc_tax, base_total, product_options.
+- bc_customers: customer account records.
+- bc_order_addresses and bc_order_custom_fields: recipient, shipping, college/unit, department code, account number, and other checkout fields.
+- bc_sync_runs: sync history.
+
+Rules:
+- Current date: {date.today().isoformat()}.
+- Call run_bigcommerce_readonly_query for analytics, rankings, counts, totals, date questions, products, customers, colleges/units, departments, accounts, and shipping-charge questions.
+- Call get_bigcommerce_analytics_schema only when you need exact column details.
+- Call get_bigcommerce_cache_status when the user asks about freshness or sync status.
+- Write only SELECT queries against the tables above.
+- For sales/revenue analytics, exclude statuses 'Cancelled', 'Declined', and 'Refunded' unless the user explicitly asks to include them. For "complete only", filter status IN ('Completed', 'Complete').
+- For all-time/ever, use a broad lower bound such as date_created >= '2000-01-01' or omit the date bound if the question truly asks all rows.
+- For calendar years/months, use half-open ranges: date_created >= '2025-01-01' AND date_created < '2026-01-01'.
+- For "last week", use the previous Monday through current Monday unless the user says "last 7 days". For "last month", use the previous calendar month.
+- When ranking orders by dollars/value/largest/biggest, use bc_orders.total_inc_tax DESC. First/earliest/submitted means date_created ASC. Latest/newest means date_created DESC. Most items means items_total DESC.
+- For product popularity, join bc_orders to bc_order_items and rank by SUM(bc_order_items.quantity), not revenue, unless the user asks for revenue.
+- When a specific order matters, include bc_orders.id as order_id in the query and write it as "Order 1234"; do not print raw admin URLs.
+- Keep answers concise. Mention the cache timestamp only if the result may be stale or the user asks.
+- If a SQL query errors, fix the SQL and try again. Do not ask the user to narrow the question just because SQL needs repair.
+"""
 
 LIVE_TOOL_SCHEMAS = [
     schema
@@ -883,7 +916,11 @@ def _call_tool(name: str, arguments_json: str) -> str:
     if name not in CHAT_TOOLS:
         return json.dumps({"error": f"Tool is not allowed: {name}"})
 
-    arguments = _clamp_tool_arguments(json.loads(arguments_json or "{}"))
+    try:
+        arguments = _clamp_tool_arguments(json.loads(arguments_json or "{}"))
+    except json.JSONDecodeError as exc:
+        return json.dumps({"error": f"Invalid tool arguments JSON: {exc}"})
+
     try:
         result = CHAT_TOOLS[name](**arguments)
     except Exception as exc:
@@ -963,6 +1000,100 @@ def _run_tool_calls(
         )
 
     return formatted_direct_answer, cache_failed
+
+
+def _compact_chat_history_for_cache(
+    history: list[dict[str, Any]],
+    question: str,
+) -> list[dict[str, Any]]:
+    cache_history: list[dict[str, Any]] = [
+        {"role": "system", "content": ANALYTICS_CACHE_PROMPT}
+    ]
+
+    recent_messages: list[dict[str, str]] = []
+    for message in history:
+        role = message.get("role")
+        content = message.get("content")
+        if role not in {"user", "assistant"} or not isinstance(content, str) or not content.strip():
+            continue
+        recent_messages.append({"role": role, "content": content})
+
+    cache_history.extend(recent_messages[-10:])
+    if not cache_history or cache_history[-1].get("content") != question:
+        cache_history.append({"role": "user", "content": question})
+    return cache_history
+
+
+def _is_tool_plan_without_answer(answer: str) -> bool:
+    lower = answer.lower().strip()
+    if not lower:
+        return True
+    plan_markers = [
+        "i'll use",
+        "i will use",
+        "i'll query",
+        "i will query",
+        "need use",
+        "checking ",
+        "run_bigcommerce_readonly_query",
+        "get_bigcommerce_analytics_schema",
+        "local analytics cache to",
+        "select ",
+        "from bc_",
+    ]
+    return any(marker in lower for marker in plan_markers)
+
+
+def _run_primary_cache_chat(
+    question: str,
+    history: list[dict[str, Any]],
+    max_rounds: int = 5,
+) -> tuple[str | None, bool]:
+    cache_history = _compact_chat_history_for_cache(history, question)
+    saw_cache_failure = False
+
+    for round_index in range(max_rounds):
+        message = _coerce_text_tool_call(
+            chat_completion(
+                messages=cache_history,
+                tools=PRIMARY_TOOL_SCHEMAS,
+                tool_choice="auto",
+            ),
+            allowed_tool_names=PRIMARY_TOOL_NAMES,
+        )
+
+        tool_calls = [
+            tool_call
+            for tool_call in message.get("tool_calls") or []
+            if (tool_call.get("function") or {}).get("name") in PRIMARY_TOOL_NAMES
+        ]
+        if tool_calls:
+            message = dict(message)
+            message["tool_calls"] = tool_calls
+            cache_history.append(_assistant_history_message(message))
+            _, cache_failed = _run_tool_calls(tool_calls, cache_history)
+            saw_cache_failure = saw_cache_failure or cache_failed
+            continue
+
+        answer = _sanitize_assistant_answer(message.get("content") or "")
+        if _is_tool_plan_without_answer(answer) and round_index < max_rounds - 1:
+            cache_history.append({"role": "assistant", "content": answer})
+            cache_history.append(
+                {
+                    "role": "user",
+                    "content": (
+                        "Use the available read-only SQL tool now if data is needed. "
+                        "If tool results are already present, answer from those results. "
+                        "Do not describe the plan."
+                    ),
+                }
+            )
+            continue
+
+        if answer:
+            return _add_order_links(answer), saw_cache_failure
+
+    return None, saw_cache_failure
 
 
 def _format_money(value: float | int) -> str:
@@ -2457,8 +2588,22 @@ def ask(question: str, messages: list[dict[str, Any]] | None = None) -> tuple[st
         history.append({"role": "assistant", "content": answer})
         return answer, history
 
+    cache_answer = None
+    cache_failed = False
+    cache_loop_error: str | None = None
+    try:
+        cache_answer, cache_failed = _run_primary_cache_chat(question, history)
+    except Exception as exc:
+        cache_answer = None
+        cache_failed = True
+        cache_loop_error = str(exc)
+    if cache_answer:
+        history.append({"role": "user", "content": question})
+        history.append({"role": "assistant", "content": cache_answer})
+        return cache_answer, history
+
     sales_total_request = _extract_sales_total_request(question)
-    if sales_total_request:
+    if sales_total_request and cache_failed:
         answer = None
         try:
             cache_result = run_bigcommerce_readonly_query(
@@ -2498,7 +2643,7 @@ def ask(question: str, messages: list[dict[str, Any]] | None = None) -> tuple[st
         return answer, history
 
     shipping_total_request = _extract_shipping_total_request(question)
-    if shipping_total_request:
+    if shipping_total_request and cache_failed:
         answer = None
         try:
             cache_result = run_bigcommerce_readonly_query(
@@ -2536,7 +2681,7 @@ def ask(question: str, messages: list[dict[str, Any]] | None = None) -> tuple[st
         return answer, history
 
     ranked_order_args = _extract_ranked_order_request(question)
-    if ranked_order_args:
+    if ranked_order_args and cache_failed:
         result = READ_ONLY_TOOLS["get_ranked_orders"](**ranked_order_args)
         answer = _add_order_links(_format_ranked_orders(result))
         history.append({"role": "user", "content": question})
@@ -2601,14 +2746,23 @@ def ask(question: str, messages: list[dict[str, Any]] | None = None) -> tuple[st
         history.append({"role": "assistant", "content": answer})
         return answer, history
 
+    if cache_loop_error:
+        answer = (
+            "BigCommerce chat timed out while asking the language model to query the local cache. "
+            "The cache may still be available, but I couldn't safely turn this question into a SQL answer this time."
+        )
+        history.append({"role": "user", "content": question})
+        history.append({"role": "assistant", "content": answer})
+        return answer, history
+
     history.append({"role": "user", "content": question})
     history_before_model = list(history)
 
     message = _coerce_text_tool_call(chat_completion(
         messages=history,
-        tools=TOOL_SCHEMAS,
+        tools=LIVE_TOOL_SCHEMAS,
         tool_choice="auto",
-    ))
+    ), allowed_tool_names=LIVE_TOOL_NAMES)
     history.append(_assistant_history_message(message))
 
     tool_calls = message.get("tool_calls") or []
