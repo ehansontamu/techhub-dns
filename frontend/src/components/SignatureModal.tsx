@@ -263,7 +263,7 @@ export function SignatureModal({ open, onOpenChange, onSave }: SignatureModalPro
                                     setRequirePenInput(!requirePenInput);
                                 }
                             }}
-                            className="text-muted-foreground hover:text-foreground"
+                            className="text-muted-foreground hover:bg-maroon-700 hover:text-white focus-visible:bg-maroon-700 focus-visible:text-white"
                         >
                             {requirePenInput ? "Allow Touch" : "Require Pen"}
                         </Button>

@@ -252,33 +252,13 @@ class AnalyticsService:
         return sorted(trends.values(), key=lambda x: x["date"], reverse=True)
 
     def get_workflow_daily_trends(self, days: int = 30) -> List[Dict[str, Any]]:
-        """Get daily transition totals for picked/shipped/delivered/fulfilled metrics."""
+        """Get daily totals for picked/shipped/delivered/fulfilled metrics."""
         days = max(1, min(days, 365))
         cutoff_date = datetime.utcnow() - timedelta(days=days - 1)
 
-        results = (
+        picked_results = (
             self.db.query(
                 func.date(AuditLog.timestamp).label("date"),
-                func.sum(
-                    case(
-                        (
-                            func.lower(AuditLog.to_status)
-                            == OrderStatus.SHIPPING.value,
-                            1,
-                        ),
-                        else_=0,
-                    )
-                ).label("shipped_count"),
-                func.sum(
-                    case(
-                        (
-                            func.lower(AuditLog.to_status)
-                            == OrderStatus.DELIVERED.value,
-                            1,
-                        ),
-                        else_=0,
-                    )
-                ).label("delivered_count"),
                 func.sum(
                     case(
                         (func.lower(AuditLog.to_status) == OrderStatus.PICKED.value, 1),
@@ -294,18 +274,73 @@ class AnalyticsService:
             .all()
         )
 
+        delivered_results = (
+            self._visible_orders_query(
+                func.date(Order.signature_captured_at).label("date"),
+                func.count(Order.id).label("delivered_count"),
+            )
+            .filter(
+                Order.signature_captured_at.isnot(None),
+                Order.signature_captured_at >= cutoff_date,
+            )
+            .group_by(func.date(Order.signature_captured_at))
+            .all()
+        )
+
+        shipped_results = (
+            self._visible_orders_query(
+                func.date(Order.shipped_to_carrier_at).label("date"),
+                func.count(Order.id).label("shipped_count"),
+            )
+            .filter(
+                Order.shipped_to_carrier_at.isnot(None),
+                Order.shipped_to_carrier_at >= cutoff_date,
+            )
+            .group_by(func.date(Order.shipped_to_carrier_at))
+            .all()
+        )
+
         row_map: Dict[str, Dict[str, int]] = {}
-        for date_value, shipped_count, delivered_count, picked_count in results:
+        for date_value, picked_count in picked_results:
             date_str = str(date_value)
-            shipped = int(shipped_count or 0)
-            delivered = int(delivered_count or 0)
             picked = int(picked_count or 0)
             row_map[date_str] = {
-                "shipped_count": shipped,
-                "delivered_count": delivered,
+                "shipped_count": 0,
+                "delivered_count": 0,
                 "picked_count": picked,
-                "fulfilled_count": shipped + delivered,
+                "fulfilled_count": 0,
             }
+
+        for date_value, delivered_count in delivered_results:
+            date_str = str(date_value)
+            row = row_map.setdefault(
+                date_str,
+                {
+                    "shipped_count": 0,
+                    "delivered_count": 0,
+                    "picked_count": 0,
+                    "fulfilled_count": 0,
+                },
+            )
+            row["delivered_count"] = int(delivered_count or 0)
+
+        for date_value, shipped_count in shipped_results:
+            date_str = str(date_value)
+            row = row_map.setdefault(
+                date_str,
+                {
+                    "shipped_count": 0,
+                    "delivered_count": 0,
+                    "picked_count": 0,
+                    "fulfilled_count": 0,
+                },
+            )
+            row["shipped_count"] = int(shipped_count or 0)
+
+        for metrics in row_map.values():
+            metrics["fulfilled_count"] = (
+                metrics["shipped_count"] + metrics["delivered_count"]
+            )
 
         start_date = cutoff_date.date()
         today = datetime.utcnow().date()
@@ -331,73 +366,108 @@ class AnalyticsService:
         return data
 
     def get_fulfilled_totals_by_month(self, months: int = 12) -> List[Dict[str, Any]]:
-        """Get fulfilled totals grouped by month using shipping+delivered transitions."""
+        """Get fulfilled totals grouped by month using completed shipments and deliveries."""
         months = max(1, min(months, 60))
         cutoff_date = datetime.utcnow() - timedelta(days=months * 31)
 
-        rows = (
-            self.db.query(
-                func.extract("year", AuditLog.timestamp).label("year"),
-                func.extract("month", AuditLog.timestamp).label("month"),
-                func.count(AuditLog.id).label("fulfilled_count"),
+        shipped_rows = (
+            self._visible_orders_query(
+                func.extract("year", Order.shipped_to_carrier_at).label("year"),
+                func.extract("month", Order.shipped_to_carrier_at).label("month"),
+                func.count(Order.id).label("fulfilled_count"),
             )
-            .join(Order, AuditLog.order_id == Order.id)
             .filter(
-                AuditLog.timestamp >= cutoff_date,
-                Order.hidden_from_ops.is_(False),
-                func.lower(AuditLog.to_status).in_(
-                    [OrderStatus.SHIPPING.value, OrderStatus.DELIVERED.value]
-                ),
+                Order.shipped_to_carrier_at.isnot(None),
+                Order.shipped_to_carrier_at >= cutoff_date,
             )
             .group_by(
-                func.extract("year", AuditLog.timestamp),
-                func.extract("month", AuditLog.timestamp),
+                func.extract("year", Order.shipped_to_carrier_at),
+                func.extract("month", Order.shipped_to_carrier_at),
             )
             .order_by(
-                func.extract("year", AuditLog.timestamp).asc(),
-                func.extract("month", AuditLog.timestamp).asc(),
+                func.extract("year", Order.shipped_to_carrier_at).asc(),
+                func.extract("month", Order.shipped_to_carrier_at).asc(),
             )
             .all()
         )
 
+        delivered_rows = (
+            self._visible_orders_query(
+                func.extract("year", Order.signature_captured_at).label("year"),
+                func.extract("month", Order.signature_captured_at).label("month"),
+                func.count(Order.id).label("fulfilled_count"),
+            )
+            .filter(
+                Order.signature_captured_at.isnot(None),
+                Order.signature_captured_at >= cutoff_date,
+            )
+            .group_by(
+                func.extract("year", Order.signature_captured_at),
+                func.extract("month", Order.signature_captured_at),
+            )
+            .order_by(
+                func.extract("year", Order.signature_captured_at).asc(),
+                func.extract("month", Order.signature_captured_at).asc(),
+            )
+            .all()
+        )
+
+        totals_by_period: Dict[str, int] = {}
+        for year, month, fulfilled_count in [*shipped_rows, *delivered_rows]:
+            period = f"{int(year):04d}-{int(month):02d}"
+            totals_by_period[period] = totals_by_period.get(period, 0) + int(
+                fulfilled_count or 0
+            )
+
         data = [
-            {
-                "period": f"{int(year):04d}-{int(month):02d}",
-                "fulfilled_count": int(fulfilled_count or 0),
-            }
-            for year, month, fulfilled_count in rows
+            {"period": period, "fulfilled_count": count}
+            for period, count in sorted(totals_by_period.items())
         ]
 
         return data[-months:]
 
     def get_fulfilled_totals_by_year(self, years: int = 5) -> List[Dict[str, Any]]:
-        """Get fulfilled totals grouped by year using shipping+delivered transitions."""
+        """Get fulfilled totals grouped by year using completed shipments and deliveries."""
         years = max(1, min(years, 20))
         cutoff_date = datetime.utcnow() - timedelta(days=years * 366)
 
-        rows = (
-            self.db.query(
-                func.extract("year", AuditLog.timestamp).label("year"),
-                func.count(AuditLog.id).label("fulfilled_count"),
+        shipped_rows = (
+            self._visible_orders_query(
+                func.extract("year", Order.shipped_to_carrier_at).label("year"),
+                func.count(Order.id).label("fulfilled_count"),
             )
-            .join(Order, AuditLog.order_id == Order.id)
             .filter(
-                AuditLog.timestamp >= cutoff_date,
-                Order.hidden_from_ops.is_(False),
-                func.lower(AuditLog.to_status).in_(
-                    [OrderStatus.SHIPPING.value, OrderStatus.DELIVERED.value]
-                ),
+                Order.shipped_to_carrier_at.isnot(None),
+                Order.shipped_to_carrier_at >= cutoff_date,
             )
-            .group_by(func.extract("year", AuditLog.timestamp))
-            .order_by(func.extract("year", AuditLog.timestamp).asc())
+            .group_by(func.extract("year", Order.shipped_to_carrier_at))
+            .order_by(func.extract("year", Order.shipped_to_carrier_at).asc())
             .all()
         )
 
+        delivered_rows = (
+            self._visible_orders_query(
+                func.extract("year", Order.signature_captured_at).label("year"),
+                func.count(Order.id).label("fulfilled_count"),
+            )
+            .filter(
+                Order.signature_captured_at.isnot(None),
+                Order.signature_captured_at >= cutoff_date,
+            )
+            .group_by(func.extract("year", Order.signature_captured_at))
+            .order_by(func.extract("year", Order.signature_captured_at).asc())
+            .all()
+        )
+
+        totals_by_year: Dict[str, int] = {}
+        for year, fulfilled_count in [*shipped_rows, *delivered_rows]:
+            year_key = str(int(year))
+            totals_by_year[year_key] = totals_by_year.get(year_key, 0) + int(
+                fulfilled_count or 0
+            )
+
         data = [
-            {
-                "period": str(int(year)),
-                "fulfilled_count": int(fulfilled_count or 0),
-            }
-            for year, fulfilled_count in rows
+            {"period": period, "fulfilled_count": count}
+            for period, count in sorted(totals_by_year.items())
         ]
         return data[-years:]
