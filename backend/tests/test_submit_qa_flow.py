@@ -136,6 +136,65 @@ def test_submit_qa_routes_shipping_orders_to_shipping(tmp_path, monkeypatch):
     assert Path(tmp_path / "qa" / "TH123.json").exists()
 
 
+def test_submit_qa_treats_college_station_typo_as_delivery(tmp_path, monkeypatch):
+    mock_db = MagicMock()
+    service = OrderService(mock_db)
+
+    monkeypatch.setattr("app.services.order_service.settings.local_document_storage", str(tmp_path))
+    monkeypatch.setattr(
+        "app.services.order_service.SystemSettingService.is_setting_enabled",
+        lambda key: True,
+    )
+
+    fake_sp = MagicMock()
+    fake_sp.is_enabled = True
+    fake_sp.upload_file.return_value = "https://sharepoint.example/qa/TH124.json"
+    monkeypatch.setattr("app.services.sharepoint_service.get_sharepoint_service", lambda: fake_sp)
+
+    monkeypatch.setattr("app.services.order_service.AuditService.log_order_action", lambda *args, **kwargs: None)
+    monkeypatch.setattr("app.services.order_service.OrderService._prep_steps_complete", lambda self, order: True)
+
+    order = MagicMock(spec=Order)
+    order.id = "test-order-id-2"
+    order.inflow_order_id = "TH124"
+    order.status = OrderStatus.QA.value
+    order.tagged_at = datetime.utcnow()
+    order.picklist_generated_at = datetime.utcnow()
+    order.picklist_generated_by = "picker@example.com"
+    order.qa_completed_at = None
+    order.qa_method = None
+    order.delivery_run_id = None
+    order.inflow_data = {
+        "shippingAddress": {
+            "city": "College Staion",
+            "address1": "474 Agronomy Rd",
+            "address2": "",
+            "stateProvince": "TX",
+            "postalCode": "77843",
+        }
+    }
+
+    mock_db.query.return_value.filter.return_value.with_for_update.return_value.first.return_value = order
+
+    qa_data = {
+        "orderNumber": order.inflow_order_id,
+        "technician": "Hunter",
+        "qaSignature": "Sig",
+        "verifyAssetTagSerialMatch": True,
+        "verifyOrderDetailsTemplateSentAndElectronicPackingSlipSaved": True,
+        "verifyPackagedProperly": True,
+        "verifyPackingSlipSerialsMatch": True,
+        "verifyBoxesLabeledCorrectly": True,
+    }
+
+    result = service.submit_qa(order.id, qa_data, technician="Test Tech")
+
+    assert order.qa_completed_at is not None
+    assert order.qa_method == "Delivery"
+    assert result.status == OrderStatus.PRE_DELIVERY.value
+    assert Path(tmp_path / "qa" / "TH124.json").exists()
+
+
 def test_submit_qa_allows_parent_partial_leg(tmp_path, monkeypatch):
     mock_db = MagicMock()
     service = OrderService(mock_db)

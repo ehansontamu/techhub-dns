@@ -4,9 +4,10 @@ Location Resolver Service for extracting building codes and delivery locations.
 Extracted from OrderService for better separation of concerns.
 """
 
-import re
 import logging
+import re
 from dataclasses import dataclass
+from difflib import SequenceMatcher
 from typing import Dict, Any, Optional
 
 from app.utils.building_mapper import get_building_abbreviation, extract_building_code_from_location
@@ -47,6 +48,7 @@ class LocationResolverService:
 
     # Local delivery cities (Bryan/College Station area)
     LOCAL_CITIES = {"BRYAN", "COLLEGE STATION"}
+    LOCAL_CITY_MATCH_THRESHOLD = 0.9
 
     def resolve_location(self, inflow_data: Dict[str, Any]) -> ResolvedLocation:
         """
@@ -115,9 +117,14 @@ class LocationResolverService:
 
         # Try to detect city from address if missing
         if not city and full_address:
-            if "HOUSTON" in full_address.upper():
-                city = "Houston"
-                logger.info(f"City inferred from address for order {order_number}: 'Houston'")
+            inferred_city = self._infer_city_from_address(full_address)
+            if inferred_city:
+                city = inferred_city
+                logger.info(
+                    "City inferred from address for order %s: '%s'",
+                    order_number,
+                    inferred_city,
+                )
 
         return city
 
@@ -125,7 +132,43 @@ class LocationResolverService:
         """Check if city is in the local delivery area (Bryan/College Station)."""
         if not city:
             return True  # Assume local if no city specified
-        return city.upper() in self.LOCAL_CITIES
+        return self.is_local_delivery_city(city)
+
+    @staticmethod
+    def _normalize_city_name(city: str) -> str:
+        return re.sub(r"[^A-Z]", "", city.upper())
+
+    def is_local_delivery_city(self, city: str) -> bool:
+        """Allow obvious local-city typos so local deliveries do not route to shipping."""
+        normalized_city = self._normalize_city_name(city)
+        if not normalized_city:
+            return True
+
+        for local_city in self.LOCAL_CITIES:
+            normalized_local_city = self._normalize_city_name(local_city)
+            if normalized_city == normalized_local_city:
+                return True
+
+            similarity = SequenceMatcher(
+                None, normalized_city, normalized_local_city
+            ).ratio()
+            if similarity >= self.LOCAL_CITY_MATCH_THRESHOLD:
+                logger.info(
+                    "Treating city '%s' as local delivery based on close match to '%s' (%.2f)",
+                    city,
+                    local_city,
+                    similarity,
+                )
+                return True
+
+        return False
+
+    @staticmethod
+    def _infer_city_from_address(full_address: str) -> str:
+        address_upper = full_address.upper()
+        if "HOUSTON" in address_upper:
+            return "Houston"
+        return ""
 
     def _resolve_building_code(
         self,
