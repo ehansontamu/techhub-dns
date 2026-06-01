@@ -1644,17 +1644,16 @@ class OrderService:
 
         # If city is missing, try to detect it from the full address string for common non-local locations
         if not city and shipping_address:
-            if "HOUSTON" in shipping_address.upper():
-                city = "Houston"
+            city = location_resolver_service._infer_city_from_address(shipping_address)
+            if city:
                 logger.info(
-                    f"City not specified but 'Houston' found in address for order {order_number}. inferred_city='Houston'"
+                    f"City not specified but '{city}' found in address for order {order_number}. inferred_city='{city}'"
                 )
 
         is_local_delivery = False
 
         if city:
-            city_upper = city.upper()
-            is_local_delivery = city_upper in ("BRYAN", "COLLEGE STATION")
+            is_local_delivery = location_resolver_service.is_local_delivery_city(city)
             if not is_local_delivery:
                 logger.info(
                     f"Order {order_number} is outside Bryan/College Station (city: '{city}'). This will be processed as a shipping order."
@@ -1992,18 +1991,17 @@ class OrderService:
 
         # If city is missing, try to detect it from the full address string for common non-local locations (like Houston)
         if not city and shipping_address:
-            if "HOUSTON" in shipping_address.upper():
-                city = "Houston"
+            city = location_resolver_service._infer_city_from_address(shipping_address)
+            if city:
                 logger.info(
-                    f"City not specified but 'Houston' found in address for order {order_number}. inferred_city='Houston'"
+                    f"City not specified but '{city}' found in address for order {order_number}. inferred_city='{city}'"
                 )
 
         is_local_delivery = False
 
         # Determine if this is a local delivery (Bryan/College Station) or shipping order
         if city:
-            city_upper = city.upper()
-            is_local_delivery = city_upper in ("BRYAN", "COLLEGE STATION")
+            is_local_delivery = location_resolver_service.is_local_delivery_city(city)
             if not is_local_delivery:
                 logger.info(
                     f"Order {order_number} is outside Bryan/College Station (city: '{city}'). This will be processed as a shipping order."
