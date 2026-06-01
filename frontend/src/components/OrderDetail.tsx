@@ -214,9 +214,9 @@ export default function OrderDetail({
                     variant="ghost"
                     size="sm"
                     onClick={() => setStatusDropdownOpen(!statusDropdownOpen)}
-                    className="flex h-7 w-7 items-center justify-center rounded-full p-0"
+                    className="flex h-7 w-7 items-center justify-center rounded-full p-0 text-muted-foreground transition-colors hover:bg-maroon-700 hover:text-white focus-visible:bg-maroon-700 focus-visible:text-white"
                   >
-                    <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                    <ChevronDown className="h-4 w-4" />
                   </Button>
                   {statusDropdownOpen && (
                     <div className="absolute left-0 top-full mt-1 z-10 min-w-[180px] rounded-md border bg-popover p-1 shadow-md">
@@ -228,9 +228,9 @@ export default function OrderDetail({
                             setIssueReason("");
                             setStatusDropdownOpen(false);
                           }}
-                          className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-accent"
+                          className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-maroon-700 hover:text-white focus-visible:bg-maroon-700 focus-visible:text-white"
                         >
-                          <AlertTriangle className="h-4 w-4 text-destructive" />
+                          <AlertTriangle className="h-4 w-4 text-current" />
                           <span>Raise Issue</span>
                         </button>
                       )}
@@ -242,9 +242,9 @@ export default function OrderDetail({
                             setRemoveSharePointFiles(true);
                             setStatusDropdownOpen(false);
                           }}
-                          className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-accent"
+                          className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-maroon-700 hover:text-white focus-visible:bg-maroon-700 focus-visible:text-white"
                         >
-                          <AlertTriangle className="h-4 w-4 text-amber-600" />
+                          <AlertTriangle className="h-4 w-4 text-current" />
                           <span>Dismiss Test Order</span>
                         </button>
                       )}
@@ -257,7 +257,7 @@ export default function OrderDetail({
                               onRollbackStatus(status);
                               setStatusDropdownOpen(false);
                             }}
-                            className="block w-full rounded px-2 py-1.5 text-left text-sm hover:bg-accent"
+                            className="block w-full rounded px-2 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-maroon-700 hover:text-white focus-visible:bg-maroon-700 focus-visible:text-white"
                           >
                             {OrderStatusDisplayNames[status]}
                           </button>

@@ -2608,9 +2608,13 @@ class OrderService:
 
         if (
             new_status == ShippingWorkflowStatus.SHIPPED
-            and current_status != ShippingWorkflowStatus.DOCK.value
+            and current_status
+            not in {
+                ShippingWorkflowStatus.WORK_AREA.value,
+                ShippingWorkflowStatus.DOCK.value,
+            }
         ):
-            raise ValidationError("Order must be at Dock before marking as Shipped")
+            raise ValidationError("Order must be in Work Area or at Dock before marking as Shipped")
 
         # Update fields
         order.shipping_workflow_status = new_status.value
@@ -2631,28 +2635,6 @@ class OrderService:
             order.status = OrderStatus.DELIVERED.value
             # Clean up local document files now that delivery is complete
             self._cleanup_order_documents(order)
-
-            # Create AuditLog entry for timeline display
-            audit_log = AuditLog(
-                order_id=order.id,
-                changed_by=updated_by or "system",
-                from_status=old_status,
-                to_status=OrderStatus.DELIVERED.value,
-                reason=f"Shipped via {carrier_name or 'carrier'}"
-                + (f" (Tracking: {tracking_number})" if tracking_number else ""),
-                timestamp=datetime.utcnow(),
-            )
-            self.db.add(audit_log)
-            self._record_status_history(
-                order=order,
-                from_status=old_status,
-                to_status=OrderStatus.DELIVERED.value,
-                actor_identifier=updated_by,
-                metadata={
-                    "reason": f"Shipped via {carrier_name or 'carrier'}"
-                    + (f" (Tracking: {tracking_number})" if tracking_number else ""),
-                },
-            )
 
             # Create AuditLog entry for timeline display
             audit_log = AuditLog(
