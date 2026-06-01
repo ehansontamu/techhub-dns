@@ -2086,6 +2086,86 @@ def _extract_revenue_summary_request(question: str) -> dict[str, Any] | None:
     return None
 
 
+def _extract_sales_total_request(question: str) -> dict[str, Any] | None:
+    normalized = question.lower()
+    if not any(term in normalized for term in ["sales", "revenue", "total sold", "total order"]):
+        return None
+    if any(term in normalized for term in ["breakdown", " by ", "per college", "per unit", "by college", "by unit"]):
+        return None
+
+    start_date: str | None = None
+    end_date: str | None = None
+    label: str | None = None
+
+    year_match = re.search(r"\b(20\d{2})\b", question)
+    if year_match:
+        year = int(year_match.group(1))
+        start_date = f"{year}-01-01"
+        end_date = None if year == date.today().year else f"{year + 1}-01-01"
+        label = f"calendar year {year}"
+    elif "current calendar year" in normalized or "this calendar year" in normalized:
+        year = date.today().year
+        start_date = f"{year}-01-01"
+        end_date = None
+        label = "the current calendar year so far"
+    elif "this year" in normalized or "year to date" in normalized or "ytd" in normalized:
+        year = date.today().year
+        start_date = f"{year}-01-01"
+        end_date = None
+        label = "the current calendar year so far"
+    else:
+        return None
+
+    where_clauses = [
+        f"date_created >= '{start_date}'",
+        "status NOT IN ('Cancelled', 'Declined', 'Refunded')",
+    ]
+    if end_date:
+        where_clauses.append(f"date_created < '{end_date}'")
+
+    sql = (
+        "SELECT COALESCE(SUM(total_inc_tax), 0) AS total_sales, "
+        "COUNT(*) AS order_count, "
+        "COALESCE(SUM(items_total), 0) AS item_count "
+        "FROM bc_orders WHERE "
+        + " AND ".join(where_clauses)
+    )
+
+    return {
+        "sql": sql,
+        "start_date": start_date,
+        "end_date": end_date,
+        "label": label,
+        "live_args": {
+            "start_date": start_date,
+            "end_date": end_date,
+            "max_orders": 5000,
+            "exclude_statuses": ["Cancelled", "Declined", "Refunded"],
+        },
+    }
+
+
+def _format_sales_total_result(
+    total_sales: Any,
+    order_count: Any,
+    item_count: Any,
+    request: dict[str, Any],
+    source: str,
+) -> str:
+    item_part = (
+        f" and {_format_number(int(item_count or 0))} items"
+        if item_count is not None
+        else ""
+    )
+    return (
+        f"Total sales for {request.get('label')}: "
+        f"{_format_money(float(total_sales or 0))} across "
+        f"{_format_number(int(order_count or 0))} orders{item_part}. "
+        "Cancelled, Declined, and Refunded orders are excluded. "
+        f"Source: {source}."
+    )
+
+
 def _extract_ranked_order_request(question: str) -> dict[str, Any] | None:
     normalized = question.lower()
     if "order" not in normalized:
@@ -2373,6 +2453,46 @@ def ask(question: str, messages: list[dict[str, Any]] | None = None) -> tuple[st
     if _looks_like_model_info_request(question):
         model = os.getenv("LLM_MODEL", "").strip() or "not set"
         answer = f"This local chat is configured to use `{model}` via `LLM_MODEL`."
+        history.append({"role": "user", "content": question})
+        history.append({"role": "assistant", "content": answer})
+        return answer, history
+
+    sales_total_request = _extract_sales_total_request(question)
+    if sales_total_request:
+        answer = None
+        try:
+            cache_result = run_bigcommerce_readonly_query(
+                sales_total_request["sql"],
+                limit=1,
+            )
+            cache_status = cache_result.get("cache_status") or {}
+            rows = cache_result.get("rows") or []
+            if int(cache_status.get("order_count") or 0) > 0 and rows:
+                row = rows[0]
+                answer = _format_sales_total_result(
+                    row.get("total_sales"),
+                    row.get("order_count"),
+                    row.get("item_count"),
+                    sales_total_request,
+                    "local analytics cache",
+                )
+        except Exception:
+            answer = None
+
+        if answer is None:
+            live_result = READ_ONLY_TOOLS["get_revenue_summary"](
+                **sales_total_request["live_args"]
+            )
+            answer = _format_sales_total_result(
+                live_result.get("total_revenue_inc_tax"),
+                live_result.get("included_order_count"),
+                None,
+                sales_total_request,
+                "live BigCommerce API",
+            )
+            if live_result.get("is_truncated"):
+                answer += f" Warning: order scan hit max_orders={live_result.get('max_orders')}; total may be incomplete."
+
         history.append({"role": "user", "content": question})
         history.append({"role": "assistant", "content": answer})
         return answer, history
