@@ -250,7 +250,9 @@ def _upsert_order(
         row = BigCommerceOrder(id=order_id)
         db.add(row)
 
-    row.customer_id = customer_id
+    # Some historical BigCommerce orders reference customer IDs that are no
+    # longer returned by the customer endpoint. Keep the order analyzable.
+    row.customer_id = customer_id if customer else None
     row.date_created = _utc_naive(order.get("date_created"))
     row.date_modified = _utc_naive(order.get("date_modified"))
     row.date_shipped = _utc_naive(order.get("date_shipped"))
