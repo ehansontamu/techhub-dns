@@ -53,6 +53,7 @@ When asked what customers were charged for shipping by carrier or method, use ge
 For flexible analytics, prefer run_bigcommerce_readonly_query. Use get_order_summary, get_grouped_order_summary, get_ranked_orders, get_product_sales_leaderboard, and get_source_orders_for_summary only as live API fallbacks when the cache cannot answer.
 For order ranking questions, prefer SQL over bc_orders. Choose the rank metric from the user's words: dollars/value/amount means total_inc_tax; first/earliest/submitted date means date_created ascending; latest/newest/most recent means date_created descending; first order number means id ascending; most/fewest items means items_total.
 For product popularity, top products, "which product sold most", "which order had the most of a product", or combined product/source-order questions, prefer SQL joining bc_orders to bc_order_items.
+For questions about products currently on the BigCommerce site/catalog, product details, SKUs, prices, visibility, availability, variants, inventory levels, images, custom fields, or category/catalog browsing, use the live read-only catalog tools. Product sales/history/popularity questions are different from catalog questions: use SQL for sold/sales/revenue/quantity ordered, and catalog tools for site/catalog/product-page facts.
 When asked which orders took the longest to fulfill, use get_fulfillment_aging_report so the answer includes both longest completed fulfillment durations and oldest currently-open orders. Use get_oldest_unfulfilled_orders only when the user explicitly asks for currently open/unfulfilled orders.
 When asked how long a specific order took to fulfill, use get_order_fulfillment_timing.
 When a user gives a name like "Jim's order", first search recent orders by customer name.
@@ -784,8 +785,48 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "list_catalog_products",
+            "description": "List or filter live BigCommerce catalog products from the site catalog. Use for questions about products currently on the site, visibility, availability, inventory tracking, category membership, and catalog browsing.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "keyword": {"type": "string"},
+                    "sku": {"type": "string"},
+                    "name": {"type": "string"},
+                    "category_id": {"type": "integer"},
+                    "is_visible": {"type": "boolean"},
+                    "availability": {
+                        "type": "string",
+                        "description": "BigCommerce availability filter such as available, disabled, preorder.",
+                    },
+                    "inventory_tracking": {
+                        "type": "string",
+                        "description": "BigCommerce inventory tracking filter such as none, product, variant.",
+                    },
+                    "page": {"type": "integer", "default": 1},
+                    "limit": {"type": "integer", "default": 20},
+                    "sort": {"type": "string"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_catalog_product",
+            "description": "Get live BigCommerce catalog product details by product ID, including variants, images, custom fields, prices, inventory, visibility, and availability.",
+            "parameters": {
+                "type": "object",
+                "properties": {"product_id": {"type": "integer"}},
+                "required": ["product_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "search_products",
-            "description": "Search products by keyword.",
+            "description": "Search live BigCommerce catalog products by keyword. Use for product/site catalog lookup, not sales history.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -800,7 +841,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "get_product_by_sku",
-            "description": "Get product details by SKU.",
+            "description": "Get live BigCommerce catalog product details by SKU.",
             "parameters": {
                 "type": "object",
                 "properties": {"sku": {"type": "string"}},
@@ -812,7 +853,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "get_low_stock_products",
-            "description": "Find products with tracked inventory at or below a threshold.",
+            "description": "Find live BigCommerce catalog products with tracked inventory at or below a threshold.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -826,7 +867,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "find_products_missing_images",
-            "description": "Find visible products that have no images.",
+            "description": "Find visible live BigCommerce catalog products that have no images.",
             "parameters": {
                 "type": "object",
                 "properties": {"limit": {"type": "integer", "default": 250}},
@@ -840,15 +881,23 @@ CACHE_TOOL_NAMES = {
     "get_bigcommerce_cache_status",
     "run_bigcommerce_readonly_query",
 }
-PRIMARY_TOOL_NAMES = set(CACHE_TOOL_NAMES)
+CATALOG_TOOL_NAMES = {
+    "list_catalog_products",
+    "get_catalog_product",
+    "search_products",
+    "get_product_by_sku",
+    "get_low_stock_products",
+    "find_products_missing_images",
+}
+PRIMARY_TOOL_NAMES = set(CACHE_TOOL_NAMES) | CATALOG_TOOL_NAMES
 PRIMARY_TOOL_SCHEMAS = [
     schema
     for schema in TOOL_SCHEMAS
     if schema.get("function", {}).get("name") in PRIMARY_TOOL_NAMES
 ]
 
-ANALYTICS_CACHE_PROMPT = f"""You are a read-only BigCommerce analytics assistant.
-Use the local analytics cache for store facts. Your default job is to translate the user's question into a safe read-only SQL query, inspect the results, and answer in plain English.
+ANALYTICS_CACHE_PROMPT = f"""You are a read-only BigCommerce store assistant.
+Use read-only tools for store facts. Your default job is to choose the smallest safe read-only tool call, inspect the results, and answer in plain English.
 
 Available tables:
 - bc_orders: one row per order. Important fields: id, date_created, status, total_inc_tax, subtotal_inc_tax, shipping_cost_inc_tax, items_total, customer_id, customer_name, company, billing_*.
@@ -862,6 +911,9 @@ Rules:
 - Call run_bigcommerce_readonly_query for analytics, rankings, counts, totals, date questions, products, customers, colleges/units, departments, accounts, and shipping-charge questions.
 - Call get_bigcommerce_analytics_schema only when you need exact column details.
 - Call get_bigcommerce_cache_status when the user asks about freshness or sync status.
+- For questions about products currently on the BigCommerce site/catalog, product details, SKUs, prices, visibility, availability, variants, inventory levels, images, custom fields, or category/catalog browsing, use the live read-only catalog tools: list_catalog_products, search_products, get_product_by_sku, get_catalog_product, get_low_stock_products, or find_products_missing_images.
+- Product sales/history/popularity questions are different from catalog questions. For "sold", "sales", "ordered", "popular", "revenue", or "quantity sold", use SQL over bc_orders and bc_order_items. For "on the site", "catalog", "visible", "price", "SKU", "inventory", "image", "variant", or "product page", use catalog tools.
+- Catalog tools are read-only. Never claim you can create, update, delete, publish, hide, price, or inventory-adjust a product.
 - Write only SELECT queries against the tables above.
 - For sales/revenue analytics, exclude statuses 'Cancelled', 'Declined', and 'Refunded' unless the user explicitly asks to include them. For "complete only", filter status IN ('Completed', 'Complete').
 - For all-time/ever, use a broad lower bound such as date_created >= '2000-01-01' or omit the date bound if the question truly asks all rows.
@@ -964,6 +1016,17 @@ def _format_direct_tool_answer(name: str, result: dict[str, Any]) -> str | None:
         "get_full_order_contents_for_placed_by_customer",
     }:
         return _format_order_contents(result)
+    if name in {
+        "list_catalog_products",
+        "search_products",
+        "get_product_by_sku",
+        "get_low_stock_products",
+        "find_products_missing_images",
+    }:
+        return _format_catalog_products(result)
+    if name == "get_catalog_product":
+        product = result.get("product") or {}
+        return _format_catalog_products({"count": 1 if product else 0, "products": [product] if product else []})
     return None
 
 
@@ -1040,7 +1103,13 @@ def _is_tool_plan_without_answer(answer: str) -> bool:
         "checking ",
         "run_bigcommerce_readonly_query",
         "get_bigcommerce_analytics_schema",
+        "list_catalog_products",
+        "search_products",
+        "get_product_by_sku",
+        "get_catalog_product",
         "local analytics cache to",
+        "catalog products",
+        "catalog tool",
         "select ",
         "from bc_",
     ]
@@ -1109,6 +1178,51 @@ def _format_number(value: Any) -> str:
     if isinstance(value, (int, float)):
         return f"{value:,}"
     return str(value)
+
+
+def _format_catalog_price(value: Any) -> str:
+    if value in (None, ""):
+        return "unknown price"
+    try:
+        return _format_money(float(value))
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _format_catalog_product_line(product: dict[str, Any], index: int) -> str:
+    visible = "visible" if product.get("is_visible") else "hidden"
+    inventory = product.get("inventory_level")
+    inventory_label = (
+        f"{_format_number(inventory)} in stock"
+        if inventory not in (None, "")
+        else "inventory unknown"
+    )
+    sku = product.get("sku") or "no SKU"
+    return (
+        f"{index}. {product.get('name') or 'Unnamed product'} "
+        f"(ID {product.get('id')}, SKU {sku}) | "
+        f"{_format_catalog_price(product.get('price'))} | "
+        f"{visible} | {product.get('availability') or 'availability unknown'} | "
+        f"{inventory_label} | {product.get('variant_count') or 0} variants | "
+        f"{product.get('image_count') or 0} images"
+    )
+
+
+def _format_catalog_products(result: dict[str, Any]) -> str:
+    products = result.get("products") or []
+    if not products:
+        return "I did not find matching live catalog products."
+
+    lines = [f"Found {len(products)} live catalog product{'' if len(products) == 1 else 's'}:"]
+    for index, product in enumerate(products[:20], start=1):
+        lines.append(_format_catalog_product_line(product, index))
+
+    pagination = result.get("pagination") or {}
+    total = pagination.get("total")
+    if total and int(total) > len(products):
+        lines.append(f"Showing {len(products)} of {total} matching catalog products.")
+
+    return "\n".join(lines)
 
 
 def _plural(count: Any, singular: str, plural: str | None = None) -> str:

@@ -192,6 +192,15 @@ def _money(value: Any) -> str | None:
     return str(value)
 
 
+def _truncate_text(value: Any, limit: int = 1200) -> str | None:
+    if value in (None, ""):
+        return None
+    text = str(value)
+    if len(text) <= limit:
+        return text
+    return text[: limit].rstrip() + "..."
+
+
 def _search_terms(term: str) -> set[str]:
     cleaned = term.strip().lower()
     terms = {cleaned} if cleaned else set()
@@ -622,17 +631,67 @@ def _summarize_order(order: dict[str, Any]) -> dict[str, Any]:
 
 def _summarize_product(product: dict[str, Any]) -> dict[str, Any]:
     images = product.get("images") or []
+    variants = product.get("variants") or []
+    custom_fields = product.get("custom_fields") or []
     categories = product.get("categories") or []
     return {
         "id": product.get("id"),
         "name": product.get("name"),
         "sku": product.get("sku"),
+        "type": product.get("type"),
+        "description": _truncate_text(product.get("description")),
         "price": _money(product.get("price")),
+        "cost_price": _money(product.get("cost_price")),
+        "retail_price": _money(product.get("retail_price")),
+        "sale_price": _money(product.get("sale_price")),
+        "calculated_price": _money(product.get("calculated_price")),
+        "availability": product.get("availability"),
+        "condition": product.get("condition"),
+        "weight": product.get("weight"),
+        "brand_id": product.get("brand_id"),
+        "upc": product.get("upc"),
+        "mpn": product.get("mpn"),
+        "gtin": product.get("gtin"),
         "inventory_level": product.get("inventory_level"),
+        "inventory_warning_level": product.get("inventory_warning_level"),
         "inventory_tracking": product.get("inventory_tracking"),
         "is_visible": product.get("is_visible"),
+        "custom_url": product.get("custom_url"),
         "categories": categories,
         "image_count": len(images),
+        "images": [
+            {
+                "id": image.get("id"),
+                "url_standard": image.get("url_standard"),
+                "url_thumbnail": image.get("url_thumbnail"),
+                "description": image.get("description"),
+                "is_thumbnail": image.get("is_thumbnail"),
+            }
+            for image in images[:5]
+            if isinstance(image, dict)
+        ],
+        "variant_count": len(variants),
+        "variants": [
+            {
+                "id": variant.get("id"),
+                "sku": variant.get("sku"),
+                "price": _money(variant.get("price")),
+                "calculated_price": _money(variant.get("calculated_price")),
+                "inventory_level": variant.get("inventory_level"),
+                "purchasing_disabled": variant.get("purchasing_disabled"),
+                "option_values": variant.get("option_values"),
+            }
+            for variant in variants[:10]
+            if isinstance(variant, dict)
+        ],
+        "custom_fields": [
+            {
+                "name": field.get("name"),
+                "value": field.get("value"),
+            }
+            for field in custom_fields[:20]
+            if isinstance(field, dict)
+        ],
     }
 
 
@@ -3385,6 +3444,78 @@ def search_products(keyword: str, limit: int = 20) -> dict[str, Any]:
     return {"query": keyword, "count": len(products), "products": products}
 
 
+def list_catalog_products(
+    keyword: str | None = None,
+    sku: str | None = None,
+    name: str | None = None,
+    category_id: int | None = None,
+    is_visible: bool | None = None,
+    availability: str | None = None,
+    inventory_tracking: str | None = None,
+    page: int = 1,
+    limit: int = 20,
+    sort: str | None = None,
+) -> dict[str, Any]:
+    """List catalog products with common read-only BigCommerce product filters."""
+
+    params: dict[str, Any] = {
+        "page": max(int(page or 1), 1),
+        "limit": min(max(int(limit or 20), 1), 250),
+        "include": "images,variants,custom_fields",
+    }
+    if keyword:
+        params["keyword"] = keyword
+    if sku:
+        params["sku"] = sku
+    if name:
+        params["name"] = name
+    if category_id:
+        params["categories:in"] = str(int(category_id))
+    if is_visible is not None:
+        params["is_visible"] = str(bool(is_visible)).lower()
+    if availability:
+        params["availability"] = availability
+    if inventory_tracking:
+        params["inventory_tracking"] = inventory_tracking
+    if sort:
+        params["sort"] = sort
+
+    data = _client().get("/v3/catalog/products", params)
+    products = [_summarize_product(product) for product in data.get("data", [])]
+    return {
+        "filters": {
+            key: value
+            for key, value in {
+                "keyword": keyword,
+                "sku": sku,
+                "name": name,
+                "category_id": category_id,
+                "is_visible": is_visible,
+                "availability": availability,
+                "inventory_tracking": inventory_tracking,
+                "page": params["page"],
+                "limit": params["limit"],
+                "sort": sort,
+            }.items()
+            if value is not None
+        },
+        "count": len(products),
+        "pagination": data.get("meta", {}).get("pagination"),
+        "products": products,
+    }
+
+
+def get_catalog_product(product_id: int) -> dict[str, Any]:
+    """Get catalog product details by BigCommerce product ID."""
+
+    data = _client().get(
+        f"/v3/catalog/products/{int(product_id)}",
+        {"include": "images,variants,custom_fields"},
+    )
+    product = data.get("data") or {}
+    return {"product_id": product_id, "product": _summarize_product(product)}
+
+
 def get_product_by_sku(sku: str) -> dict[str, Any]:
     """Get catalog product details by SKU."""
 
@@ -3462,6 +3593,8 @@ READ_ONLY_TOOLS = {
     "get_top_products_for_dimension_value": get_top_products_for_dimension_value,
     "compare_dimension_values": compare_dimension_values,
     "count_orders_for_company": count_orders_for_company,
+    "list_catalog_products": list_catalog_products,
+    "get_catalog_product": get_catalog_product,
     "search_products": search_products,
     "get_product_by_sku": get_product_by_sku,
     "get_low_stock_products": get_low_stock_products,
