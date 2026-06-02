@@ -88,6 +88,32 @@ def test_shipping_order_detection():
     print("[PASS] Shipping order detection test passed")
 
 
+def test_college_station_typo_still_routes_as_local_delivery():
+    """Test that obvious College Station misspellings do not route orders to shipping."""
+    from app.services.location_resolver_service import LocationResolverService
+
+    service = LocationResolverService()
+    for city in ("College Staion", "Colleghe Station"):
+        resolved = service.resolve_location(
+            {
+                "orderNumber": "TESTTYPO1",
+                "orderRemarks": "",
+                "shippingAddress": {
+                    "address1": "474 Agronomy Rd",
+                    "address2": "",
+                    "city": city,
+                    "state": "TX",
+                    "postalCode": "77843",
+                },
+            }
+        )
+
+        assert resolved.is_local_delivery is True
+        assert resolved.building_code == "WCDC"
+        assert resolved.display_location == "WCDC"
+    print("[PASS] College Station typo still routes as local delivery")
+
+
 def test_extract_location_from_remarks():
     """Test _extract_delivery_location_from_remarks"""
     from app.services.location_resolver_service import LocationResolverService
