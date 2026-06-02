@@ -47,33 +47,32 @@ function cleanMessageText(text: string) {
     .trimEnd();
 }
 
-function renderMessageText(text: string) {
-  const cleanedText = cleanMessageText(text);
+function renderMessageTokens(text: string, keyPrefix: string, enableBold = true): JSX.Element[] {
   const parts: JSX.Element[] = [];
   let position = 0;
 
-  for (const match of cleanedText.matchAll(MESSAGE_TOKEN_RE)) {
+  for (const match of text.matchAll(MESSAGE_TOKEN_RE)) {
     const start = match.index ?? 0;
     if (start > position) {
       parts.push(
-        <span key={`text-${start}`}>{cleanedText.slice(position, start)}</span>
+        <span key={`${keyPrefix}-text-${start}`}>{text.slice(position, start)}</span>
       );
     }
 
     const boldText = match[1];
     const orderId = match[2];
     const url = match[3];
-    if (boldText) {
+    if (boldText && enableBold) {
       parts.push(
-        <strong key={`bold-${start}`} className="font-semibold">
-          {boldText}
+        <strong key={`${keyPrefix}-bold-${start}`} className="font-semibold">
+          {renderMessageTokens(boldText, `${keyPrefix}-bold-${start}`, false)}
         </strong>
       );
     } else if (orderId) {
       const label = match[0];
       parts.push(
         <a
-          key={`order-${orderId}-${start}`}
+          key={`${keyPrefix}-order-${orderId}-${start}`}
           href={`${ORDER_ADMIN_BASE_URL}/${orderId}`}
           target="_blank"
           rel="noreferrer"
@@ -86,7 +85,7 @@ function renderMessageText(text: string) {
     } else if (url) {
       parts.push(
         <a
-          key={`url-${start}`}
+          key={`${keyPrefix}-url-${start}`}
           href={url}
           target="_blank"
           rel="noreferrer"
@@ -101,11 +100,15 @@ function renderMessageText(text: string) {
     position = start + match[0].length;
   }
 
-  if (position < cleanedText.length) {
-    parts.push(<span key="text-end">{cleanedText.slice(position)}</span>);
+  if (position < text.length) {
+    parts.push(<span key={`${keyPrefix}-text-end`}>{text.slice(position)}</span>);
   }
 
   return parts;
+}
+
+function renderMessageText(text: string) {
+  return renderMessageTokens(cleanMessageText(text), "message");
 }
 
 function formatCacheTimestamp(value: string | null) {
