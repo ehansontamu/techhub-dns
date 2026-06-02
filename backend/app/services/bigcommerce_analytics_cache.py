@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from sqlalchemy import inspect, text
+from sqlalchemy import func, inspect, or_, text
 from sqlalchemy.orm import Session
 
 from app.database import get_db_session
@@ -26,6 +26,7 @@ from app.services.bigcommerce_chat.bigcommerce_tools import (
     _dimension_values,
     _parse_bc_datetime,
     _shipping_addresses_for_order,
+    _summarize_product,
     _summarize_form_fields,
 )
 
@@ -614,5 +615,187 @@ def run_bigcommerce_readonly_query(sql: str, limit: int = SQL_DEFAULT_ROWS) -> d
         }
     except Exception as exc:
         raise BigCommerceAnalyticsQueryError(str(exc)) from exc
+    finally:
+        db.close()
+
+
+def _catalog_search_text(product: dict[str, Any]) -> str:
+    values: list[Any] = [
+        product.get("name"),
+        product.get("sku"),
+        product.get("description"),
+        product.get("mpn"),
+        product.get("upc"),
+        product.get("gtin"),
+    ]
+    for field in product.get("custom_fields") or []:
+        if isinstance(field, dict):
+            values.extend([field.get("name"), field.get("value")])
+    for variant in product.get("variants") or []:
+        if isinstance(variant, dict):
+            values.append(variant.get("sku"))
+            for option in variant.get("option_values") or []:
+                if isinstance(option, dict):
+                    values.extend([option.get("label"), option.get("option_display_name")])
+    return " ".join(str(value or "") for value in values).lower()
+
+
+def _fetch_catalog_candidates(
+    keyword: str,
+    required_terms: list[str],
+    max_catalog_products: int,
+) -> list[dict[str, Any]]:
+    keyword_tokens = [
+        token
+        for token in re.findall(r"[A-Za-z0-9][A-Za-z0-9+.-]{2,}", keyword or "")
+        if token.lower() not in {"cpu", "with", "and", "the", "for", "computer", "computers"}
+    ]
+    search_terms = list(
+        dict.fromkeys(
+            term.strip()
+            for term in [keyword, *keyword_tokens, *required_terms]
+            if term and term.strip()
+        )
+    )
+    if not search_terms:
+        return []
+
+    client = _client()
+    candidates_by_id: dict[int, dict[str, Any]] = {}
+    per_search_limit = min(max(max_catalog_products, 1), 250)
+    for term in search_terms:
+        data = client.get(
+            "/v3/catalog/products",
+            {
+                "keyword": term,
+                "limit": per_search_limit,
+                "include": "images,variants,custom_fields",
+            },
+        )
+        for product in data.get("data", []):
+            product_id = product.get("id")
+            if product_id is not None:
+                candidates_by_id[int(product_id)] = product
+
+    normalized_required = [term.lower() for term in required_terms if term.strip()]
+    if normalized_required:
+        return [
+            product
+            for product in candidates_by_id.values()
+            if all(term in _catalog_search_text(product) for term in normalized_required)
+        ]
+    return list(candidates_by_id.values())
+
+
+def get_catalog_filtered_product_sales(
+    keyword: str,
+    required_terms: list[str] | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    limit: int = 20,
+    max_catalog_products: int = 250,
+) -> dict[str, Any]:
+    """Aggregate local sales for live catalog products matching product/spec terms."""
+
+    if isinstance(required_terms, str):
+        required_terms = [term.strip() for term in required_terms.split(",") if term.strip()]
+    required_terms = required_terms or []
+    catalog_products = _fetch_catalog_candidates(keyword, required_terms, max_catalog_products)
+    catalog_summaries = [_summarize_product(product) for product in catalog_products]
+    product_ids = {
+        int(product["id"])
+        for product in catalog_summaries
+        if product.get("id") is not None
+    }
+    skus = {
+        str(product["sku"]).strip()
+        for product in catalog_summaries
+        if product.get("sku")
+    }
+
+    db = get_db_session()
+    try:
+        query = (
+            db.query(
+                BigCommerceOrderItem.product_id.label("product_id"),
+                BigCommerceOrderItem.sku.label("sku"),
+                BigCommerceOrderItem.name.label("name"),
+                func.sum(BigCommerceOrderItem.quantity).label("quantity_sold"),
+                func.sum(BigCommerceOrderItem.total_inc_tax).label("revenue_inc_tax"),
+                func.count(func.distinct(BigCommerceOrderItem.order_id)).label("order_count"),
+                func.min(BigCommerceOrder.date_created).label("first_order_date"),
+                func.max(BigCommerceOrder.date_created).label("last_order_date"),
+            )
+            .join(BigCommerceOrder, BigCommerceOrder.id == BigCommerceOrderItem.order_id)
+            .filter(BigCommerceOrder.status.notin_(["Cancelled", "Declined", "Refunded"]))
+        )
+        match_filters = []
+        if product_ids:
+            match_filters.append(BigCommerceOrderItem.product_id.in_(product_ids))
+        if skus:
+            match_filters.append(BigCommerceOrderItem.sku.in_(skus))
+        if not match_filters:
+            rows = []
+        else:
+            query = query.filter(or_(*match_filters))
+            if start_date:
+                query = query.filter(BigCommerceOrder.date_created >= datetime.fromisoformat(start_date))
+            if end_date:
+                query = query.filter(BigCommerceOrder.date_created < datetime.fromisoformat(end_date))
+            rows = (
+                query.group_by(
+                    BigCommerceOrderItem.product_id,
+                    BigCommerceOrderItem.sku,
+                    BigCommerceOrderItem.name,
+                )
+                .order_by(func.sum(BigCommerceOrderItem.quantity).desc())
+                .limit(min(max(int(limit or 20), 1), 100))
+                .all()
+            )
+
+        by_id = {int(product["id"]): product for product in catalog_summaries if product.get("id") is not None}
+        by_sku = {str(product["sku"]).strip(): product for product in catalog_summaries if product.get("sku")}
+        products = []
+        for row in rows:
+            catalog_product = None
+            if row.product_id is not None:
+                catalog_product = by_id.get(int(row.product_id))
+            if catalog_product is None and row.sku:
+                catalog_product = by_sku.get(str(row.sku).strip())
+            products.append(
+                {
+                    "product_id": row.product_id,
+                    "sku": row.sku,
+                    "name": row.name,
+                    "quantity_sold": int(row.quantity_sold or 0),
+                    "revenue_inc_tax": _coerce_cell(row.revenue_inc_tax or 0),
+                    "order_count": int(row.order_count or 0),
+                    "first_order_date": row.first_order_date.isoformat() if row.first_order_date else None,
+                    "last_order_date": row.last_order_date.isoformat() if row.last_order_date else None,
+                    "catalog_product": catalog_product,
+                }
+            )
+
+        sold_product_ids = {item["product_id"] for item in products}
+        sold_skus = {item["sku"] for item in products}
+        result = {
+            "keyword": keyword,
+            "required_terms": required_terms,
+            "start_date": start_date,
+            "end_date": end_date,
+            "catalog_match_count": len(catalog_summaries),
+            "returned_count": len(products),
+            "total_quantity_sold": sum(item["quantity_sold"] for item in products),
+            "total_revenue_inc_tax": round(sum(float(item["revenue_inc_tax"] or 0) for item in products), 2),
+            "products": products,
+            "catalog_matches_without_sales": [
+                product
+                for product in catalog_summaries
+                if product.get("id") not in sold_product_ids
+                and product.get("sku") not in sold_skus
+            ][:10],
+            "cache_status": get_bigcommerce_cache_status(),
+        }
+        return result
     finally:
         db.close()

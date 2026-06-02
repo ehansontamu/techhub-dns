@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 
 from app.services.bigcommerce_chat.bigcommerce_tools import READ_ONLY_TOOLS
 from app.services.bigcommerce_analytics_cache import (
+    get_catalog_filtered_product_sales,
     get_bigcommerce_analytics_schema,
     get_bigcommerce_cache_status,
     run_bigcommerce_readonly_query,
@@ -24,6 +25,7 @@ CHAT_TOOLS = {
     **READ_ONLY_TOOLS,
     "get_bigcommerce_analytics_schema": get_bigcommerce_analytics_schema,
     "get_bigcommerce_cache_status": get_bigcommerce_cache_status,
+    "get_catalog_filtered_product_sales": get_catalog_filtered_product_sales,
     "run_bigcommerce_readonly_query": run_bigcommerce_readonly_query,
 }
 
@@ -135,6 +137,38 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     },
                 },
                 "required": ["sql"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_catalog_filtered_product_sales",
+            "description": "Find live catalog products matching product/spec terms, then rank their local sales by quantity. Use for cross-over questions like best-selling AMD CPU computer, touchscreen laptops sold, visible catalog products with a feature and sales, or product-spec sales leaderboards.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "keyword": {
+                        "type": "string",
+                        "description": "Primary catalog search term, such as AMD, Ryzen, touchscreen, i7, HP, Dell, ProBook.",
+                    },
+                    "required_terms": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Terms that must appear in the catalog product text/specs, such as ['amd'] or ['ryzen'].",
+                    },
+                    "start_date": {
+                        "type": "string",
+                        "description": "Optional inclusive YYYY-MM-DD order date lower bound.",
+                    },
+                    "end_date": {
+                        "type": "string",
+                        "description": "Optional exclusive YYYY-MM-DD order date upper bound.",
+                    },
+                    "limit": {"type": "integer", "default": 20},
+                    "max_catalog_products": {"type": "integer", "default": 250},
+                },
+                "required": ["keyword"],
             },
         },
     },
@@ -879,6 +913,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
 CACHE_TOOL_NAMES = {
     "get_bigcommerce_analytics_schema",
     "get_bigcommerce_cache_status",
+    "get_catalog_filtered_product_sales",
     "run_bigcommerce_readonly_query",
 }
 CATALOG_TOOL_NAMES = {
@@ -913,6 +948,7 @@ Rules:
 - Call get_bigcommerce_cache_status when the user asks about freshness or sync status.
 - For questions about products currently on the BigCommerce site/catalog, product details, SKUs, prices, visibility, availability, variants, inventory levels, images, custom fields, or category/catalog browsing, use the live read-only catalog tools: list_catalog_products, search_products, get_product_by_sku, get_catalog_product, get_low_stock_products, or find_products_missing_images.
 - Product sales/history/popularity questions are different from catalog questions. For "sold", "sales", "ordered", "popular", "revenue", or "quantity sold", use SQL over bc_orders and bc_order_items. For "on the site", "catalog", "visible", "price", "SKU", "inventory", "image", "variant", or "product page", use catalog tools.
+- For questions combining catalog/spec filters with sales ranking, such as "best selling computer with an AMD CPU", "which touchscreen laptop sells best", or "sales for products with Ryzen", use get_catalog_filtered_product_sales instead of manually fetching broad catalog results and writing a large SQL query.
 - Catalog tools are read-only. Never claim you can create, update, delete, publish, hide, price, or inventory-adjust a product.
 - Write only SELECT queries against the tables above.
 - For sales/revenue analytics, exclude statuses 'Cancelled', 'Declined', and 'Refunded' unless the user explicitly asks to include them. For "complete only", filter status IN ('Completed', 'Complete').
@@ -1024,6 +1060,8 @@ def _format_direct_tool_answer(name: str, result: dict[str, Any]) -> str | None:
         "find_products_missing_images",
     }:
         return _format_catalog_products(result)
+    if name == "get_catalog_filtered_product_sales":
+        return _format_catalog_filtered_product_sales(result)
     if name == "get_catalog_product":
         product = result.get("product") or {}
         return _format_catalog_products({"count": 1 if product else 0, "products": [product] if product else []})
@@ -1103,6 +1141,7 @@ def _is_tool_plan_without_answer(answer: str) -> bool:
         "checking ",
         "run_bigcommerce_readonly_query",
         "get_bigcommerce_analytics_schema",
+        "get_catalog_filtered_product_sales",
         "list_catalog_products",
         "search_products",
         "get_product_by_sku",
@@ -1222,6 +1261,51 @@ def _format_catalog_products(result: dict[str, Any]) -> str:
     if total and int(total) > len(products):
         lines.append(f"Showing {len(products)} of {total} matching catalog products.")
 
+    return "\n".join(lines)
+
+
+def _format_catalog_filtered_product_sales(result: dict[str, Any]) -> str:
+    products = result.get("products") or []
+    terms = [result.get("keyword"), *(result.get("required_terms") or [])]
+    label = ", ".join(str(term) for term in terms if term)
+    if not products:
+        catalog_count = result.get("catalog_match_count") or 0
+        if catalog_count:
+            return (
+                f"I found {catalog_count} catalog products matching {label or 'that filter'}, "
+                "but none had matching sales in the local order cache."
+            )
+        return f"I did not find live catalog products matching {label or 'that filter'}."
+
+    range_label = ""
+    if result.get("start_date") or result.get("end_date"):
+        range_label = f" from {result.get('start_date') or 'the beginning'} through {result.get('end_date') or 'now'}"
+    lines = [
+        (
+            f"Best-selling catalog products matching {label or 'that filter'}{range_label}, "
+            "ranked by units sold:"
+        )
+    ]
+    for index, product in enumerate(products[:10], start=1):
+        catalog_product = product.get("catalog_product") or {}
+        price = _format_catalog_price(catalog_product.get("price"))
+        lines.append(
+            (
+                f"{index}. {product.get('name') or catalog_product.get('name') or 'Unknown product'} "
+                f"(SKU {product.get('sku') or catalog_product.get('sku') or 'unknown'}, "
+                f"ID {product.get('product_id') or catalog_product.get('id') or 'unknown'}) | "
+                f"{_format_number(product.get('quantity_sold') or 0)} units | "
+                f"{_format_money(float(product.get('revenue_inc_tax') or 0))} | "
+                f"{product.get('order_count') or 0} orders | catalog price {price}"
+            )
+        )
+
+    lines.append(
+        (
+            f"Totals for returned rows: {_format_number(result.get('total_quantity_sold') or 0)} units, "
+            f"{_format_money(float(result.get('total_revenue_inc_tax') or 0))}."
+        )
+    )
     return "\n".join(lines)
 
 
