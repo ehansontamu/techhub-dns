@@ -15,6 +15,7 @@ from app.services.bigcommerce_analytics_cache import (
     get_catalog_filtered_product_sales,
     get_bigcommerce_analytics_schema,
     get_bigcommerce_cache_status,
+    get_order_financial_summary,
     run_bigcommerce_readonly_query,
 )
 from app.services.bigcommerce_chat.llm_client import chat_completion
@@ -26,6 +27,7 @@ CHAT_TOOLS = {
     "get_bigcommerce_analytics_schema": get_bigcommerce_analytics_schema,
     "get_bigcommerce_cache_status": get_bigcommerce_cache_status,
     "get_catalog_filtered_product_sales": get_catalog_filtered_product_sales,
+    "get_order_financial_summary": get_order_financial_summary,
     "run_bigcommerce_readonly_query": run_bigcommerce_readonly_query,
 }
 
@@ -49,6 +51,7 @@ Before choosing tools for analytics questions, identify the entity being ranked 
 When you mention a specific order ID, write it as "Order 1234"; the web UI will make it clickable. Do not print raw BigCommerce admin URLs.
 For BigCommerce analytics over orders, products, customers, dates, statuses, colleges/units, departments, account numbers, recipients, or line items, prefer the local analytics cache: first use get_bigcommerce_analytics_schema if you need column names, then use run_bigcommerce_readonly_query. This is usually better than live BigCommerce API tools because it lets you sort, join, group, and filter precisely in SQL.
 When using run_bigcommerce_readonly_query, write one read-only SELECT against bc_orders, bc_order_items, bc_customers, bc_order_addresses, bc_order_custom_fields, or bc_sync_runs. Exclude Cancelled, Declined, and Refunded orders for sales analytics unless the user asks otherwise. Include bc_orders.id in results when specific orders matter.
+For total sales/revenue, sum bc_orders.total_inc_tax at the order grain. Do not join bc_order_items and then sum bc_orders.total_inc_tax, because that duplicates order totals once per line item. For quantity sold, sum bc_order_items.quantity. "Savings" is ambiguous; do not use line-item base_total minus total_inc_tax as savings. Use explicit BigCommerce discount/coupon fields only if verified; if those fields are absent, say the available BigCommerce cache does not expose a reliable savings metric. Do not report unknown savings as $0.
 Use get_bigcommerce_cache_status when the user asks about data freshness or when an answer depends on whether the local cache is current. Do not mention cache staleness for normal historical analytics; mention it only when the user asks about sync/freshness, asks for live/current/today/right-now data, or the answer truly depends on orders that may have changed since the last sync.
 When asked for total/store-wide revenue, prefer run_bigcommerce_readonly_query against bc_orders. Do not use college/unit breakdowns unless the user explicitly asks for a breakdown/by college/by unit.
 When asked what customers were charged for shipping by carrier or method, use get_shipping_spend_by_method. Do not treat shipping carriers like product keywords. When asked what the store/team spent or paid to carriers for shipping, explain that the current BigCommerce order API data does not expose actual carrier invoice cost.
@@ -169,6 +172,36 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "max_catalog_products": {"type": "integer", "default": 250},
                 },
                 "required": ["keyword"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_order_financial_summary",
+            "description": "Return order-grain sales and known BigCommerce discount/coupon totals for a date range. Use for sales plus savings/discount questions, because it avoids duplicating order totals across line items.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "start_date": {
+                        "type": "string",
+                        "description": "Optional inclusive YYYY-MM-DD order date lower bound.",
+                    },
+                    "end_date": {
+                        "type": "string",
+                        "description": "Optional exclusive YYYY-MM-DD order date upper bound.",
+                    },
+                    "include_statuses": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional exact statuses to include, such as ['Completed'].",
+                    },
+                    "exclude_statuses": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional statuses to exclude. Defaults to Cancelled, Declined, and Refunded.",
+                    },
+                },
             },
         },
     },
@@ -914,6 +947,7 @@ CACHE_TOOL_NAMES = {
     "get_bigcommerce_analytics_schema",
     "get_bigcommerce_cache_status",
     "get_catalog_filtered_product_sales",
+    "get_order_financial_summary",
     "run_bigcommerce_readonly_query",
 }
 CATALOG_TOOL_NAMES = {
@@ -952,6 +986,9 @@ Rules:
 - Catalog tools are read-only. Never claim you can create, update, delete, publish, hide, price, or inventory-adjust a product.
 - Write only SELECT queries against the tables above.
 - For sales/revenue analytics, exclude statuses 'Cancelled', 'Declined', and 'Refunded' unless the user explicitly asks to include them. For "complete only", filter status IN ('Completed', 'Complete').
+- For total sales/revenue by date range, sum bc_orders.total_inc_tax from bc_orders only. Do not join bc_order_items and then sum bc_orders.total_inc_tax, because that duplicates each order once per line item. If line-item filters are needed, first select distinct matching order IDs or aggregate one row per order, then sum order totals.
+- For quantity sold, sum bc_order_items.quantity. For product/line revenue, sum bc_order_items.total_inc_tax. Keep order-total metrics and line-item metrics at the correct grain.
+- "Savings" is ambiguous. For sales plus savings/discount questions, prefer get_order_financial_summary. Do not calculate savings as bc_order_items.base_total minus bc_order_items.total_inc_tax. If explicit BigCommerce discount/coupon fields are absent, say the available BigCommerce cache does not expose a reliable savings metric and ask what savings definition/source should be used. Do not report unknown savings as $0.
 - For all-time/ever, use a broad lower bound such as date_created >= '2000-01-01' or omit the date bound if the question truly asks all rows.
 - For calendar years/months, use half-open ranges: date_created >= '2025-01-01' AND date_created < '2026-01-01'.
 - The fiscal year runs from September 1 through August 31. Use half-open ranges for fiscal years: fiscal year 2026 is date_created >= '2025-09-01' AND date_created < '2026-09-01'.
@@ -1062,6 +1099,8 @@ def _format_direct_tool_answer(name: str, result: dict[str, Any]) -> str | None:
         return _format_catalog_products(result)
     if name == "get_catalog_filtered_product_sales":
         return _format_catalog_filtered_product_sales(result)
+    if name == "get_order_financial_summary":
+        return _format_order_financial_summary(result)
     if name == "get_catalog_product":
         product = result.get("product") or {}
         return _format_catalog_products({"count": 1 if product else 0, "products": [product] if product else []})
@@ -1306,6 +1345,33 @@ def _format_catalog_filtered_product_sales(result: dict[str, Any]) -> str:
             f"{_format_money(float(result.get('total_revenue_inc_tax') or 0))}."
         )
     )
+    return "\n".join(lines)
+
+
+def _format_order_financial_summary(result: dict[str, Any]) -> str:
+    range_label = "all time"
+    if result.get("start_date") or result.get("end_date"):
+        range_label = f"{result.get('start_date') or 'the beginning'} through {result.get('end_date') or 'now'}"
+    lines = [
+        f"Financial summary for {range_label}:",
+        f"- Sales: {_format_money(float(result.get('total_sales_inc_tax') or 0))}",
+        f"- Orders: {_format_number(result.get('order_count') or 0)}",
+        f"- Items: {_format_number(result.get('item_quantity') or 0)}",
+        f"- Subtotal: {_format_money(float(result.get('subtotal_inc_tax') or 0))}",
+        f"- Shipping charged: {_format_money(float(result.get('shipping_inc_tax') or 0))}",
+    ]
+    if result.get("savings_available"):
+        lines.insert(
+            2,
+            f"- Known savings/discounts: {_format_money(float(result.get('known_savings_total') or 0))}",
+        )
+    else:
+        lines.extend(
+            [
+                "",
+                "Savings/discounts: unknown from the available BigCommerce cache. I do not see explicit discount/coupon amount fields for this range, so a savings definition or another data source would be needed.",
+            ]
+        )
     return "\n".join(lines)
 
 

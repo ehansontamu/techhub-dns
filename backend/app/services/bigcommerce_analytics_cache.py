@@ -38,6 +38,7 @@ SYNC_STALE_AFTER_MINUTES = 15
 SQL_QUERY_TIMEOUT_SECONDS = 20
 SQL_MAX_ROWS = 200
 SQL_DEFAULT_ROWS = 100
+EXCLUDED_SALES_STATUSES = ["Cancelled", "Declined", "Refunded"]
 
 ALLOWED_BC_TABLES = {
     "bc_orders",
@@ -49,7 +50,7 @@ ALLOWED_BC_TABLES = {
 }
 
 TABLE_DESCRIPTIONS: dict[str, str] = {
-    "bc_orders": "One row per BigCommerce order, with order totals, status, dates, billing contact, placed-by customer, and common checkout dimensions.",
+    "bc_orders": "One row per BigCommerce order, with order totals, status, dates, billing contact, placed-by customer, and common checkout dimensions. Sum order totals from this table without joining to line items unless you aggregate one row per order first.",
     "bc_order_items": "One row per BigCommerce order line item, including product name, SKU, quantity, and line totals.",
     "bc_customers": "BigCommerce customer accounts referenced by orders.",
     "bc_order_addresses": "Billing and shipping addresses for orders, including shipping method and address form fields.",
@@ -63,7 +64,10 @@ FIELD_HINTS: dict[str, dict[str, str]] = {
         "date_created": "When the order was submitted.",
         "date_modified": "Last BigCommerce modification timestamp.",
         "status": "BigCommerce order status name.",
-        "total_inc_tax": "Order total including tax.",
+        "total_inc_tax": "Order total including tax. For sales totals, sum this from bc_orders without joining bc_order_items, or pre-aggregate to one row per order before summing.",
+        "subtotal_inc_tax": "Order subtotal including tax before shipping. This is not a savings/discount amount.",
+        "shipping_cost_inc_tax": "Customer shipping charge including tax.",
+        "raw_order": "Full raw BigCommerce order JSON. Discount/coupon fields may be present here depending on API payload, such as discount_amount, coupon_discount, or coupons; verify field existence before using them.",
         "items_total": "Total item quantity on the order.",
         "placed_by_name": "BigCommerce customer account name attached to order.customer_id.",
         "college_unit": "Recipient College/Unit checkout field.",
@@ -76,6 +80,7 @@ FIELD_HINTS: dict[str, dict[str, str]] = {
         "sku": "Line-item SKU.",
         "quantity": "Quantity purchased on this order line.",
         "total_inc_tax": "Line total including tax.",
+        "base_total": "Line base total from BigCommerce. This is not a reliable savings metric by itself.",
     },
 }
 
@@ -615,6 +620,74 @@ def run_bigcommerce_readonly_query(sql: str, limit: int = SQL_DEFAULT_ROWS) -> d
         }
     except Exception as exc:
         raise BigCommerceAnalyticsQueryError(str(exc)) from exc
+    finally:
+        db.close()
+
+
+def get_order_financial_summary(
+    start_date: str | None = None,
+    end_date: str | None = None,
+    include_statuses: list[str] | None = None,
+    exclude_statuses: list[str] | None = None,
+) -> dict[str, Any]:
+    """Summarize order-grain sales and explicit BigCommerce discount fields."""
+
+    exclude_statuses = exclude_statuses or EXCLUDED_SALES_STATUSES
+    db = get_db_session()
+    try:
+        query = db.query(
+            func.count(BigCommerceOrder.id).label("order_count"),
+            func.coalesce(func.sum(BigCommerceOrder.total_inc_tax), 0).label("total_sales_inc_tax"),
+            func.coalesce(func.sum(BigCommerceOrder.subtotal_inc_tax), 0).label("subtotal_inc_tax"),
+            func.coalesce(func.sum(BigCommerceOrder.shipping_cost_inc_tax), 0).label("shipping_inc_tax"),
+            func.coalesce(func.sum(BigCommerceOrder.items_total), 0).label("item_quantity"),
+            func.sum(func.cast(func.json_unquote(func.json_extract(BigCommerceOrder.raw_order, "$.discount_amount")), BigCommerceOrder.total_inc_tax.type)).label("discount_amount"),
+            func.sum(func.cast(func.json_unquote(func.json_extract(BigCommerceOrder.raw_order, "$.coupon_discount")), BigCommerceOrder.total_inc_tax.type)).label("coupon_discount"),
+            func.count(func.json_extract(BigCommerceOrder.raw_order, "$.discount_amount")).label("discount_field_count"),
+            func.count(func.json_extract(BigCommerceOrder.raw_order, "$.coupon_discount")).label("coupon_discount_field_count"),
+        )
+        if include_statuses:
+            query = query.filter(BigCommerceOrder.status.in_(include_statuses))
+        elif exclude_statuses:
+            query = query.filter(BigCommerceOrder.status.notin_(exclude_statuses))
+        if start_date:
+            query = query.filter(BigCommerceOrder.date_created >= datetime.fromisoformat(start_date))
+        if end_date:
+            query = query.filter(BigCommerceOrder.date_created < datetime.fromisoformat(end_date))
+
+        row = query.one()
+        discount_field_count = int(row.discount_field_count or 0)
+        coupon_discount_field_count = int(row.coupon_discount_field_count or 0)
+        has_savings_fields = discount_field_count > 0 or coupon_discount_field_count > 0
+        discount_amount = float(row.discount_amount or 0) if has_savings_fields else None
+        coupon_discount = float(row.coupon_discount or 0) if has_savings_fields else None
+        known_savings_total = (
+            round(float(discount_amount or 0) + float(coupon_discount or 0), 2)
+            if has_savings_fields
+            else None
+        )
+        return {
+            "start_date": start_date,
+            "end_date": end_date,
+            "include_statuses": include_statuses,
+            "exclude_statuses": exclude_statuses if not include_statuses else None,
+            "order_count": int(row.order_count or 0),
+            "item_quantity": int(row.item_quantity or 0),
+            "total_sales_inc_tax": _coerce_cell(row.total_sales_inc_tax or 0),
+            "subtotal_inc_tax": _coerce_cell(row.subtotal_inc_tax or 0),
+            "shipping_inc_tax": _coerce_cell(row.shipping_inc_tax or 0),
+            "discount_amount": round(discount_amount, 2) if discount_amount is not None else None,
+            "coupon_discount": round(coupon_discount, 2) if coupon_discount is not None else None,
+            "known_savings_total": known_savings_total,
+            "savings_available": has_savings_fields,
+            "discount_field_count": discount_field_count,
+            "coupon_discount_field_count": coupon_discount_field_count,
+            "savings_basis": (
+                "Sum of explicit BigCommerce raw_order discount_amount and coupon_discount fields when present. "
+                "If those fields are absent, the cache does not contain a reliable savings metric."
+            ),
+            "cache_status": get_bigcommerce_cache_status(),
+        }
     finally:
         db.close()
 
