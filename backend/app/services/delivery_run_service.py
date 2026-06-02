@@ -24,6 +24,8 @@ from app.utils.timezone import get_date_in_cst, is_morning_in_cst, to_utc_iso_z
 logger = logging.getLogger(__name__)
 
 class DeliveryRunService:
+    INFLOW_FULFILLMENT_CONCURRENCY = 3
+
     def __init__(self, db: Session):
         self.db = db
 
@@ -609,6 +611,7 @@ class DeliveryRunService:
         async def _fulfill() -> tuple[List[dict], List[dict]]:
             successes: List[dict] = []
             failures: List[dict] = []
+            semaphore = asyncio.Semaphore(self.INFLOW_FULFILLMENT_CONCURRENCY)
 
             async def _fulfill_one(order):
                 inflow_sales_order_id = order.inflow_sales_order_id
@@ -618,50 +621,51 @@ class DeliveryRunService:
                         "inflow_order_id": order.inflow_order_id,
                         "error": "missing_inflow_sales_order_id",
                     }
-                try:
-                    updated_inflow_order = await inflow_service.fulfill_sales_order(
-                        inflow_sales_order_id,
-                        db=self.db,
-                        user_id=user_id,
-                        only_picked_items=True,
-                        source_order_data=order.inflow_data,
-                        source_order_identifier=order.inflow_order_id,
-                    )
-                    order.inflow_data = self._merge_partial_leg_fulfillment_result(
-                        order,
-                        updated_inflow_order,
-                    )
-                    return {
-                        "order_id": str(order.id),
-                        "inflow_order_id": order.inflow_order_id,
-                        "inflow_sales_order_id": inflow_sales_order_id,
-                    }, None
-                except Exception as exc:
-                    logger.warning(
-                        "Delivery run InFlow fulfillment failed for order %s (%s): %s",
-                        order.inflow_order_id,
-                        inflow_sales_order_id,
-                        exc,
-                    )
-                    already_fulfilled_order = await self._get_already_fulfilled_inflow_order(
-                        inflow_service, inflow_sales_order_id
-                    )
-                    if already_fulfilled_order is not None:
-                        order.inflow_data = already_fulfilled_order
+                async with semaphore:
+                    try:
+                        updated_inflow_order = await inflow_service.fulfill_sales_order(
+                            inflow_sales_order_id,
+                            db=self.db,
+                            user_id=user_id,
+                            only_picked_items=True,
+                            source_order_data=order.inflow_data,
+                            source_order_identifier=order.inflow_order_id,
+                        )
+                        order.inflow_data = self._merge_partial_leg_fulfillment_result(
+                            order,
+                            updated_inflow_order,
+                        )
                         return {
                             "order_id": str(order.id),
                             "inflow_order_id": order.inflow_order_id,
                             "inflow_sales_order_id": inflow_sales_order_id,
-                            "already_fulfilled": True,
-                            "fulfillment_error": str(exc),
                         }, None
+                    except Exception as exc:
+                        logger.warning(
+                            "Delivery run InFlow fulfillment failed for order %s (%s): %s",
+                            order.inflow_order_id,
+                            inflow_sales_order_id,
+                            exc,
+                        )
+                        already_fulfilled_order = await self._get_already_fulfilled_inflow_order(
+                            inflow_service, inflow_sales_order_id
+                        )
+                        if already_fulfilled_order is not None:
+                            order.inflow_data = already_fulfilled_order
+                            return {
+                                "order_id": str(order.id),
+                                "inflow_order_id": order.inflow_order_id,
+                                "inflow_sales_order_id": inflow_sales_order_id,
+                                "already_fulfilled": True,
+                                "fulfillment_error": str(exc),
+                            }, None
 
-                    return None, {
-                        "order_id": str(order.id),
-                        "inflow_order_id": order.inflow_order_id,
-                        "inflow_sales_order_id": inflow_sales_order_id,
-                        "error": str(exc),
-                    }
+                        return None, {
+                            "order_id": str(order.id),
+                            "inflow_order_id": order.inflow_order_id,
+                            "inflow_sales_order_id": inflow_sales_order_id,
+                            "error": str(exc),
+                        }
 
             results = await asyncio.gather(*[_fulfill_one(o) for o in orders])
             successes.extend(s for s, _ in results if s is not None)
