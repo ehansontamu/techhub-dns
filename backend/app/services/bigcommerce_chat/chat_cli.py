@@ -47,7 +47,7 @@ Before choosing tools for analytics questions, identify the entity being ranked 
 When you mention a specific order ID, write it as "Order 1234"; the web UI will make it clickable. Do not print raw BigCommerce admin URLs.
 For BigCommerce analytics over orders, products, customers, dates, statuses, colleges/units, departments, account numbers, recipients, or line items, prefer the local analytics cache: first use get_bigcommerce_analytics_schema if you need column names, then use run_bigcommerce_readonly_query. This is usually better than live BigCommerce API tools because it lets you sort, join, group, and filter precisely in SQL.
 When using run_bigcommerce_readonly_query, write one read-only SELECT against bc_orders, bc_order_items, bc_customers, bc_order_addresses, bc_order_custom_fields, or bc_sync_runs. Exclude Cancelled, Declined, and Refunded orders for sales analytics unless the user asks otherwise. Include bc_orders.id in results when specific orders matter.
-Use get_bigcommerce_cache_status when the user asks about data freshness or when an answer depends on whether the local cache is current. If the cache is empty or stale, say so briefly and either answer with that limitation or use a live read-only tool if it can answer the question.
+Use get_bigcommerce_cache_status when the user asks about data freshness or when an answer depends on whether the local cache is current. Do not mention cache staleness for normal historical analytics; mention it only when the user asks about sync/freshness, asks for live/current/today/right-now data, or the answer truly depends on orders that may have changed since the last sync.
 When asked for total/store-wide revenue, prefer run_bigcommerce_readonly_query against bc_orders. Do not use college/unit breakdowns unless the user explicitly asks for a breakdown/by college/by unit.
 When asked what customers were charged for shipping by carrier or method, use get_shipping_spend_by_method. Do not treat shipping carriers like product keywords. When asked what the store/team spent or paid to carriers for shipping, explain that the current BigCommerce order API data does not expose actual carrier invoice cost.
 For flexible analytics, prefer run_bigcommerce_readonly_query. Use get_order_summary, get_grouped_order_summary, get_ranked_orders, get_product_sales_leaderboard, and get_source_orders_for_summary only as live API fallbacks when the cache cannot answer.
@@ -868,10 +868,11 @@ Rules:
 - For calendar years/months, use half-open ranges: date_created >= '2025-01-01' AND date_created < '2026-01-01'.
 - The fiscal year runs from September 1 through August 31. Use half-open ranges for fiscal years: fiscal year 2026 is date_created >= '2025-09-01' AND date_created < '2026-09-01'.
 - For "last week", use the previous Monday through current Monday unless the user says "last 7 days". For "last month", use the previous calendar month.
+- For comparisons like "this year's monthly sales volume compared with last year", return a month-by-month table comparing the current year to the same months in the prior year. Include both quantity and dollars if requested; do not collapse the answer to a single year-to-date total.
 - When ranking orders by dollars/value/largest/biggest, use bc_orders.total_inc_tax DESC. First/earliest/submitted means date_created ASC. Latest/newest means date_created DESC. Most items means items_total DESC.
 - For product popularity, join bc_orders to bc_order_items and rank by SUM(bc_order_items.quantity), not revenue, unless the user asks for revenue.
 - When a specific order matters, include bc_orders.id as order_id in the query and write it as "Order 1234"; do not print raw admin URLs.
-- Keep answers concise. Mention the cache timestamp only if the result may be stale or the user asks. Do not end answers with generic follow-up menus like "If you want, I can also..." unless the user explicitly asks what else can be done.
+- Keep answers concise. Do not mention cache staleness or last sync time for normal historical analytics. Mention cache freshness only when the user asks about sync/freshness, asks for live/current/today/right-now data, or the answer truly depends on orders that may have changed since the last sync. Do not end answers with generic follow-up menus like "If you want, I can also..." unless the user explicitly asks what else can be done.
 - If a SQL query errors, fix the SQL and try again. Do not ask the user to narrow the question just because SQL needs repair.
 """
 
@@ -1093,7 +1094,7 @@ def _run_primary_cache_chat(
             continue
 
         if answer:
-            return _add_order_links(answer), saw_cache_failure
+            return _prepare_final_answer(answer, question), saw_cache_failure
 
     return None, saw_cache_failure
 
@@ -2009,6 +2010,58 @@ def _sanitize_assistant_answer(answer: str) -> str:
     return cleaned.strip()
 
 
+def _should_keep_cache_freshness_note(question: str) -> bool:
+    normalized = question.lower()
+    freshness_terms = [
+        "sync",
+        "synced",
+        "stale",
+        "fresh",
+        "current data",
+        "up to date",
+        "up-to-date",
+        "right now",
+        "live",
+        "today",
+        "today's",
+        "todays",
+        "latest",
+        "newest",
+        "recent orders",
+        "since last sync",
+        "since the last sync",
+    ]
+    return any(term in normalized for term in freshness_terms)
+
+
+def _remove_unneeded_cache_freshness_note(answer: str, question: str) -> str:
+    if _should_keep_cache_freshness_note(question):
+        return answer
+
+    cleaned = re.sub(
+        r"\n{0,2}Note:\s*(?:the\s+)?(?:local\s+)?cache\b.*?(?:last successful sync|last synced|last sync|completed on).*?(?=\n\n|$)",
+        "",
+        answer,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    cleaned = re.sub(
+        r"\n{0,2}(?:The\s+)?(?:local\s+)?cache\s+(?:also\s+)?(?:appears\s+)?(?:slightly\s+)?stale\b.*?(?=\n\n|$)",
+        "",
+        cleaned,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    return cleaned.strip()
+
+
+def _prepare_final_answer(answer: str, question: str) -> str:
+    return _add_order_links(
+        _remove_unneeded_cache_freshness_note(
+            _sanitize_assistant_answer(answer),
+            question,
+        )
+    )
+
+
 def _extract_order_ids_from_history(messages: list[dict[str, Any]] | None) -> list[int]:
     seen: set[int] = set()
     order_ids: list[int] = []
@@ -2800,18 +2853,17 @@ def ask(question: str, messages: list[dict[str, Any]] | None = None) -> tuple[st
                     fallback_answer = _add_order_links(fallback_answer)
                     history.append({"role": "assistant", "content": fallback_answer})
                     return fallback_answer, history
-            fallback_answer = _sanitize_assistant_answer(fallback_message.get("content") or "")
+            fallback_answer = _prepare_final_answer(fallback_message.get("content") or "", question)
             if fallback_answer:
-                fallback_answer = _add_order_links(fallback_answer)
                 history.append({"role": "assistant", "content": fallback_answer})
                 return fallback_answer, history
 
         second = chat_completion(messages=history)
-        answer = _add_order_links(_sanitize_assistant_answer(second.get("content") or ""))
+        answer = _prepare_final_answer(second.get("content") or "", question)
         history.append({"role": "assistant", "content": answer})
         return answer, history
 
-    answer = _add_order_links(_sanitize_assistant_answer(message.get("content") or ""))
+    answer = _prepare_final_answer(message.get("content") or "", question)
     if not answer:
         answer = "I couldn't turn that into a clean answer. Please try the question again."
     if history and history[-1].get("role") == "assistant":
