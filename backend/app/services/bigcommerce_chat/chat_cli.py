@@ -82,7 +82,7 @@ For "all time", "all-time", or "ever", pass start_date="2000-01-01" unless the s
 The fiscal year runs from September 1 through August 31. For example, fiscal year 2026 means 2025-09-01 through 2026-09-01 as a half-open date range.
 Non-precise names can be aliases. "Bush School" can mean Bush or Bush School of Government and Public Service.
 "Arts and Sciences" can mean College of Arts and Sciences or Arts & Sciences.
-Keep answers concise and include order IDs when relevant.
+Keep answers concise and include order IDs when relevant. Do not end answers with generic follow-up menus like "If you want, I can also..." unless the user explicitly asks what else can be done.
 """
 
 
@@ -871,7 +871,7 @@ Rules:
 - When ranking orders by dollars/value/largest/biggest, use bc_orders.total_inc_tax DESC. First/earliest/submitted means date_created ASC. Latest/newest means date_created DESC. Most items means items_total DESC.
 - For product popularity, join bc_orders to bc_order_items and rank by SUM(bc_order_items.quantity), not revenue, unless the user asks for revenue.
 - When a specific order matters, include bc_orders.id as order_id in the query and write it as "Order 1234"; do not print raw admin URLs.
-- Keep answers concise. Mention the cache timestamp only if the result may be stale or the user asks.
+- Keep answers concise. Mention the cache timestamp only if the result may be stale or the user asks. Do not end answers with generic follow-up menus like "If you want, I can also..." unless the user explicitly asks what else can be done.
 - If a SQL query errors, fix the SQL and try again. Do not ask the user to narrow the question just because SQL needs repair.
 """
 

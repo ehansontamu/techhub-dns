@@ -25,6 +25,7 @@ const ORDER_URL_AFTER_COLON_RE = /\bOrder\s+#?(\d{1,})[:\s-]+https:\/\/store-jsj
 const ORDER_URL_RE = /https:\/\/store-jsj7fos9p1\.mybigcommerce\.com\/manage\/orders\/(\d{1,})/g;
 const TOOL_CALL_TEXT_RE = /\bto=functions\.[A-Za-z_]\w*\b.*?(?=\n\n|$)/gs;
 const MESSAGE_TOKEN_RE = /\*\*([^*\n]+)\*\*|\bOrder\s+#?(\d{1,})\b|(https?:\/\/[^\s)]+)/gi;
+const MARKDOWN_TABLE_SEPARATOR_RE = /^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$/;
 
 function chatErrorMessage(error: unknown): string {
   if (typeof error === "object" && error !== null && "response" in error) {
@@ -107,8 +108,110 @@ function renderMessageTokens(text: string, keyPrefix: string, enableBold = true)
   return parts;
 }
 
+function parseMarkdownTable(lines: string[]) {
+  if (lines.length < 3 || !lines[0].includes("|") || !MARKDOWN_TABLE_SEPARATOR_RE.test(lines[1])) {
+    return null;
+  }
+
+  const splitRow = (line: string) =>
+    line
+      .trim()
+      .replace(/^\|/, "")
+      .replace(/\|$/, "")
+      .split("|")
+      .map((cell) => cell.trim());
+
+  const headers = splitRow(lines[0]);
+  const rows = lines.slice(2).map(splitRow);
+  if (!headers.length || rows.some((row) => row.length !== headers.length)) {
+    return null;
+  }
+
+  return { headers, rows };
+}
+
+function renderMarkdownTable(lines: string[], keyPrefix: string) {
+  const table = parseMarkdownTable(lines);
+  if (!table) {
+    return <span key={keyPrefix}>{lines.join("\n")}</span>;
+  }
+
+  return (
+    <div key={keyPrefix} className="my-2 max-w-full overflow-x-auto rounded-md border border-border">
+      <table className="min-w-full border-collapse text-left text-xs">
+        <thead className="bg-muted/60 text-muted-foreground">
+          <tr>
+            {table.headers.map((header, index) => (
+              <th
+                key={`${keyPrefix}-head-${index}`}
+                scope="col"
+                className="whitespace-nowrap border-b border-border px-3 py-2 font-semibold"
+              >
+                {renderMessageTokens(header, `${keyPrefix}-head-${index}`)}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {table.rows.map((row, rowIndex) => (
+            <tr key={`${keyPrefix}-row-${rowIndex}`} className="odd:bg-background even:bg-muted/20">
+              {row.map((cell, cellIndex) => (
+                <td
+                  key={`${keyPrefix}-cell-${rowIndex}-${cellIndex}`}
+                  className="whitespace-nowrap border-b border-border/70 px-3 py-2 align-top last:border-b"
+                >
+                  {renderMessageTokens(cell, `${keyPrefix}-cell-${rowIndex}-${cellIndex}`)}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function renderMessageText(text: string) {
-  return renderMessageTokens(cleanMessageText(text), "message");
+  const cleanedText = cleanMessageText(text);
+  const lines = cleanedText.split("\n");
+  const parts: JSX.Element[] = [];
+  let index = 0;
+
+  while (index < lines.length) {
+    if (
+      index + 2 < lines.length &&
+      lines[index].includes("|") &&
+      MARKDOWN_TABLE_SEPARATOR_RE.test(lines[index + 1])
+    ) {
+      const tableLines = [lines[index], lines[index + 1]];
+      index += 2;
+      while (index < lines.length && lines[index].includes("|") && lines[index].trim()) {
+        tableLines.push(lines[index]);
+        index += 1;
+      }
+      parts.push(renderMarkdownTable(tableLines, `message-table-${parts.length}`));
+      continue;
+    }
+
+    const start = index;
+    while (
+      index < lines.length &&
+      !(
+        index + 2 < lines.length &&
+        lines[index].includes("|") &&
+        MARKDOWN_TABLE_SEPARATOR_RE.test(lines[index + 1])
+      )
+    ) {
+      index += 1;
+    }
+    parts.push(
+      <span key={`message-text-${parts.length}`}>
+        {renderMessageTokens(lines.slice(start, index).join("\n"), `message-text-${parts.length}`)}
+      </span>
+    );
+  }
+
+  return parts;
 }
 
 function formatCacheTimestamp(value: string | null) {
