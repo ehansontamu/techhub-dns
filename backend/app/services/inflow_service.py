@@ -1005,7 +1005,7 @@ class InflowService:
         return (
             normalized in {"desktops", "laptops", "custom computer"}
             or normalized.startswith("desktops ")
-            or normalized == "custom computer"
+            or normalized.startswith("laptops ")
         )
 
     def requires_asset_tags(self, order: Dict[str, Any]) -> bool:
