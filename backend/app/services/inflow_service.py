@@ -1003,8 +1003,8 @@ class InflowService:
             self._normalize_category_name(category_name) if category_name else ""
         )
         return (
-            normalized.startswith("desktops ")
-            or normalized.startswith("laptops ")
+            normalized in {"desktops", "laptops", "custom computer"}
+            or normalized.startswith("desktops ")
             or normalized == "custom computer"
         )
 
