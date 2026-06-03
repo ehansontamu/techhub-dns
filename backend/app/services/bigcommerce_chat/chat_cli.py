@@ -147,7 +147,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "get_catalog_filtered_product_sales",
-            "description": "Find live catalog products matching product/spec terms, then rank their local sales by quantity. Use for cross-over questions like best-selling AMD CPU computer, touchscreen laptops sold, visible catalog products with a feature and sales, or product-spec sales leaderboards.",
+            "description": "Find live catalog products matching product/spec terms, then aggregate their local sales by product or month. Use for cross-over questions like best-selling AMD CPU computer, month-over-month AMD computer sales, touchscreen laptops sold, visible catalog products with a feature and sales, or product-spec sales leaderboards.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -158,7 +158,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "required_terms": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "Terms that must appear in the catalog product text/specs, such as ['amd'] or ['ryzen'].",
+                        "description": "Specific terms that must appear in the catalog product text/specs, such as ['amd'] or ['ryzen']; avoid generic words like CPU or computer.",
                     },
                     "start_date": {
                         "type": "string",
@@ -167,6 +167,12 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "end_date": {
                         "type": "string",
                         "description": "Optional exclusive YYYY-MM-DD order date upper bound.",
+                    },
+                    "group_by": {
+                        "type": "string",
+                        "enum": ["product", "month"],
+                        "default": "product",
+                        "description": "Use month for month-over-month breakdowns; use product for best-selling product rankings.",
                     },
                     "limit": {"type": "integer", "default": 20},
                     "max_catalog_products": {"type": "integer", "default": 250},
@@ -982,7 +988,7 @@ Rules:
 - Call get_bigcommerce_cache_status when the user asks about freshness or sync status.
 - For questions about products currently on the BigCommerce site/catalog, product details, SKUs, prices, visibility, availability, variants, inventory levels, images, custom fields, or category/catalog browsing, use the live read-only catalog tools: list_catalog_products, search_products, get_product_by_sku, get_catalog_product, get_low_stock_products, or find_products_missing_images.
 - Product sales/history/popularity questions are different from catalog questions. For "sold", "sales", "ordered", "popular", "revenue", or "quantity sold", use SQL over bc_orders and bc_order_items. For "on the site", "catalog", "visible", "price", "SKU", "inventory", "image", "variant", or "product page", use catalog tools.
-- For questions combining catalog/spec filters with sales ranking, such as "best selling computer with an AMD CPU", "which touchscreen laptop sells best", or "sales for products with Ryzen", use get_catalog_filtered_product_sales instead of manually fetching broad catalog results and writing a large SQL query.
+- For questions combining catalog/spec filters with sales ranking, such as "best selling computer with an AMD CPU", "which touchscreen laptop sells best", or "sales for products with Ryzen", use get_catalog_filtered_product_sales instead of manually fetching broad catalog results and writing a large SQL query. For month-over-month versions of those questions, call it with group_by="month".
 - Catalog tools are read-only. Never claim you can create, update, delete, publish, hide, price, or inventory-adjust a product.
 - Write only SELECT queries against the tables above.
 - For sales/revenue analytics, exclude statuses 'Cancelled', 'Declined', and 'Refunded' unless the user explicitly asks to include them. For "complete only", filter status IN ('Completed', 'Complete').
@@ -1305,8 +1311,49 @@ def _format_catalog_products(result: dict[str, Any]) -> str:
 
 def _format_catalog_filtered_product_sales(result: dict[str, Any]) -> str:
     products = result.get("products") or []
+    months = result.get("months") or []
     terms = [result.get("keyword"), *(result.get("required_terms") or [])]
     label = ", ".join(str(term) for term in terms if term)
+    range_label = ""
+    if result.get("start_date") or result.get("end_date"):
+        range_label = f" from {result.get('start_date') or 'the beginning'} through {result.get('end_date') or 'now'}"
+
+    if result.get("group_by") == "month":
+        if not months:
+            catalog_count = result.get("catalog_match_count") or 0
+            if catalog_count:
+                return (
+                    f"I found {catalog_count} catalog products matching {label or 'that filter'}, "
+                    "but none had matching sales in the local order cache for that date range."
+                )
+            return f"I did not find live catalog products matching {label or 'that filter'}."
+
+        lines = [
+            f"Monthly sales for catalog products matching {label or 'that filter'}{range_label}:",
+            "",
+            "| Month | Units | Revenue | Orders |",
+            "|---|---:|---:|---:|",
+        ]
+        for month in months:
+            lines.append(
+                (
+                    f"| {month.get('month') or 'unknown'} | "
+                    f"{_format_number(month.get('quantity_sold') or 0)} | "
+                    f"{_format_money(float(month.get('revenue_inc_tax') or 0))} | "
+                    f"{_format_number(month.get('order_count') or 0)} |"
+                )
+            )
+        lines.extend(
+            [
+                "",
+                (
+                    f"Total: {_format_number(result.get('total_quantity_sold') or 0)} units, "
+                    f"{_format_money(float(result.get('total_revenue_inc_tax') or 0))}."
+                ),
+            ]
+        )
+        return "\n".join(lines)
+
     if not products:
         catalog_count = result.get("catalog_match_count") or 0
         if catalog_count:
@@ -1316,9 +1363,6 @@ def _format_catalog_filtered_product_sales(result: dict[str, Any]) -> str:
             )
         return f"I did not find live catalog products matching {label or 'that filter'}."
 
-    range_label = ""
-    if result.get("start_date") or result.get("end_date"):
-        range_label = f" from {result.get('start_date') or 'the beginning'} through {result.get('end_date') or 'now'}"
     lines = [
         (
             f"Best-selling catalog products matching {label or 'that filter'}{range_label}, "

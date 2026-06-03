@@ -724,10 +724,22 @@ def _fetch_catalog_candidates(
     required_terms: list[str],
     max_catalog_products: int,
 ) -> list[dict[str, Any]]:
+    generic_filter_terms = {
+        "and",
+        "computer",
+        "computers",
+        "cpu",
+        "cpus",
+        "for",
+        "processor",
+        "processors",
+        "the",
+        "with",
+    }
     keyword_tokens = [
         token
         for token in re.findall(r"[A-Za-z0-9][A-Za-z0-9+.-]{2,}", keyword or "")
-        if token.lower() not in {"cpu", "with", "and", "the", "for", "computer", "computers"}
+        if token.lower() not in generic_filter_terms
     ]
     search_terms = list(
         dict.fromkeys(
@@ -756,7 +768,11 @@ def _fetch_catalog_candidates(
             if product_id is not None:
                 candidates_by_id[int(product_id)] = product
 
-    normalized_required = [term.lower() for term in required_terms if term.strip()]
+    normalized_required = [
+        term.lower()
+        for term in required_terms
+        if term.strip() and term.strip().lower() not in generic_filter_terms
+    ]
     if normalized_required:
         return [
             product
@@ -771,6 +787,7 @@ def get_catalog_filtered_product_sales(
     required_terms: list[str] | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
+    group_by: str = "product",
     limit: int = 20,
     max_catalog_products: int = 250,
 ) -> dict[str, Any]:
@@ -779,6 +796,7 @@ def get_catalog_filtered_product_sales(
     if isinstance(required_terms, str):
         required_terms = [term.strip() for term in required_terms.split(",") if term.strip()]
     required_terms = required_terms or []
+    group_by = group_by if group_by in {"product", "month"} else "product"
     catalog_products = _fetch_catalog_candidates(keyword, required_terms, max_catalog_products)
     catalog_summaries = [_summarize_product(product) for product in catalog_products]
     product_ids = {
@@ -794,17 +812,8 @@ def get_catalog_filtered_product_sales(
 
     db = get_db_session()
     try:
-        query = (
-            db.query(
-                BigCommerceOrderItem.product_id.label("product_id"),
-                BigCommerceOrderItem.sku.label("sku"),
-                BigCommerceOrderItem.name.label("name"),
-                func.sum(BigCommerceOrderItem.quantity).label("quantity_sold"),
-                func.sum(BigCommerceOrderItem.total_inc_tax).label("revenue_inc_tax"),
-                func.count(func.distinct(BigCommerceOrderItem.order_id)).label("order_count"),
-                func.min(BigCommerceOrder.date_created).label("first_order_date"),
-                func.max(BigCommerceOrder.date_created).label("last_order_date"),
-            )
+        base_query = (
+            db.query(BigCommerceOrderItem)
             .join(BigCommerceOrder, BigCommerceOrder.id == BigCommerceOrderItem.order_id)
             .filter(BigCommerceOrder.status.notin_(["Cancelled", "Declined", "Refunded"]))
         )
@@ -815,22 +824,50 @@ def get_catalog_filtered_product_sales(
             match_filters.append(BigCommerceOrderItem.sku.in_(skus))
         if not match_filters:
             rows = []
+            monthly_rows = []
         else:
-            query = query.filter(or_(*match_filters))
+            base_query = base_query.filter(or_(*match_filters))
             if start_date:
-                query = query.filter(BigCommerceOrder.date_created >= datetime.fromisoformat(start_date))
+                base_query = base_query.filter(BigCommerceOrder.date_created >= datetime.fromisoformat(start_date))
             if end_date:
-                query = query.filter(BigCommerceOrder.date_created < datetime.fromisoformat(end_date))
-            rows = (
-                query.group_by(
-                    BigCommerceOrderItem.product_id,
-                    BigCommerceOrderItem.sku,
-                    BigCommerceOrderItem.name,
+                base_query = base_query.filter(BigCommerceOrder.date_created < datetime.fromisoformat(end_date))
+
+            if group_by == "month":
+                month_expr = func.date_format(BigCommerceOrder.date_created, "%Y-%m")
+                monthly_rows = (
+                    base_query.with_entities(
+                        month_expr.label("month"),
+                        func.sum(BigCommerceOrderItem.quantity).label("quantity_sold"),
+                        func.sum(BigCommerceOrderItem.total_inc_tax).label("revenue_inc_tax"),
+                        func.count(func.distinct(BigCommerceOrderItem.order_id)).label("order_count"),
+                    )
+                    .group_by(month_expr)
+                    .order_by(month_expr.asc())
+                    .all()
                 )
-                .order_by(func.sum(BigCommerceOrderItem.quantity).desc())
-                .limit(min(max(int(limit or 20), 1), 100))
-                .all()
-            )
+                rows = []
+            else:
+                monthly_rows = []
+                rows = (
+                    base_query.with_entities(
+                        BigCommerceOrderItem.product_id.label("product_id"),
+                        BigCommerceOrderItem.sku.label("sku"),
+                        BigCommerceOrderItem.name.label("name"),
+                        func.sum(BigCommerceOrderItem.quantity).label("quantity_sold"),
+                        func.sum(BigCommerceOrderItem.total_inc_tax).label("revenue_inc_tax"),
+                        func.count(func.distinct(BigCommerceOrderItem.order_id)).label("order_count"),
+                        func.min(BigCommerceOrder.date_created).label("first_order_date"),
+                        func.max(BigCommerceOrder.date_created).label("last_order_date"),
+                    )
+                    .group_by(
+                        BigCommerceOrderItem.product_id,
+                        BigCommerceOrderItem.sku,
+                        BigCommerceOrderItem.name,
+                    )
+                    .order_by(func.sum(BigCommerceOrderItem.quantity).desc())
+                    .limit(min(max(int(limit or 20), 1), 100))
+                    .all()
+                )
 
         by_id = {int(product["id"]): product for product in catalog_summaries if product.get("id") is not None}
         by_sku = {str(product["sku"]).strip(): product for product in catalog_summaries if product.get("sku")}
@@ -857,16 +894,34 @@ def get_catalog_filtered_product_sales(
 
         sold_product_ids = {item["product_id"] for item in products}
         sold_skus = {item["sku"] for item in products}
+        months = [
+            {
+                "month": row.month,
+                "quantity_sold": int(row.quantity_sold or 0),
+                "revenue_inc_tax": _coerce_cell(row.revenue_inc_tax or 0),
+                "order_count": int(row.order_count or 0),
+            }
+            for row in monthly_rows
+        ]
         result = {
             "keyword": keyword,
             "required_terms": required_terms,
             "start_date": start_date,
             "end_date": end_date,
+            "group_by": group_by,
             "catalog_match_count": len(catalog_summaries),
-            "returned_count": len(products),
-            "total_quantity_sold": sum(item["quantity_sold"] for item in products),
-            "total_revenue_inc_tax": round(sum(float(item["revenue_inc_tax"] or 0) for item in products), 2),
+            "returned_count": len(products) if group_by == "product" else len(months),
+            "total_quantity_sold": sum(item["quantity_sold"] for item in products)
+            if group_by == "product"
+            else sum(item["quantity_sold"] for item in months),
+            "total_revenue_inc_tax": round(
+                sum(float(item["revenue_inc_tax"] or 0) for item in products)
+                if group_by == "product"
+                else sum(float(item["revenue_inc_tax"] or 0) for item in months),
+                2,
+            ),
             "products": products,
+            "months": months,
             "catalog_matches_without_sales": [
                 product
                 for product in catalog_summaries
