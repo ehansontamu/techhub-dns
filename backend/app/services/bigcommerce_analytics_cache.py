@@ -726,20 +726,50 @@ def _fetch_catalog_candidates(
 ) -> list[dict[str, Any]]:
     generic_filter_terms = {
         "and",
+        "by",
+        "calendar",
         "computer",
         "computers",
+        "current",
         "cpu",
         "cpus",
+        "date",
+        "fiscal",
         "for",
+        "have",
+        "how",
+        "last",
+        "many",
+        "month",
+        "monthly",
+        "months",
+        "over",
+        "past",
         "processor",
         "processors",
+        "quantity",
+        "revenue",
+        "sale",
+        "sales",
+        "sold",
+        "this",
         "the",
+        "to",
+        "unit",
+        "units",
         "with",
+        "year",
+        "yearly",
     }
     keyword_tokens = [
         token
         for token in re.findall(r"[A-Za-z0-9][A-Za-z0-9+.-]{2,}", keyword or "")
-        if token.lower() not in generic_filter_terms
+        if token.lower() not in generic_filter_terms and not token.isdigit()
+    ]
+    normalized_required = [
+        term.lower()
+        for term in [*required_terms, *keyword_tokens]
+        if term.strip() and term.strip().lower() not in generic_filter_terms
     ]
     search_terms = list(
         dict.fromkeys(
@@ -768,11 +798,32 @@ def _fetch_catalog_candidates(
             if product_id is not None:
                 candidates_by_id[int(product_id)] = product
 
-    normalized_required = [
-        term.lower()
-        for term in required_terms
-        if term.strip() and term.strip().lower() not in generic_filter_terms
-    ]
+    if normalized_required:
+        page = 1
+        while len(candidates_by_id) < max_catalog_products:
+            page_limit = min(250, max_catalog_products - len(candidates_by_id))
+            if page_limit <= 0:
+                break
+            data = client.get(
+                "/v3/catalog/products",
+                {
+                    "page": page,
+                    "limit": page_limit,
+                    "include": "images,variants,custom_fields",
+                },
+            )
+            page_products = data.get("data", [])
+            for product in page_products:
+                product_id = product.get("id")
+                if product_id is not None:
+                    candidates_by_id[int(product_id)] = product
+
+            pagination = data.get("meta", {}).get("pagination", {})
+            total_pages = int(pagination.get("total_pages") or 0)
+            if len(page_products) < page_limit or (total_pages and page >= total_pages):
+                break
+            page += 1
+
     if normalized_required:
         return [
             product
@@ -789,7 +840,7 @@ def get_catalog_filtered_product_sales(
     end_date: str | None = None,
     group_by: str = "product",
     limit: int = 20,
-    max_catalog_products: int = 250,
+    max_catalog_products: int = 1000,
 ) -> dict[str, Any]:
     """Aggregate local sales for live catalog products matching product/spec terms."""
 

@@ -175,7 +175,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                         "description": "Use month for month-over-month breakdowns; use product for best-selling product rankings.",
                     },
                     "limit": {"type": "integer", "default": 20},
-                    "max_catalog_products": {"type": "integer", "default": 250},
+                    "max_catalog_products": {"type": "integer", "default": 1000},
                 },
                 "required": ["keyword"],
             },
