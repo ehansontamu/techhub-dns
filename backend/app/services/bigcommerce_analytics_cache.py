@@ -211,7 +211,13 @@ def _last_successful_sync(db: Session) -> BigCommerceSyncRun | None:
 
 
 def _latest_order_modified_at(db: Session) -> datetime | None:
-    return db.query(BigCommerceOrder.date_modified).order_by(BigCommerceOrder.date_modified.desc()).scalar()
+    row = (
+        db.query(BigCommerceOrder.date_modified)
+        .filter(BigCommerceOrder.date_modified.isnot(None))
+        .order_by(BigCommerceOrder.date_modified.desc())
+        .first()
+    )
+    return row[0] if row else None
 
 
 def _iso_utc(value: datetime) -> str:
