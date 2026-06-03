@@ -1931,6 +1931,77 @@ def test_partial_split_moves_tag_state_to_child_and_remainder_can_retag_when_ful
     engine.dispose()
 
 
+def test_fully_picked_remainder_still_requires_asset_tags_after_prior_pack_lines():
+    """A remainder leg should stay tag-required even if cumulative InFlow packLines include prior legs."""
+
+    session, engine = _make_sqlite_session()
+    parent_order = Order(
+        id="order-parent-tag-2",
+        inflow_order_id="TH4770",
+        inflow_sales_order_id="sales-order-4770",
+        recipient_name="User Eight",
+        recipient_contact="user.eight@example.com",
+        delivery_location="Building 4770",
+        po_number="PO-4770",
+        status=OrderStatus.PICKED.value,
+        remainder_order_id="child-order-tag-2",
+        inflow_data={
+            "orderNumber": "TH4770",
+            "contactName": "User Eight",
+            "email": "user.eight@example.com",
+            "shippingAddress": {"address1": "4770 Example St"},
+            "lines": [
+                {
+                    "productId": "prod-laptop",
+                    "product": {
+                        "name": "Laptop",
+                        "sku": "LAP-1",
+                        "category": {"name": "Laptops"},
+                    },
+                    "unitPrice": 1200,
+                    "quantity": {"standardQuantity": "20"},
+                }
+            ],
+            "pickLines": [
+                {
+                    "productId": "prod-laptop",
+                    "product": {
+                        "name": "Laptop",
+                        "sku": "LAP-1",
+                        "category": {"name": "Laptops"},
+                    },
+                    "unitPrice": 1200,
+                    "quantity": {"standardQuantity": "20"},
+                }
+            ],
+            "packLines": [
+                {
+                    "productId": "prod-laptop",
+                    "description": "Laptop",
+                    "quantity": {"standardQuantity": "85"},
+                    "containerNumber": "DELIVERY-TH4770-1",
+                }
+            ],
+            "shipLines": [
+                {
+                    "salesOrderShipLineId": "ship-1",
+                    "carrier": "TechHub",
+                    "containers": ["DELIVERY-TH4770-1"],
+                }
+            ],
+        },
+    )
+    session.add(parent_order)
+    session.commit()
+
+    order_service = OrderService(session)
+
+    assert order_service._requires_asset_tags(parent_order) is True
+
+    session.close()
+    engine.dispose()
+
+
 def test_parent_remainder_document_view_keeps_current_remainder_snapshot_for_same_product_split():
     """A remainder leg should keep its own picked items even when the split uses the same product IDs."""
 

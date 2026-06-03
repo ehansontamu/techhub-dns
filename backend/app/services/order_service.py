@@ -99,7 +99,17 @@ class OrderService:
 
         from app.services.inflow_service import InflowService
 
-        return InflowService().requires_asset_tags(order.inflow_data)
+        tag_requirement_source = order.inflow_data
+        if getattr(order, "remainder_order_id", None) and not getattr(
+            order, "parent_order_id", None
+        ):
+            remainder_view = OrderSplittingService(self.db).build_parent_remainder_document_view(
+                order
+            )
+            if remainder_view is not None:
+                tag_requirement_source = remainder_view
+
+        return InflowService().requires_asset_tags(tag_requirement_source)
 
     @staticmethod
     def _apply_order_search(query, search: str):

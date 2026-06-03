@@ -1,7 +1,7 @@
 from flask import Blueprint, request, jsonify, abort, send_file, current_app, g
 from flask_socketio import emit
 from sqlalchemy import or_, func
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, object_session
 from typing import Optional, List
 from uuid import UUID
 from pathlib import Path
@@ -87,14 +87,28 @@ def _resolve_asset_tag_required(
         data["asset_tag_required"] = False
         return data
 
+    tag_requirement_source = inflow_data
+    if getattr(order, "remainder_order_id", None) and not getattr(
+        order, "parent_order_id", None
+    ):
+        db_session = object_session(order)
+        if db_session is not None:
+            remainder_view = OrderSplittingService(db_session).build_parent_remainder_document_view(
+                order
+            )
+            if remainder_view is not None:
+                tag_requirement_source = remainder_view
+
     try:
         if inflow_service is not None and asset_tag_requirement_cache is not None:
             data["asset_tag_required"] = inflow_service.requires_asset_tags_cached(
-                inflow_data,
+                tag_requirement_source,
                 asset_tag_requirement_cache,
             )
         elif inflow_service is not None:
-            data["asset_tag_required"] = inflow_service.requires_asset_tags(inflow_data)
+            data["asset_tag_required"] = inflow_service.requires_asset_tags(
+                tag_requirement_source
+            )
         else:
             data["asset_tag_required"] = False
     except Exception as exc:
