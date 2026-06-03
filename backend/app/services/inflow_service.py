@@ -1003,9 +1003,9 @@ class InflowService:
             self._normalize_category_name(category_name) if category_name else ""
         )
         return (
-            normalized.startswith("desktops ")
+            normalized in {"desktops", "laptops", "custom computer"}
+            or normalized.startswith("desktops ")
             or normalized.startswith("laptops ")
-            or normalized == "custom computer"
         )
 
     def requires_asset_tags(self, order: Dict[str, Any]) -> bool:
