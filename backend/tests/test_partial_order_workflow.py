@@ -1850,6 +1850,87 @@ def test_parent_remainder_document_view_keeps_items_when_fully_picked():
     engine.dispose()
 
 
+def test_partial_split_moves_tag_state_to_child_and_remainder_can_retag_when_fully_picked():
+    """A picked leg should keep the original tag state while the remainder can tag again later."""
+
+    session, engine = _make_sqlite_session()
+    parent_order = Order(
+        id="order-parent-tag-1",
+        inflow_order_id="TH4770",
+        inflow_sales_order_id="sales-order-4770",
+        recipient_name="User Eight",
+        recipient_contact="user.eight@example.com",
+        delivery_location="Building 4770",
+        po_number="PO-4770",
+        status=OrderStatus.PICKED.value,
+        tagged_at=datetime.utcnow(),
+        tagged_by="tech@example.com",
+        tag_data={"tag_ids": ["TAG-1"], "tag_request_status": "sent"},
+        inflow_data={
+            "orderNumber": "TH4770",
+            "contactName": "User Eight",
+            "email": "user.eight@example.com",
+            "shippingAddress": {"address1": "4770 Example St"},
+            "lines": [
+                {
+                    "productId": "prod-laptop",
+                    "product": {"name": "Laptop", "sku": "LAP-1"},
+                    "quantity": {"standardQuantity": "85"},
+                }
+            ],
+            "pickLines": [
+                {
+                    "productId": "prod-laptop",
+                    "product": {"name": "Laptop", "sku": "LAP-1"},
+                    "quantity": {"standardQuantity": "65"},
+                }
+            ],
+        },
+    )
+    session.add(parent_order)
+    session.commit()
+
+    splitting_service = OrderSplittingService(session)
+    child_order = splitting_service.create_partial_picklist_leg(
+        parent_order, user_id="tech@example.com"
+    )
+    session.refresh(parent_order)
+    session.refresh(child_order)
+
+    assert child_order is not None
+    assert child_order.tagged_at is not None
+    assert child_order.tagged_by == "tech@example.com"
+    assert child_order.tag_data == {"tag_ids": ["TAG-1"], "tag_request_status": "sent"}
+    assert parent_order.tagged_at is None
+    assert parent_order.tagged_by is None
+    assert parent_order.tag_data is None
+
+    # Simulate the remainder later reaching a fully picked state in InFlow.
+    parent_order.inflow_data = {
+        **parent_order.inflow_data,
+        "pickLines": [
+            {
+                "productId": "prod-laptop",
+                "product": {"name": "Laptop", "sku": "LAP-1"},
+                "quantity": {"standardQuantity": "20"},
+            }
+        ],
+    }
+    session.commit()
+
+    order_service = OrderService(session)
+    refreshed_parent = order_service.mark_asset_tagged(
+        parent_order.id, ["TAG-20"], technician="tech2@example.com"
+    )
+
+    assert refreshed_parent.tagged_at is not None
+    assert refreshed_parent.tagged_by == "tech2@example.com"
+    assert refreshed_parent.tag_data == {"tag_ids": ["TAG-20"]}
+
+    session.close()
+    engine.dispose()
+
+
 def test_parent_remainder_document_view_keeps_current_remainder_snapshot_for_same_product_split():
     """A remainder leg should keep its own picked items even when the split uses the same product IDs."""
 
