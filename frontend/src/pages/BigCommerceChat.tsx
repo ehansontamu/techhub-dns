@@ -26,6 +26,8 @@ const ORDER_URL_RE = /https:\/\/store-jsj7fos9p1\.mybigcommerce\.com\/manage\/or
 const TOOL_CALL_TEXT_RE = /\bto=functions\.[A-Za-z_]\w*\b.*?(?=\n\n|$)/gs;
 const MESSAGE_TOKEN_RE = /\*\*([^*\n]+)\*\*|\bOrder\s+#?(\d{1,})\b|(https?:\/\/[^\s)]+)/gi;
 const MARKDOWN_TABLE_SEPARATOR_RE = /^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$/;
+const MARKDOWN_HEADING_RE = /^(#{1,6})\s+(.+)$/;
+const DISPLAY_TIME_ZONE = "America/Chicago";
 
 function chatErrorMessage(error: unknown): string {
   if (typeof error === "object" && error !== null && "response" in error) {
@@ -171,6 +173,29 @@ function renderMarkdownTable(lines: string[], keyPrefix: string) {
   );
 }
 
+function renderTextBlock(lines: string[], keyPrefix: string) {
+  return lines.map((line, lineIndex) => {
+    const headingMatch = line.match(MARKDOWN_HEADING_RE);
+    if (headingMatch) {
+      return (
+        <div
+          key={`${keyPrefix}-heading-${lineIndex}`}
+          className="mt-3 font-semibold first:mt-0"
+        >
+          {renderMessageTokens(headingMatch[2], `${keyPrefix}-heading-${lineIndex}`)}
+        </div>
+      );
+    }
+
+    return (
+      <span key={`${keyPrefix}-line-${lineIndex}`}>
+        {renderMessageTokens(line, `${keyPrefix}-line-${lineIndex}`)}
+        {lineIndex < lines.length - 1 ? "\n" : null}
+      </span>
+    );
+  });
+}
+
 function renderMessageText(text: string) {
   const cleanedText = cleanMessageText(text);
   const lines = cleanedText.split("\n");
@@ -206,7 +231,7 @@ function renderMessageText(text: string) {
     }
     parts.push(
       <span key={`message-text-${parts.length}`}>
-        {renderMessageTokens(lines.slice(start, index).join("\n"), `message-text-${parts.length}`)}
+        {renderTextBlock(lines.slice(start, index), `message-text-${parts.length}`)}
       </span>
     );
   }
@@ -225,10 +250,12 @@ function formatCacheTimestamp(value: string | null) {
   }
 
   return parsed.toLocaleString([], {
+    timeZone: DISPLAY_TIME_ZONE,
     month: "short",
     day: "numeric",
     hour: "numeric",
     minute: "2-digit",
+    timeZoneName: "short",
   });
 }
 
