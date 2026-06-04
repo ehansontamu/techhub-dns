@@ -2,13 +2,32 @@ import { apiClient } from "./client";
 
 export type BigCommerceChatRole = "user" | "assistant";
 
+export type BigCommerceChartType = "line" | "bar" | "pie";
+export type BigCommerceChartValueKind = "number" | "percent" | "currency";
+
+export interface BigCommerceChartSeries {
+  key: string;
+  label: string;
+}
+
+export interface BigCommerceChartData {
+  type: BigCommerceChartType;
+  title?: string;
+  xKey: string;
+  series: BigCommerceChartSeries[];
+  data: Record<string, string | number | null>[];
+  valueKind?: BigCommerceChartValueKind;
+}
+
 export interface BigCommerceChatMessage {
   role: BigCommerceChatRole;
   content: string;
+  chart?: BigCommerceChartData | null;
 }
 
 export interface BigCommerceChatResponse {
   answer: string;
+  chart?: BigCommerceChartData | null;
   messages: BigCommerceChatMessage[];
 }
 

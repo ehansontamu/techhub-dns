@@ -8,9 +8,25 @@ import {
   Send,
   UserRound,
 } from "lucide-react";
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  Legend,
+  Line,
+  LineChart,
+  Pie,
+  PieChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 
 import {
   bigcommerceChatApi,
+  type BigCommerceChartData,
   type BigCommerceCacheStatus,
   type BigCommerceChatMessage,
 } from "../api/bigcommerceChat";
@@ -28,6 +44,16 @@ const MESSAGE_TOKEN_RE = /\*\*([^*\n]+)\*\*|\bOrder\s+#?(\d{1,})\b|(https?:\/\/[
 const MARKDOWN_TABLE_SEPARATOR_RE = /^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$/;
 const MARKDOWN_HEADING_RE = /^(#{1,6})\s+(.+)$/;
 const DISPLAY_TIME_ZONE = "America/Chicago";
+const CHART_COLORS = [
+  "#2563eb",
+  "#16a34a",
+  "#dc2626",
+  "#9333ea",
+  "#ea580c",
+  "#0891b2",
+  "#4f46e5",
+  "#65a30d",
+];
 
 function chatErrorMessage(error: unknown): string {
   if (typeof error === "object" && error !== null && "response" in error) {
@@ -259,6 +285,111 @@ function formatCacheTimestamp(value: string | null) {
   });
 }
 
+function formatChartValue(value: unknown, valueKind: BigCommerceChartData["valueKind"]) {
+  const numericValue = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(numericValue)) {
+    return String(value ?? "");
+  }
+
+  if (valueKind === "percent") {
+    return `${numericValue.toFixed(2)}%`;
+  }
+  if (valueKind === "currency") {
+    return numericValue.toLocaleString("en-US", {
+      style: "currency",
+      currency: "USD",
+      maximumFractionDigits: 0,
+    });
+  }
+  return numericValue.toLocaleString();
+}
+
+function BigCommerceChatChart({ chart }: { chart: BigCommerceChartData }) {
+  if (!chart.data.length || !chart.series.length) {
+    return null;
+  }
+
+  const tooltipFormatter = (value: unknown, name: unknown) => [
+    formatChartValue(value, chart.valueKind),
+    String(name),
+  ];
+  const yTickFormatter = (value: unknown) => formatChartValue(value, chart.valueKind);
+
+  if (chart.type === "pie") {
+    const firstSeries = chart.series[0];
+    return (
+      <div className="mt-3 h-72 rounded-md border border-border bg-muted/10 p-3">
+        <ResponsiveContainer width="100%" height="100%">
+          <PieChart>
+            <Tooltip formatter={tooltipFormatter} />
+            <Legend />
+            <Pie
+              data={chart.data}
+              dataKey={firstSeries.key}
+              nameKey={chart.xKey}
+              innerRadius={52}
+              outerRadius={92}
+              paddingAngle={2}
+            >
+              {chart.data.map((entry, index) => (
+                <Cell
+                  key={`chart-slice-${String(entry[chart.xKey])}-${index}`}
+                  fill={CHART_COLORS[index % CHART_COLORS.length]}
+                />
+              ))}
+            </Pie>
+          </PieChart>
+        </ResponsiveContainer>
+      </div>
+    );
+  }
+
+  const ChartComponent = chart.type === "bar" ? BarChart : LineChart;
+  return (
+    <div className="mt-3 h-80 rounded-md border border-border bg-muted/10 p-3">
+      <ResponsiveContainer width="100%" height="100%">
+        <ChartComponent data={chart.data} margin={{ top: 10, right: 16, left: 8, bottom: 28 }}>
+          <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+          <XAxis
+            dataKey={chart.xKey}
+            tick={{ fontSize: 11 }}
+            angle={-25}
+            textAnchor="end"
+            height={52}
+            interval={0}
+          />
+          <YAxis tick={{ fontSize: 11 }} tickFormatter={yTickFormatter} />
+          <Tooltip formatter={tooltipFormatter} />
+          <Legend wrapperStyle={{ fontSize: 12 }} />
+          {chart.series.map((series, index) =>
+            chart.type === "bar" ? (
+              <Bar
+                key={series.key}
+                dataKey={series.key}
+                name={series.label}
+                fill={CHART_COLORS[index % CHART_COLORS.length]}
+                radius={[3, 3, 0, 0]}
+              />
+            ) : (
+              <Line
+                key={series.key}
+                type="monotone"
+                dataKey={series.key}
+                name={series.label}
+                stroke={CHART_COLORS[index % CHART_COLORS.length]}
+                strokeWidth={2}
+                dot={{ r: 2 }}
+                activeDot={{ r: 4 }}
+                connectNulls
+              />
+            )
+          )}
+        </ChartComponent>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
 export default function BigCommerceChat() {
   const [messages, setMessages] = useState<BigCommerceChatMessage[]>([]);
   const [draft, setDraft] = useState("");
@@ -322,7 +453,12 @@ export default function BigCommerceChat() {
 
     try {
       const response = await bigcommerceChatApi.ask(question, messages);
-      setMessages(response.messages);
+      const responseMessages = response.messages.map((message, index) =>
+        index === response.messages.length - 1 && message.role === "assistant"
+          ? { ...message, chart: response.chart ?? null }
+          : message
+      );
+      setMessages(responseMessages);
     } catch (error) {
       setMessages(nextMessages);
       setErrorMessage(chatErrorMessage(error));
@@ -419,12 +555,14 @@ export default function BigCommerceChat() {
                   <div
                     className={cn(
                       "max-w-[min(42rem,92%)] whitespace-pre-wrap rounded-lg border px-4 py-3 text-sm leading-6",
+                      message.chart && !isUser && "max-w-[min(56rem,96%)]",
                       isUser
                         ? "border-primary/20 bg-primary text-primary-foreground"
                         : "border-border bg-background text-foreground"
                     )}
                   >
                     {renderMessageText(message.content)}
+                    {!isUser && message.chart && <BigCommerceChatChart chart={message.chart} />}
                   </div>
                   {isUser && (
                     <div className="mt-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground">
