@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -33,6 +34,11 @@ from app.services.bigcommerce_chat.bigcommerce_tools import (
 
 SYNC_MAX_ORDERS_PER_RUN = 5000
 SYNC_PAGE_LIMIT = 250
+CATALOG_PRODUCT_CACHE_TTL_SECONDS = 900
+_CATALOG_PRODUCT_CACHE: list[dict[str, Any]] = []
+_CATALOG_PRODUCT_CACHE_FETCHED_AT: datetime | None = None
+_CATALOG_PRODUCT_CACHE_LIMIT = 0
+_CATALOG_PRODUCT_CACHE_COMPLETE = False
 SYNC_INCREMENTAL_LOOKBACK_HOURS = 2
 SYNC_STALE_AFTER_MINUTES = 15
 SQL_QUERY_TIMEOUT_SECONDS = 20
@@ -719,6 +725,56 @@ def _catalog_search_text(product: dict[str, Any]) -> str:
     return " ".join(str(value or "") for value in values).lower()
 
 
+def _fetch_catalog_products_for_local_filter(max_catalog_products: int) -> list[dict[str, Any]]:
+    global _CATALOG_PRODUCT_CACHE, _CATALOG_PRODUCT_CACHE_COMPLETE
+    global _CATALOG_PRODUCT_CACHE_FETCHED_AT, _CATALOG_PRODUCT_CACHE_LIMIT
+
+    now = datetime.now(timezone.utc)
+    max_catalog_products = min(max(int(max_catalog_products or 1000), 1), 2000)
+    if (
+        _CATALOG_PRODUCT_CACHE
+        and _CATALOG_PRODUCT_CACHE_FETCHED_AT is not None
+        and (now - _CATALOG_PRODUCT_CACHE_FETCHED_AT).total_seconds() < CATALOG_PRODUCT_CACHE_TTL_SECONDS
+        and (_CATALOG_PRODUCT_CACHE_COMPLETE or _CATALOG_PRODUCT_CACHE_LIMIT >= max_catalog_products)
+    ):
+        return _CATALOG_PRODUCT_CACHE[:max_catalog_products]
+
+    client = _client()
+    products_by_id: dict[int, dict[str, Any]] = {}
+    page = 1
+    completed_catalog = False
+    while len(products_by_id) < max_catalog_products:
+        page_limit = min(250, max_catalog_products - len(products_by_id))
+        if page_limit <= 0:
+            break
+        data = client.get(
+            "/v3/catalog/products",
+            {
+                "page": page,
+                "limit": page_limit,
+                "include": "images,variants,custom_fields",
+            },
+        )
+        page_products = data.get("data", [])
+        for product in page_products:
+            product_id = product.get("id")
+            if product_id is not None:
+                products_by_id[int(product_id)] = product
+
+        pagination = data.get("meta", {}).get("pagination", {})
+        total_pages = int(pagination.get("total_pages") or 0)
+        if len(page_products) < page_limit or (total_pages and page >= total_pages):
+            completed_catalog = True
+            break
+        page += 1
+    products = list(products_by_id.values())
+    _CATALOG_PRODUCT_CACHE = products
+    _CATALOG_PRODUCT_CACHE_FETCHED_AT = now
+    _CATALOG_PRODUCT_CACHE_LIMIT = max_catalog_products
+    _CATALOG_PRODUCT_CACHE_COMPLETE = completed_catalog
+    return products
+
+
 def _fetch_catalog_candidates(
     keyword: str,
     required_terms: list[str],
@@ -799,30 +855,10 @@ def _fetch_catalog_candidates(
                 candidates_by_id[int(product_id)] = product
 
     if normalized_required:
-        page = 1
-        while len(candidates_by_id) < max_catalog_products:
-            page_limit = min(250, max_catalog_products - len(candidates_by_id))
-            if page_limit <= 0:
-                break
-            data = client.get(
-                "/v3/catalog/products",
-                {
-                    "page": page,
-                    "limit": page_limit,
-                    "include": "images,variants,custom_fields",
-                },
-            )
-            page_products = data.get("data", [])
-            for product in page_products:
-                product_id = product.get("id")
-                if product_id is not None:
-                    candidates_by_id[int(product_id)] = product
-
-            pagination = data.get("meta", {}).get("pagination", {})
-            total_pages = int(pagination.get("total_pages") or 0)
-            if len(page_products) < page_limit or (total_pages and page >= total_pages):
-                break
-            page += 1
+        for product in _fetch_catalog_products_for_local_filter(max_catalog_products):
+            product_id = product.get("id")
+            if product_id is not None:
+                candidates_by_id[int(product_id)] = product
 
     if normalized_required:
         return [
@@ -982,5 +1018,232 @@ def get_catalog_filtered_product_sales(
             "cache_status": get_bigcommerce_cache_status(),
         }
         return result
+    finally:
+        db.close()
+
+
+CPU_FAMILIES = ("Windows ARM", "Apple silicon", "Intel", "AMD")
+
+
+def _json_search_text(value: Any) -> str:
+    if value is None:
+        return ""
+    try:
+        return json.dumps(value, default=str)
+    except TypeError:
+        return str(value)
+
+
+def _classify_cpu_family(text: str) -> str | None:
+    normalized = f" {text.lower()} "
+    if re.search(r"\b(m[1-9]|m[1-9]\s*(pro|max|ultra))\b", normalized) or "apple silicon" in normalized:
+        return "Apple silicon"
+    if (
+        "snapdragon" in normalized
+        or "qualcomm" in normalized
+        or "windows arm" in normalized
+        or "windows on arm" in normalized
+        or "arm64" in normalized
+        or re.search(r"\bx\s*(elite|plus)\b", normalized)
+    ):
+        return "Windows ARM"
+    if re.search(r"\b(amd|ryzen|threadripper|epyc)\b", normalized):
+        return "AMD"
+    if (
+        "intel" in normalized
+        or "core ultra" in normalized
+        or re.search(r"\b(core\s*)?i[3579]\b", normalized)
+        or re.search(r"\bxeon\b", normalized)
+    ):
+        return "Intel"
+    return None
+
+
+def _calendar_quarter(month_value: str) -> str:
+    year = int(month_value[:4])
+    month = int(month_value[5:7])
+    quarter = ((month - 1) // 3) + 1
+    return f"{year} Q{quarter}"
+
+
+def _month_keys_in_range(start_date: str, end_date: str) -> list[str]:
+    start = datetime.fromisoformat(start_date)
+    end = datetime.fromisoformat(end_date)
+    current = datetime(start.year, start.month, 1)
+    keys = []
+    while current < end:
+        keys.append(current.strftime("%Y-%m"))
+        if current.month == 12:
+            current = datetime(current.year + 1, 1, 1)
+        else:
+            current = datetime(current.year, current.month + 1, 1)
+    return keys
+
+
+def _empty_cpu_family_counts() -> dict[str, dict[str, Any]]:
+    return {
+        family: {"quantity": 0, "revenue_inc_tax": 0.0, "order_ids": set()}
+        for family in CPU_FAMILIES
+    }
+
+
+def _serialize_cpu_family_counts(counts: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    total_quantity = sum(int(value["quantity"]) for value in counts.values())
+    serialized: dict[str, dict[str, Any]] = {}
+    for family in CPU_FAMILIES:
+        value = counts[family]
+        quantity = int(value["quantity"])
+        serialized[family] = {
+            "quantity": quantity,
+            "percentage": round((quantity / total_quantity) * 100, 2) if total_quantity else 0,
+            "revenue_inc_tax": round(float(value["revenue_inc_tax"] or 0), 2),
+            "order_count": len(value["order_ids"]),
+        }
+    return serialized
+
+
+def get_cpu_family_sales_breakdown(
+    start_date: str,
+    end_date: str,
+    group_by: str = "month",
+    max_catalog_products: int = 1000,
+) -> dict[str, Any]:
+    """Classify sold machines by CPU family using catalog specs plus cached order lines."""
+
+    group_by = group_by if group_by in {"month", "quarter"} else "month"
+    catalog_products = _fetch_catalog_products_for_local_filter(max_catalog_products)
+    raw_catalog_by_id = {
+        int(product["id"]): product
+        for product in catalog_products
+        if product.get("id") is not None
+    }
+    raw_catalog_by_sku = {
+        str(product["sku"]).strip(): product
+        for product in catalog_products
+        if product.get("sku")
+    }
+    cpu_family_by_id: dict[int, str] = {}
+    cpu_family_by_sku: dict[str, str] = {}
+    catalog_family_counts = {family: 0 for family in CPU_FAMILIES}
+    for product in catalog_products:
+        family = _classify_cpu_family(_catalog_search_text(product))
+        if not family:
+            continue
+        catalog_family_counts[family] += 1
+        if product.get("id") is not None:
+            cpu_family_by_id[int(product["id"])] = family
+        if product.get("sku"):
+            cpu_family_by_sku[str(product["sku"]).strip()] = family
+
+    db = get_db_session()
+    try:
+        rows = (
+            db.query(
+                BigCommerceOrder.date_created.label("date_created"),
+                BigCommerceOrderItem.order_id.label("order_id"),
+                BigCommerceOrderItem.product_id.label("product_id"),
+                BigCommerceOrderItem.sku.label("sku"),
+                BigCommerceOrderItem.name.label("name"),
+                BigCommerceOrderItem.quantity.label("quantity"),
+                BigCommerceOrderItem.total_inc_tax.label("revenue_inc_tax"),
+                BigCommerceOrderItem.raw_product.label("raw_product"),
+            )
+            .join(BigCommerceOrder, BigCommerceOrder.id == BigCommerceOrderItem.order_id)
+            .filter(BigCommerceOrder.status.notin_(["Cancelled", "Declined", "Refunded"]))
+            .filter(BigCommerceOrder.date_created >= datetime.fromisoformat(start_date))
+            .filter(BigCommerceOrder.date_created < datetime.fromisoformat(end_date))
+            .all()
+        )
+
+        buckets: dict[str, dict[str, dict[str, Any]]] = {}
+        unclassified_quantity = 0
+        unclassified_samples: list[dict[str, Any]] = []
+        for row in rows:
+            family = None
+            if row.product_id is not None:
+                family = cpu_family_by_id.get(int(row.product_id))
+            if family is None and row.sku:
+                family = cpu_family_by_sku.get(str(row.sku).strip())
+            if family is None:
+                catalog_product = None
+                if row.product_id is not None:
+                    catalog_product = raw_catalog_by_id.get(int(row.product_id))
+                if catalog_product is None and row.sku:
+                    catalog_product = raw_catalog_by_sku.get(str(row.sku).strip())
+                fallback_text = " ".join(
+                    [
+                        str(row.name or ""),
+                        str(row.sku or ""),
+                        _json_search_text(row.raw_product),
+                        _catalog_search_text(catalog_product) if catalog_product else "",
+                    ]
+                )
+                family = _classify_cpu_family(fallback_text)
+
+            quantity = int(row.quantity or 0)
+            if family is None:
+                unclassified_quantity += quantity
+                if len(unclassified_samples) < 10:
+                    unclassified_samples.append(
+                        {
+                            "order_id": row.order_id,
+                            "product_id": row.product_id,
+                            "sku": row.sku,
+                            "name": row.name,
+                            "quantity": quantity,
+                        }
+                    )
+                continue
+
+            month_key = row.date_created.strftime("%Y-%m")
+            bucket_key = month_key if group_by == "month" else _calendar_quarter(month_key)
+            if bucket_key not in buckets:
+                buckets[bucket_key] = _empty_cpu_family_counts()
+            bucket = buckets[bucket_key][family]
+            bucket["quantity"] += quantity
+            bucket["revenue_inc_tax"] += float(row.revenue_inc_tax or 0)
+            bucket["order_ids"].add(int(row.order_id))
+
+        if group_by == "month":
+            for month_key in _month_keys_in_range(start_date, end_date):
+                buckets.setdefault(month_key, _empty_cpu_family_counts())
+
+        periods = []
+        for period in sorted(buckets):
+            counts = buckets[period]
+            period_total = sum(int(value["quantity"]) for value in counts.values())
+            periods.append(
+                {
+                    "period": period,
+                    "total_classified_quantity": period_total,
+                    "cpu_families": _serialize_cpu_family_counts(counts),
+                }
+            )
+
+        overall_counts = _empty_cpu_family_counts()
+        for counts in buckets.values():
+            for family in CPU_FAMILIES:
+                overall_counts[family]["quantity"] += counts[family]["quantity"]
+                overall_counts[family]["revenue_inc_tax"] += counts[family]["revenue_inc_tax"]
+                overall_counts[family]["order_ids"].update(counts[family]["order_ids"])
+
+        return {
+            "start_date": start_date,
+            "end_date": end_date,
+            "group_by": group_by,
+            "cpu_families": list(CPU_FAMILIES),
+            "periods": periods,
+            "overall": {
+                "total_classified_quantity": sum(
+                    int(value["quantity"]) for value in overall_counts.values()
+                ),
+                "cpu_families": _serialize_cpu_family_counts(overall_counts),
+            },
+            "catalog_products_scanned": len(catalog_products),
+            "catalog_products_classified_by_cpu": catalog_family_counts,
+            "unclassified_quantity": unclassified_quantity,
+            "unclassified_samples": unclassified_samples,
+            "cache_status": get_bigcommerce_cache_status(),
+        }
     finally:
         db.close()

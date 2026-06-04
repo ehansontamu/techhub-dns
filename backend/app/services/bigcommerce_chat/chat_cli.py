@@ -15,6 +15,7 @@ from app.services.bigcommerce_analytics_cache import (
     get_catalog_filtered_product_sales,
     get_bigcommerce_analytics_schema,
     get_bigcommerce_cache_status,
+    get_cpu_family_sales_breakdown,
     get_order_financial_summary,
     run_bigcommerce_readonly_query,
 )
@@ -27,6 +28,7 @@ CHAT_TOOLS = {
     "get_bigcommerce_analytics_schema": get_bigcommerce_analytics_schema,
     "get_bigcommerce_cache_status": get_bigcommerce_cache_status,
     "get_catalog_filtered_product_sales": get_catalog_filtered_product_sales,
+    "get_cpu_family_sales_breakdown": get_cpu_family_sales_breakdown,
     "get_order_financial_summary": get_order_financial_summary,
     "run_bigcommerce_readonly_query": run_bigcommerce_readonly_query,
 }
@@ -59,6 +61,7 @@ For flexible analytics, prefer run_bigcommerce_readonly_query. Use get_order_sum
 For order ranking questions, prefer SQL over bc_orders. Choose the rank metric from the user's words: dollars/value/amount means total_inc_tax; first/earliest/submitted date means date_created ascending; latest/newest/most recent means date_created descending; first order number means id ascending; most/fewest items means items_total.
 For product popularity, top products, "which product sold most", "which order had the most of a product", or combined product/source-order questions, prefer SQL joining bc_orders to bc_order_items.
 For questions about products currently on the BigCommerce site/catalog, product details, SKUs, prices, visibility, availability, variants, inventory levels, images, custom fields, or category/catalog browsing, use the live read-only catalog tools. Product sales/history/popularity questions are different from catalog questions: use SQL for sold/sales/revenue/quantity ordered, and catalog tools for site/catalog/product-page facts.
+For machine CPU-family sales comparisons involving Windows ARM, Apple silicon, Intel, or AMD, use get_cpu_family_sales_breakdown. For calendar Q3/Q4 2025 through Q1/Q2 2026, use start_date="2025-07-01" and end_date="2026-07-01"; Q2 2026 may be partial if current data is before July 2026. If the user says month over month, use group_by="month" even when the date range is described by quarters.
 When asked which orders took the longest to fulfill, use get_fulfillment_aging_report so the answer includes both longest completed fulfillment durations and oldest currently-open orders. Use get_oldest_unfulfilled_orders only when the user explicitly asks for currently open/unfulfilled orders.
 When asked how long a specific order took to fulfill, use get_order_fulfillment_timing.
 When a user gives a name like "Jim's order", first search recent orders by customer name.
@@ -178,6 +181,33 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "max_catalog_products": {"type": "integer", "default": 1000},
                 },
                 "required": ["keyword"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_cpu_family_sales_breakdown",
+            "description": "Classify sold machine line items into CPU families, then return quantity percentages and revenue by month or quarter. Use for questions comparing Windows ARM, Apple silicon, Intel, and AMD machine purchases over time.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "start_date": {
+                        "type": "string",
+                        "description": "Inclusive YYYY-MM-DD order date lower bound.",
+                    },
+                    "end_date": {
+                        "type": "string",
+                        "description": "Exclusive YYYY-MM-DD order date upper bound.",
+                    },
+                    "group_by": {
+                        "type": "string",
+                        "enum": ["month", "quarter"],
+                        "default": "month",
+                    },
+                    "max_catalog_products": {"type": "integer", "default": 1000},
+                },
+                "required": ["start_date", "end_date"],
             },
         },
     },
@@ -953,6 +983,7 @@ CACHE_TOOL_NAMES = {
     "get_bigcommerce_analytics_schema",
     "get_bigcommerce_cache_status",
     "get_catalog_filtered_product_sales",
+    "get_cpu_family_sales_breakdown",
     "get_order_financial_summary",
     "run_bigcommerce_readonly_query",
 }
@@ -989,6 +1020,7 @@ Rules:
 - For questions about products currently on the BigCommerce site/catalog, product details, SKUs, prices, visibility, availability, variants, inventory levels, images, custom fields, or category/catalog browsing, use the live read-only catalog tools: list_catalog_products, search_products, get_product_by_sku, get_catalog_product, get_low_stock_products, or find_products_missing_images.
 - Product sales/history/popularity questions are different from catalog questions. For "sold", "sales", "ordered", "popular", "revenue", or "quantity sold", use SQL over bc_orders and bc_order_items. For "on the site", "catalog", "visible", "price", "SKU", "inventory", "image", "variant", or "product page", use catalog tools.
 - For questions combining catalog/spec filters with sales ranking, such as "best selling computer with an AMD CPU", "which touchscreen laptop sells best", or "sales for products with Ryzen", use get_catalog_filtered_product_sales instead of manually fetching broad catalog results and writing a large SQL query. For month-over-month versions of those questions, call it with group_by="month".
+- For CPU-family percentage breakdowns or comparisons involving Windows ARM, Apple silicon, Intel, and AMD, use get_cpu_family_sales_breakdown instead of SQL. For calendar Q3/Q4 2025 through Q1/Q2 2026, use start_date="2025-07-01" and end_date="2026-07-01"; Q2 2026 may be partial if current data is before July 2026. If the user says month over month, use group_by="month" even when the date range is described by quarters.
 - Catalog tools are read-only. Never claim you can create, update, delete, publish, hide, price, or inventory-adjust a product.
 - Write only SELECT queries against the tables above.
 - For sales/revenue analytics, exclude statuses 'Cancelled', 'Declined', and 'Refunded' unless the user explicitly asks to include them. For "complete only", filter status IN ('Completed', 'Complete').
@@ -1105,6 +1137,8 @@ def _format_direct_tool_answer(name: str, result: dict[str, Any]) -> str | None:
         return _format_catalog_products(result)
     if name == "get_catalog_filtered_product_sales":
         return _format_catalog_filtered_product_sales(result)
+    if name == "get_cpu_family_sales_breakdown":
+        return _format_cpu_family_sales_breakdown(result)
     if name == "get_order_financial_summary":
         return _format_order_financial_summary(result)
     if name == "get_catalog_product":
@@ -1389,6 +1423,72 @@ def _format_catalog_filtered_product_sales(result: dict[str, Any]) -> str:
             f"{_format_money(float(result.get('total_revenue_inc_tax') or 0))}."
         )
     )
+    return "\n".join(lines)
+
+
+def _format_cpu_family_sales_breakdown(result: dict[str, Any]) -> str:
+    periods = result.get("periods") or []
+    families = result.get("cpu_families") or ["Windows ARM", "Apple silicon", "Intel", "AMD"]
+    range_label = f"{result.get('start_date') or 'the beginning'} through {result.get('end_date') or 'now'}"
+    if not periods:
+        return f"I did not find classified machine sales by CPU family for {range_label}."
+
+    lines = [
+        f"CPU-family machine purchase mix for {range_label}:",
+        "",
+        "| Period | Total units | " + " | ".join(str(family) for family in families) + " |",
+        "|---|---:|" + "|".join("---:" for _ in families) + "|",
+    ]
+    for period in periods:
+        family_counts = period.get("cpu_families") or {}
+        cells = []
+        for family in families:
+            values = family_counts.get(family) or {}
+            cells.append(
+                (
+                    f"{_format_number(values.get('quantity') or 0)} "
+                    f"({float(values.get('percentage') or 0):.2f}%)"
+                )
+            )
+        lines.append(
+            (
+                f"| {period.get('period') or 'unknown'} | "
+                f"{_format_number(period.get('total_classified_quantity') or 0)} | "
+                + " | ".join(cells)
+                + " |"
+            )
+        )
+
+    overall = result.get("overall") or {}
+    overall_counts = overall.get("cpu_families") or {}
+    summary_parts = []
+    for family in families:
+        values = overall_counts.get(family) or {}
+        summary_parts.append(
+            (
+                f"{family}: {_format_number(values.get('quantity') or 0)} "
+                f"({float(values.get('percentage') or 0):.2f}%)"
+            )
+        )
+    lines.extend(
+        [
+            "",
+            (
+                f"Overall classified units: "
+                f"{_format_number(overall.get('total_classified_quantity') or 0)}."
+            ),
+            "; ".join(summary_parts) + ".",
+        ]
+    )
+
+    unclassified_quantity = int(result.get("unclassified_quantity") or 0)
+    if unclassified_quantity:
+        lines.append(
+            (
+                f"Unclassified line-item units in the same date range: "
+                f"{_format_number(unclassified_quantity)}."
+            )
+        )
     return "\n".join(lines)
 
 
