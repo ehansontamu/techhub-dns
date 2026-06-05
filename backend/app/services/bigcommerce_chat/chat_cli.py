@@ -3113,6 +3113,111 @@ def _months_to_days(months: int) -> int:
     return max(1, months * 31)
 
 
+def _add_months(value: date, months: int) -> date:
+    month_index = value.month - 1 + months
+    year = value.year + month_index // 12
+    month = month_index % 12 + 1
+    return date(year, month, 1)
+
+
+def _extract_cpu_family_sales_request(question: str) -> dict[str, Any] | None:
+    normalized = question.lower()
+    if not any(term in normalized for term in ["cpu", "processor", "apple silicon", "windows arm", "intel", "amd"]):
+        return None
+    if not any(term in normalized for term in ["sold", "sell", "sales", "purchased", "bought", "machines", "computers"]):
+        return None
+
+    family = None
+    if re.search(r"\bamd\b", normalized):
+        family = "AMD"
+    elif "apple silicon" in normalized:
+        family = "Apple silicon"
+    elif "windows arm" in normalized or "snapdragon" in normalized or "qualcomm" in normalized:
+        family = "Windows ARM"
+    elif re.search(r"\bintel\b", normalized):
+        family = "Intel"
+
+    if family is None:
+        return None
+
+    today = date.today()
+    start_date = date(today.year, 1, 1)
+    end_date = _add_months(date(today.year, today.month, 1), 1)
+    month_match = re.search(r"\blast\s+(\d+)\s+months?\b", normalized)
+    if month_match:
+        months = max(1, min(int(month_match.group(1)), 60))
+        current_month = date(today.year, today.month, 1)
+        start_date = _add_months(current_month, -(months - 1))
+    elif "this year" in normalized or "year to date" in normalized or "ytd" in normalized:
+        start_date = date(today.year, 1, 1)
+    else:
+        year_match = re.search(r"\b(20\d{2})\b", normalized)
+        if year_match:
+            year = int(year_match.group(1))
+            start_date = date(year, 1, 1)
+            end_date = date(year + 1, 1, 1)
+
+    return {
+        "family": family,
+        "start_date": start_date.isoformat(),
+        "end_date": end_date.isoformat(),
+        "group_by": "month",
+        "rank_months": any(term in normalized for term in ["highest", "top", "most", "peak"]),
+    }
+
+
+def _format_cpu_family_month_ranking(result: dict[str, Any], request: dict[str, Any]) -> str:
+    family = request["family"]
+    periods = result.get("periods") or []
+    ranked_periods = sorted(
+        periods,
+        key=lambda period: int(((period.get("cpu_families") or {}).get(family) or {}).get("quantity") or 0),
+        reverse=True,
+    )
+    ranked_periods = [
+        period
+        for period in ranked_periods
+        if int(((period.get("cpu_families") or {}).get(family) or {}).get("quantity") or 0) > 0
+    ]
+    if not ranked_periods:
+        return (
+            f"I did not find {family} CPU machine sales from "
+            f"{request['start_date']} through {request['end_date']}."
+        )
+
+    top_period = ranked_periods[0]
+    top_values = (top_period.get("cpu_families") or {}).get(family) or {}
+    lines = [
+        (
+            f"The peak month for {family} CPU machine sales was "
+            f"{top_period.get('period')}, with {_format_number(top_values.get('quantity') or 0)} units sold."
+        ),
+        "",
+        "| Rank | Month | Units sold | Revenue | Top contributing products |",
+        "|---:|---|---:|---:|---|",
+    ]
+    for index, period in enumerate(ranked_periods[:8], start=1):
+        values = (period.get("cpu_families") or {}).get(family) or {}
+        top_products = values.get("top_products") or []
+        product_label = "; ".join(
+            f"{product.get('name') or 'Unknown'} ({_format_number(product.get('quantity') or 0)})"
+            for product in top_products[:3]
+        )
+        lines.append(
+            (
+                f"| {index} | {period.get('period') or 'unknown'} | "
+                f"{_format_number(values.get('quantity') or 0)} | "
+                f"{_format_money(float(values.get('revenue_inc_tax') or 0))} | "
+                f"{product_label or 'none'} |"
+            )
+        )
+
+    if result.get("classification_source"):
+        lines.append("")
+        lines.append(f"Classification source: {result['classification_source']}.")
+    return "\n".join(lines)
+
+
 def _resolve_first_name_from_history(
     customer: str,
     messages: list[dict[str, Any]],
@@ -3147,6 +3252,26 @@ def ask(question: str, messages: list[dict[str, Any]] | None = None) -> tuple[st
     if _looks_like_model_info_request(question):
         model = os.getenv("LLM_MODEL", "").strip() or "not set"
         answer = f"This local chat is configured to use `{model}` via `LLM_MODEL`."
+        history.append({"role": "user", "content": question})
+        history.append({"role": "assistant", "content": answer})
+        return answer, history
+
+    cpu_family_request = _extract_cpu_family_sales_request(question)
+    if cpu_family_request:
+        result = call_tool(
+            "get_cpu_family_sales_breakdown",
+            {
+                "start_date": cpu_family_request["start_date"],
+                "end_date": cpu_family_request["end_date"],
+                "group_by": cpu_family_request["group_by"],
+            },
+        )
+        if result.get("error"):
+            answer = f"I could not calculate the CPU-family breakdown from the local cache: {result['error']}"
+        elif cpu_family_request.get("rank_months"):
+            answer = _format_cpu_family_month_ranking(result, cpu_family_request)
+        else:
+            answer = _format_cpu_family_sales_breakdown(result)
         history.append({"role": "user", "content": question})
         history.append({"role": "assistant", "content": answer})
         return answer, history

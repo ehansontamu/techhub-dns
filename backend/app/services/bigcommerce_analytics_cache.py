@@ -1671,32 +1671,31 @@ def get_cpu_family_sales_breakdown(
     """Classify sold machines by CPU family using catalog specs plus cached order lines."""
 
     group_by = group_by if group_by in {"month", "quarter"} else "month"
-    catalog_products = _fetch_catalog_products_for_local_filter(max_catalog_products)
-    raw_catalog_by_id = {
-        int(product["id"]): product
-        for product in catalog_products
-        if product.get("id") is not None
-    }
-    raw_catalog_by_sku = {
-        str(product["sku"]).strip(): product
-        for product in catalog_products
-        if product.get("sku")
-    }
     cpu_family_by_id: dict[int, tuple[str, str | None]] = {}
     cpu_family_by_sku: dict[str, tuple[str, str | None]] = {}
     catalog_family_counts = {family: 0 for family in CPU_FAMILIES}
-    for product in catalog_products:
-        family, evidence = _classify_cpu_family_with_evidence(_catalog_search_text(product))
-        if not family:
-            continue
-        catalog_family_counts[family] += 1
-        if product.get("id") is not None:
-            cpu_family_by_id[int(product["id"])] = (family, evidence)
-        if product.get("sku"):
-            cpu_family_by_sku[str(product["sku"]).strip()] = (family, evidence)
 
     db = get_db_session()
     try:
+        table_names = set(inspect(db.bind).get_table_names())
+        catalog_products_scanned = 0
+        raw_catalog_by_id: dict[int, dict[str, Any]] = {}
+        raw_catalog_by_sku: dict[str, dict[str, Any]] = {}
+        if "bc_products" in table_names:
+            product_rows = db.query(BigCommerceProduct).limit(min(max_catalog_products, 5000)).all()
+            catalog_products_scanned = len(product_rows)
+            for product in product_rows:
+                if not product.cpu_family:
+                    continue
+                evidence = "Matched normalized CPU family from cached BigCommerce catalog."
+                catalog_family_counts[product.cpu_family] = catalog_family_counts.get(product.cpu_family, 0) + 1
+                cpu_family_by_id[int(product.id)] = (product.cpu_family, evidence)
+                if product.sku:
+                    cpu_family_by_sku[str(product.sku).strip()] = (product.cpu_family, evidence)
+                raw_catalog_by_id[int(product.id)] = product.raw_product or {}
+                if product.sku:
+                    raw_catalog_by_sku[str(product.sku).strip()] = product.raw_product or {}
+
         rows = (
             db.query(
                 BigCommerceOrder.date_created.label("date_created"),
@@ -1807,8 +1806,13 @@ def get_cpu_family_sales_breakdown(
                 ),
                 "cpu_families": _serialize_cpu_family_counts(overall_counts),
             },
-            "catalog_products_scanned": len(catalog_products),
+            "catalog_products_scanned": catalog_products_scanned,
             "catalog_products_classified_by_cpu": catalog_family_counts,
+            "classification_source": (
+                "cached catalog plus order-line fallback"
+                if catalog_products_scanned
+                else "order-line fallback only; local catalog cache has no products"
+            ),
             "unclassified_quantity": unclassified_quantity,
             "unclassified_samples": unclassified_samples,
             "cache_status": get_bigcommerce_cache_status(),
