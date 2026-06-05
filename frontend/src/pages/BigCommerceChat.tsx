@@ -511,6 +511,19 @@ export default function BigCommerceChat() {
           <RotateCcw className="mr-2 h-4 w-4" />
           Start over
         </Button>
+        <Button
+          type="button"
+          variant="maroon"
+          onClick={() => {
+            window.open("/bigcommerce-chat", "MCPChatPopout", "width=600,height=800,toolbar=no,location=no,status=no,menubar=no,scrollbars=yes,resizable=yes");
+          }}
+          aria-label="Pop out BigCommerce Chat"
+          title="Pop out"
+          className="ml-2"
+        >
+          <ExternalLink className="mr-2 h-4 w-4" />
+          Pop out
+        </Button>
       </div>
 
       <section className="flex min-h-0 flex-1 flex-col rounded-lg border border-border bg-card shadow-sm">
@@ -556,9 +569,9 @@ export default function BigCommerceChat() {
                     className={cn(
                       "max-w-[min(42rem,92%)] whitespace-pre-wrap rounded-lg border px-4 py-3 text-sm leading-6",
                       message.chart && !isUser && "max-w-[min(56rem,96%)]",
-                      isUser
-                        ? "border-primary/20 bg-primary text-primary-foreground"
-                        : "border-border bg-background text-foreground"
+isUser
+    ? "border-maroon-800 bg-maroon-700 text-white"
+    : "border-border bg-background text-foreground"
                     )}
                   >
                     {renderMessageText(message.content)}
