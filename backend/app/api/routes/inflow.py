@@ -137,10 +137,13 @@ def inflow_webhook():
         body = request.get_data()
 
         signature = (
-            request.headers.get("x-inflow-hmac-sha256")
+            request.headers.get("svix-signature")
+            or request.headers.get("x-inflow-hmac-sha256")
             or request.headers.get("X-Inflow-Signature")
             or request.headers.get("X-Webhook-Signature")
         )
+        svix_id = request.headers.get("svix-id")
+        svix_timestamp = request.headers.get("svix-timestamp")
 
         with get_db() as db:
             secrets: list[str] = [
@@ -162,7 +165,13 @@ def inflow_webhook():
                 )
                 inflow_service = InflowService()
                 if not any(
-                    inflow_service.verify_webhook_signature(body, signature, secret)
+                    inflow_service.verify_webhook_signature(
+                        body,
+                        signature,
+                        secret,
+                        svix_id=svix_id,
+                        svix_timestamp=svix_timestamp,
+                    )
                     for secret in secrets
                 ):
                     logger.warning("Webhook signature verification failed")

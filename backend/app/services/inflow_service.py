@@ -967,7 +967,13 @@ class InflowService:
                 raise
 
     def verify_webhook_signature(
-        self, payload: bytes, signature: str, secret: Optional[str] = None
+        self,
+        payload: bytes,
+        signature: str,
+        secret: Optional[str] = None,
+        *,
+        svix_id: Optional[str] = None,
+        svix_timestamp: Optional[str] = None,
     ) -> bool:
         """
         Verify webhook signature using configured secret.
@@ -985,7 +991,13 @@ class InflowService:
 
         secret_to_use = secret or settings.inflow_webhook_secret
         return (
-            verify_signature(payload, signature, secret_to_use)
+            verify_signature(
+                payload,
+                signature,
+                secret_to_use,
+                svix_id=svix_id,
+                svix_timestamp=svix_timestamp,
+            )
             if secret_to_use
             else True
         )
