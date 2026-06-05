@@ -2,6 +2,8 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
 // https://vitejs.dev/config/
+import { resolve } from "path";
+
 export default defineConfig({
   plugins: [react()],
   server: {
@@ -21,6 +23,14 @@ export default defineConfig({
         target: 'http://localhost:8000',
         changeOrigin: true,
         ws: true,
+      },
+    },
+  },
+  build: {
+    rollupOptions: {
+      input: {
+        main: resolve(__dirname, "index.html"),
+        chatpopout: resolve(__dirname, "chat-popout.html"),
       },
     },
   },

@@ -515,7 +515,7 @@ export default function BigCommerceChat() {
           type="button"
           variant="maroon"
           onClick={() => {
-            window.open("/bigcommerce-chat/popout", "MCPChatPopout", "width=600,height=800,toolbar=no,location=no,status=no,menubar=no,scrollbars=yes,resizable=yes");
+            window.open("/chat-popout.html", "MCPChatPopout", "width=600,height=800,toolbar=no,location=no,status=no,menubar=no,scrollbars=yes,resizable=yes");
           }}
           aria-label="Pop out BigCommerce Chat"
           title="Pop out"
