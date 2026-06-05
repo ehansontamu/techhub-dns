@@ -3,6 +3,7 @@ import sys
 import base64
 import hashlib
 import hmac
+from datetime import datetime, timezone
 from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -57,8 +58,22 @@ def _fake_get_db_with_secrets(*secrets):
 
 
 class _FakeInflowService:
-    def verify_webhook_signature(self, payload, signature, secret):
-        return verify_webhook_signature(payload, signature, secret)
+    def verify_webhook_signature(
+        self,
+        payload,
+        signature,
+        secret,
+        *,
+        svix_id=None,
+        svix_timestamp=None,
+    ):
+        return verify_webhook_signature(
+            payload,
+            signature,
+            secret,
+            svix_id=svix_id,
+            svix_timestamp=svix_timestamp,
+        )
 
     def get_order_by_number_sync(self, order_number):
         return {
@@ -249,10 +264,87 @@ def test_verify_webhook_signature_accepts_literal_whsec_secret():
     assert verify_webhook_signature(payload, signature, secret) is True
 
 
+def test_verify_webhook_signature_accepts_svix_signed_payload():
+    payload = b'{"orderNumber":"TH-4515"}'
+    secret_bytes = b"techhub-webhook-secret"
+    secret = "whsec_" + base64.urlsafe_b64encode(secret_bytes).decode("ascii").rstrip(
+        "="
+    )
+    svix_id = "msg_123"
+    svix_timestamp = str(int(datetime.now(timezone.utc).timestamp()))
+    signed_content = b".".join(
+        [svix_id.encode("utf-8"), svix_timestamp.encode("utf-8"), payload]
+    )
+    signature = "v1," + base64.b64encode(
+        hmac.new(secret_bytes, signed_content, hashlib.sha256).digest()
+    ).decode("ascii")
+
+    assert (
+        verify_webhook_signature(
+            payload,
+            signature,
+            secret,
+            svix_id=svix_id,
+            svix_timestamp=svix_timestamp,
+        )
+        is True
+    )
+
+
+def test_webhook_accepts_svix_headers():
+    app = _make_app()
+    secret_bytes = b"techhub-webhook-secret"
+    secret = "whsec_" + base64.urlsafe_b64encode(secret_bytes).decode("ascii").rstrip(
+        "="
+    )
+    payload = b'{"orderNumber":"TH-123"}'
+    svix_id = "msg_123"
+    svix_timestamp = str(int(datetime.now(timezone.utc).timestamp()))
+    signed_content = b".".join(
+        [svix_id.encode("utf-8"), svix_timestamp.encode("utf-8"), payload]
+    )
+    signature = "v1," + base64.b64encode(
+        hmac.new(secret_bytes, signed_content, hashlib.sha256).digest()
+    ).decode("ascii")
+
+    class _SuccessfulOrderService:
+        def __init__(self, _db):
+            pass
+
+        def create_order_from_inflow(self, _inflow_order):
+            return SimpleNamespace(id="order-1")
+
+    with app.test_client() as client:
+        with (
+            patch("app.api.routes.inflow.get_db", _fake_get_db_with_secrets(secret)),
+            patch("app.api.routes.inflow.InflowService", _FakeInflowService),
+            patch("app.api.routes.inflow.OrderService", _SuccessfulOrderService),
+            patch("app.api.routes.inflow.settings.inflow_webhook_secret", secret),
+        ):
+            response = client.post(
+                "/api/inflow/webhook",
+                data=payload,
+                headers={
+                    "svix-id": svix_id,
+                    "svix-timestamp": svix_timestamp,
+                    "svix-signature": signature,
+                },
+                content_type="application/json",
+            )
+
+    assert response.status_code == 200
+    assert response.get_json() == {
+        "order_id": "order-1",
+        "status": "processed",
+    }
+
+
 if __name__ == "__main__":
     test_webhook_returns_500_on_processing_error()
     test_webhook_returns_validation_status_code()
     test_webhook_accepts_env_secret_when_db_secret_is_stale()
     test_verify_webhook_signature_accepts_base64url_whsec_secret()
     test_verify_webhook_signature_accepts_literal_whsec_secret()
+    test_verify_webhook_signature_accepts_svix_signed_payload()
+    test_webhook_accepts_svix_headers()
     print("[PASS] inflow webhook route tests passed")

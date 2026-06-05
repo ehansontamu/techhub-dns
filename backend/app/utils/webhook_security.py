@@ -2,8 +2,11 @@ import base64
 import hashlib
 import hmac
 import logging
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
+
+_SVIX_TIMESTAMP_TOLERANCE_SECONDS = 300
 
 
 def _iter_secret_bytes(secret: str):
@@ -30,7 +33,66 @@ def _iter_secret_bytes(secret: str):
             yield decoded_secret
 
 
-def verify_webhook_signature(payload: bytes, signature: str, secret: str) -> bool:
+def _verify_svix_signature(
+    payload: bytes,
+    signature: str,
+    secret: str,
+    svix_id: str | None,
+    svix_timestamp: str | None,
+) -> bool:
+    if not svix_id or not svix_timestamp:
+        return False
+
+    try:
+        timestamp = int(str(svix_timestamp).strip())
+    except (TypeError, ValueError):
+        logger.warning("Invalid Svix timestamp on webhook request")
+        return False
+
+    now = int(datetime.now(timezone.utc).timestamp())
+    if abs(now - timestamp) > _SVIX_TIMESTAMP_TOLERANCE_SECONDS:
+        logger.warning("Svix webhook timestamp outside allowed tolerance")
+        return False
+
+    signed_content = b".".join(
+        [
+            str(svix_id).encode("utf-8"),
+            str(svix_timestamp).encode("utf-8"),
+            payload,
+        ]
+    )
+
+    signature_candidates: list[str] = []
+    for part in str(signature).strip().split():
+        candidate = part.strip()
+        if not candidate:
+            continue
+        if candidate.startswith("v1,"):
+            signature_candidates.append(candidate.split(",", 1)[1].strip())
+        elif "," not in candidate:
+            signature_candidates.append(candidate)
+
+    if not signature_candidates:
+        return False
+
+    for secret_bytes in _iter_secret_bytes(secret):
+        digest = hmac.new(secret_bytes, signed_content, hashlib.sha256).digest()
+        expected = base64.b64encode(digest).decode("ascii")
+        for candidate in signature_candidates:
+            if hmac.compare_digest(candidate, expected):
+                return True
+
+    return False
+
+
+def verify_webhook_signature(
+    payload: bytes,
+    signature: str,
+    secret: str,
+    *,
+    svix_id: str | None = None,
+    svix_timestamp: str | None = None,
+) -> bool:
     """
     Verify webhook signature using HMAC SHA256.
 
@@ -51,6 +113,15 @@ def verify_webhook_signature(payload: bytes, signature: str, secret: str) -> boo
         return False
 
     try:
+        if _verify_svix_signature(
+            payload,
+            signature,
+            secret,
+            svix_id=svix_id,
+            svix_timestamp=svix_timestamp,
+        ):
+            return True
+
         # Common signature formats:
         # - "sha256=hexdigest"
         # - "sha256 hexdigest"
