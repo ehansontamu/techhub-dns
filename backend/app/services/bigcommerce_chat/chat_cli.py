@@ -48,6 +48,7 @@ For product popularity, top products, "which product sold most", "which order ha
 For questions about products currently on the BigCommerce site/catalog, product details, SKUs, prices, visibility, availability, variants, inventory levels, images, custom fields, or category/catalog browsing, use search_catalog_cache or get_catalog_product_profile first. Use live read-only catalog tools only when the local catalog cache is missing the product or current live site freshness matters. Product sales/history/popularity questions are different from catalog questions: use SQL or get_catalog_product_profile for sold/sales/revenue/quantity ordered, and catalog tools for site/catalog/product-page facts.
 For machine CPU-family sales comparisons involving Windows ARM, Apple silicon, Intel, or AMD, use get_cpu_family_sales_breakdown. For calendar Q3/Q4 2025 through Q1/Q2 2026, use start_date="2025-07-01" and end_date="2026-07-01"; Q2 2026 may be partial if current data is before July 2026. If the user says month over month, use group_by="month" even when the date range is described by quarters.
 AMD CPU means AMD processor, such as Ryzen, Threadripper, EPYC, Athlon, or an explicit AMD processor/CPU/APU field. Do not count AMD Radeon, Radeon Graphics, or AMD graphics as AMD CPU.
+When answering CPU-family sales questions, mention the top contributing products for the family or period when the tool provides them. If one product dominates a total, include that product name and quantity.
 When asked which orders took the longest to fulfill, use get_fulfillment_aging_report so the answer includes both longest completed fulfillment durations and oldest currently-open orders. Use get_oldest_unfulfilled_orders only when the user explicitly asks for currently open/unfulfilled orders.
 When asked how long a specific order took to fulfill, use get_order_fulfillment_timing.
 When a user gives a name like "Jim's order", first search recent orders by customer name.
@@ -1057,6 +1058,7 @@ Rules:
 - For questions combining catalog/spec filters with sales ranking, such as "best selling computer with an AMD CPU", "which touchscreen laptop sells best", or "sales for products with Ryzen", use get_catalog_filtered_product_sales instead of manually fetching broad catalog results and writing a large SQL query. For month-over-month versions of those questions, call it with group_by="month".
 - For CPU-family percentage breakdowns or comparisons involving Windows ARM, Apple silicon, Intel, and AMD, use get_cpu_family_sales_breakdown instead of SQL. For calendar Q3/Q4 2025 through Q1/Q2 2026, use start_date="2025-07-01" and end_date="2026-07-01"; Q2 2026 may be partial if current data is before July 2026. If the user says month over month, use group_by="month" even when the date range is described by quarters.
 - AMD CPU means AMD processor, such as Ryzen, Threadripper, EPYC, Athlon, or an explicit AMD processor/CPU/APU field. Do not count AMD Radeon, Radeon Graphics, or AMD graphics as AMD CPU.
+- When answering CPU-family sales questions, mention the top contributing products for the family or period when the tool provides them. If one product dominates a total, include that product name and quantity.
 - Catalog tools are read-only. Never claim you can create, update, delete, publish, hide, price, or inventory-adjust a product.
 - Write only SELECT queries against the tables above.
 - For sales/revenue analytics, exclude statuses 'Cancelled', 'Declined', and 'Refunded' unless the user explicitly asks to include them. For "complete only", filter status IN ('Completed', 'Complete').
@@ -1565,6 +1567,19 @@ def _format_cpu_family_sales_breakdown(result: dict[str, Any]) -> str:
             "; ".join(summary_parts) + ".",
         ]
     )
+
+    contributor_lines = []
+    for family in families:
+        top_products = (overall_counts.get(family) or {}).get("top_products") or []
+        if not top_products:
+            continue
+        product_bits = [
+            f"{product.get('name') or 'Unknown'} ({_format_number(product.get('quantity') or 0)})"
+            for product in top_products[:3]
+        ]
+        contributor_lines.append(f"- {family}: " + "; ".join(product_bits))
+    if contributor_lines:
+        lines.extend(["", "Top product contributors:", *contributor_lines])
 
     unclassified_quantity = int(result.get("unclassified_quantity") or 0)
     if unclassified_quantity:

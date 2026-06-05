@@ -1497,10 +1497,10 @@ def _json_search_text(value: Any) -> str:
         return str(value)
 
 
-def _classify_cpu_family(text: str) -> str | None:
+def _classify_cpu_family_with_evidence(text: str) -> tuple[str | None, str | None]:
     normalized = f" {text.lower()} "
     if re.search(r"\b(m[1-9]|m[1-9]\s*(pro|max|ultra))\b", normalized) or "apple silicon" in normalized:
-        return "Apple silicon"
+        return "Apple silicon", "Matched Apple silicon processor text."
     if (
         "snapdragon" in normalized
         or "qualcomm" in normalized
@@ -1509,7 +1509,7 @@ def _classify_cpu_family(text: str) -> str | None:
         or "arm64" in normalized
         or re.search(r"\bx\s*(elite|plus)\b", normalized)
     ):
-        return "Windows ARM"
+        return "Windows ARM", "Matched Snapdragon/Qualcomm/Windows ARM processor text."
 
     # Product text often contains both a CPU and a GPU, e.g. "Intel Core ...
     # AMD Radeon graphics". GPU-only AMD references must not classify the CPU.
@@ -1538,10 +1538,15 @@ def _classify_cpu_family(text: str) -> str | None:
         or re.search(r"\bxeon\b", cpu_text)
     )
     if amd_cpu:
-        return "AMD"
+        return "AMD", "Matched AMD processor text after ignoring Radeon/graphics-only text."
     if intel_cpu:
-        return "Intel"
-    return None
+        return "Intel", "Matched Intel/Core/Xeon processor text."
+    return None, None
+
+
+def _classify_cpu_family(text: str) -> str | None:
+    family, _evidence = _classify_cpu_family_with_evidence(text)
+    return family
 
 
 def _calendar_quarter(month_value: str) -> str:
@@ -1567,9 +1572,78 @@ def _month_keys_in_range(start_date: str, end_date: str) -> list[str]:
 
 def _empty_cpu_family_counts() -> dict[str, dict[str, Any]]:
     return {
-        family: {"quantity": 0, "revenue_inc_tax": 0.0, "order_ids": set()}
+        family: {
+            "quantity": 0,
+            "revenue_inc_tax": 0.0,
+            "order_ids": set(),
+            "products": {},
+        }
         for family in CPU_FAMILIES
     }
+
+
+def _record_cpu_family_product(
+    bucket: dict[str, Any],
+    row: Any,
+    quantity: int,
+    revenue_inc_tax: float,
+    evidence: str | None,
+) -> None:
+    product_key = f"{row.product_id or ''}|{row.sku or ''}|{row.name or ''}"
+    products = bucket.setdefault("products", {})
+    if product_key not in products:
+        products[product_key] = {
+            "product_id": row.product_id,
+            "sku": row.sku,
+            "name": row.name,
+            "quantity": 0,
+            "revenue_inc_tax": 0.0,
+            "order_ids": set(),
+            "classification_evidence": evidence,
+        }
+    product = products[product_key]
+    product["quantity"] += quantity
+    product["revenue_inc_tax"] += revenue_inc_tax
+    product["order_ids"].add(int(row.order_id))
+
+
+def _serialize_cpu_family_products(bucket: dict[str, Any], limit: int = 8) -> list[dict[str, Any]]:
+    products = sorted(
+        bucket.get("products", {}).values(),
+        key=lambda value: int(value.get("quantity") or 0),
+        reverse=True,
+    )
+    return [
+        {
+            "product_id": product.get("product_id"),
+            "sku": product.get("sku"),
+            "name": product.get("name"),
+            "quantity": int(product.get("quantity") or 0),
+            "revenue_inc_tax": round(float(product.get("revenue_inc_tax") or 0), 2),
+            "order_count": len(product.get("order_ids") or []),
+            "classification_evidence": product.get("classification_evidence"),
+        }
+        for product in products[:limit]
+    ]
+
+
+def _merge_cpu_family_products(target: dict[str, Any], source: dict[str, Any]) -> None:
+    target_products = target.setdefault("products", {})
+    for product_key, source_product in source.get("products", {}).items():
+        if product_key not in target_products:
+            target_products[product_key] = {
+                "product_id": source_product.get("product_id"),
+                "sku": source_product.get("sku"),
+                "name": source_product.get("name"),
+                "quantity": 0,
+                "revenue_inc_tax": 0.0,
+                "order_ids": set(),
+                "classification_evidence": source_product.get("classification_evidence"),
+            }
+        target_product = target_products[product_key]
+        target_product["quantity"] += int(source_product.get("quantity") or 0)
+        target_product["revenue_inc_tax"] += float(source_product.get("revenue_inc_tax") or 0)
+        target_product["order_ids"].update(source_product.get("order_ids") or set())
 
 
 def _serialize_cpu_family_counts(counts: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -1583,6 +1657,7 @@ def _serialize_cpu_family_counts(counts: dict[str, dict[str, Any]]) -> dict[str,
             "percentage": round((quantity / total_quantity) * 100, 2) if total_quantity else 0,
             "revenue_inc_tax": round(float(value["revenue_inc_tax"] or 0), 2),
             "order_count": len(value["order_ids"]),
+            "top_products": _serialize_cpu_family_products(value),
         }
     return serialized
 
@@ -1607,18 +1682,18 @@ def get_cpu_family_sales_breakdown(
         for product in catalog_products
         if product.get("sku")
     }
-    cpu_family_by_id: dict[int, str] = {}
-    cpu_family_by_sku: dict[str, str] = {}
+    cpu_family_by_id: dict[int, tuple[str, str | None]] = {}
+    cpu_family_by_sku: dict[str, tuple[str, str | None]] = {}
     catalog_family_counts = {family: 0 for family in CPU_FAMILIES}
     for product in catalog_products:
-        family = _classify_cpu_family(_catalog_search_text(product))
+        family, evidence = _classify_cpu_family_with_evidence(_catalog_search_text(product))
         if not family:
             continue
         catalog_family_counts[family] += 1
         if product.get("id") is not None:
-            cpu_family_by_id[int(product["id"])] = family
+            cpu_family_by_id[int(product["id"])] = (family, evidence)
         if product.get("sku"):
-            cpu_family_by_sku[str(product["sku"]).strip()] = family
+            cpu_family_by_sku[str(product["sku"]).strip()] = (family, evidence)
 
     db = get_db_session()
     try:
@@ -1645,10 +1720,15 @@ def get_cpu_family_sales_breakdown(
         unclassified_samples: list[dict[str, Any]] = []
         for row in rows:
             family = None
+            evidence = None
             if row.product_id is not None:
-                family = cpu_family_by_id.get(int(row.product_id))
+                classified = cpu_family_by_id.get(int(row.product_id))
+                if classified:
+                    family, evidence = classified
             if family is None and row.sku:
-                family = cpu_family_by_sku.get(str(row.sku).strip())
+                classified = cpu_family_by_sku.get(str(row.sku).strip())
+                if classified:
+                    family, evidence = classified
             if family is None:
                 catalog_product = None
                 if row.product_id is not None:
@@ -1663,7 +1743,7 @@ def get_cpu_family_sales_breakdown(
                         _catalog_search_text(catalog_product) if catalog_product else "",
                     ]
                 )
-                family = _classify_cpu_family(fallback_text)
+                family, evidence = _classify_cpu_family_with_evidence(fallback_text)
 
             quantity = int(row.quantity or 0)
             if family is None:
@@ -1686,8 +1766,10 @@ def get_cpu_family_sales_breakdown(
                 buckets[bucket_key] = _empty_cpu_family_counts()
             bucket = buckets[bucket_key][family]
             bucket["quantity"] += quantity
-            bucket["revenue_inc_tax"] += float(row.revenue_inc_tax or 0)
+            revenue_inc_tax = float(row.revenue_inc_tax or 0)
+            bucket["revenue_inc_tax"] += revenue_inc_tax
             bucket["order_ids"].add(int(row.order_id))
+            _record_cpu_family_product(bucket, row, quantity, revenue_inc_tax, evidence)
 
         if group_by == "month":
             for month_key in _month_keys_in_range(start_date, end_date):
@@ -1711,6 +1793,7 @@ def get_cpu_family_sales_breakdown(
                 overall_counts[family]["quantity"] += counts[family]["quantity"]
                 overall_counts[family]["revenue_inc_tax"] += counts[family]["revenue_inc_tax"]
                 overall_counts[family]["order_ids"].update(counts[family]["order_ids"])
+                _merge_cpu_family_products(overall_counts[family], counts[family])
 
         return {
             "start_date": start_date,
