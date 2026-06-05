@@ -1,5 +1,24 @@
 {
   "product_groups": {
+    "cpu_family_rules": {
+      "AMD": {
+        "include_any": [
+          "ryzen",
+          "threadripper",
+          "epyc",
+          "athlon",
+          "amd processor",
+          "amd cpu",
+          "amd apu"
+        ],
+        "exclude_if_only": [
+          "amd radeon",
+          "radeon graphics",
+          "amd graphics"
+        ],
+        "note": "AMD Radeon/graphics text is GPU evidence, not AMD CPU evidence."
+      }
+    },
     "computers": {
       "description": "Laptop, desktop, mini, tower, workstation, and all-in-one computers. Excludes monitors, docks, printers, accessories, warranties, and parts.",
       "exclude_any": [

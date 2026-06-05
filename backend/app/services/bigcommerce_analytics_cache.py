@@ -1510,14 +1510,36 @@ def _classify_cpu_family(text: str) -> str | None:
         or re.search(r"\bx\s*(elite|plus)\b", normalized)
     ):
         return "Windows ARM"
-    if re.search(r"\b(amd|ryzen|threadripper|epyc)\b", normalized):
+
+    # Product text often contains both a CPU and a GPU, e.g. "Intel Core ...
+    # AMD Radeon graphics". GPU-only AMD references must not classify the CPU.
+    cpu_text = re.sub(
+        r"\bamd\s+radeon(?:\s+(?:pro|rx|graphics|vega|[a-z0-9]+))*\b",
+        " ",
+        normalized,
+    )
+    cpu_text = re.sub(
+        r"\bradeon(?:\s+(?:pro|rx|graphics|vega|[a-z0-9]+))*\b",
+        " ",
+        cpu_text,
+    )
+    cpu_text = re.sub(r"\bamd\s+(?:integrated\s+)?graphics\b", " ", cpu_text)
+
+    amd_cpu = (
+        re.search(r"\b(ryzen|threadripper|epyc|athlon)\b", cpu_text)
+        or re.search(r"\bamd\s+(?:pro\s+)?(?:ryzen|threadripper|epyc|athlon)\b", cpu_text)
+        or re.search(r"\b(?:processor|cpu|apu)\b.{0,60}\bamd\b", cpu_text)
+        or re.search(r"\bamd\b.{0,60}\b(?:processor|cpu|apu)\b", cpu_text)
+    )
+    intel_cpu = (
+        "intel" in cpu_text
+        or "core ultra" in cpu_text
+        or re.search(r"\b(core\s*)?i[3579]\b", cpu_text)
+        or re.search(r"\bxeon\b", cpu_text)
+    )
+    if amd_cpu:
         return "AMD"
-    if (
-        "intel" in normalized
-        or "core ultra" in normalized
-        or re.search(r"\b(core\s*)?i[3579]\b", normalized)
-        or re.search(r"\bxeon\b", normalized)
-    ):
+    if intel_cpu:
         return "Intel"
     return None
 
