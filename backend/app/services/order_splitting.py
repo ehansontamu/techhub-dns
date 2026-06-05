@@ -652,6 +652,12 @@ class OrderSplittingService:
 
         original_order.has_remainder = "Y"
         original_order.remainder_order_id = child_order.id
+        # Tagging belongs to the picked child leg that consumed the current tag batch.
+        # Clear the remainder parent so it can request/record a fresh tagging cycle
+        # once the remaining items are picked later.
+        original_order.tagged_at = None
+        original_order.tagged_by = None
+        original_order.tag_data = None
         if remainder_leg_state is not None:
             original_order.inflow_data = remainder_leg_state
         original_order.updated_at = datetime.utcnow()

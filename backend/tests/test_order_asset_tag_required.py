@@ -15,6 +15,7 @@ sys.path.append(".")
 
 from app.api.routes import orders as orders_routes
 from app.models.order import OrderStatus
+from app.services.inflow_service import InflowService
 
 
 def _make_order():
@@ -102,7 +103,14 @@ def test_order_response_json_includes_asset_tag_required_false():
     assert data["asset_tag_required"] is False
 
 
+def test_laptop_category_prefix_still_requires_asset_tags():
+    service = InflowService()
+
+    assert service._is_asset_tag_required_line("Laptops Dell", 1200) is True
+
+
 if __name__ == "__main__":
     test_order_list_serializer_includes_asset_tag_required_false()
     test_order_response_json_includes_asset_tag_required_false()
+    test_laptop_category_prefix_still_requires_asset_tags()
     print("[SUCCESS] order asset tag regression tests passed")
