@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Focused tests for DeliveryRunService fulfillment behavior."""
 
+import asyncio
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -179,6 +180,51 @@ def test_fulfill_orders_preserves_unconfirmed_inflow_failure():
     print("[PASS] DeliveryRunService preserves unconfirmed InFlow failures")
 
 
+def test_fulfill_orders_limits_inflow_concurrency():
+    """Delivery-run fulfillment should cap concurrent InFlow requests."""
+
+    orders = [
+        SimpleNamespace(
+            id=f"order-{index}",
+            inflow_order_id=f"TH30{index}",
+            inflow_sales_order_id=f"sales-order-{index}",
+            inflow_data={"orderNumber": f"TH30{index}", "packLines": []},
+        )
+        for index in range(6)
+    ]
+
+    service = DeliveryRunService(db=cast(Any, object()))
+    max_in_flight = 0
+    in_flight = 0
+
+    async def fake_fulfill_sales_order(
+        sales_order_id: str, **_kwargs: Any
+    ) -> dict[str, Any]:
+        nonlocal in_flight, max_in_flight
+        in_flight += 1
+        max_in_flight = max(max_in_flight, in_flight)
+        await asyncio.sleep(0.01)
+        in_flight -= 1
+        return {
+            "id": sales_order_id,
+            "orderNumber": sales_order_id,
+            "packLines": [{"productId": "prod-1"}],
+            "shipLines": [{"salesOrderShipLineId": f"ship-{sales_order_id}"}],
+        }
+
+    with patch("app.services.delivery_run_service.InflowService") as inflow_service_cls:
+        inflow_service_cls.return_value.fulfill_sales_order = fake_fulfill_sales_order
+
+        successes, failures = service._fulfill_orders_in_inflow(
+            cast(Any, orders), user_id="user-1"
+        )
+
+    assert failures == []
+    assert len(successes) == len(orders)
+    assert max_in_flight == service.INFLOW_FULFILLMENT_CONCURRENCY
+    print("[PASS] DeliveryRunService caps InFlow fulfillment concurrency")
+
+
 def test_requeue_partial_delivery_returns_order_to_pre_delivery():
     """Partial deliveries should reuse the original order and restart prep."""
 
@@ -264,6 +310,7 @@ if __name__ == "__main__":
     test_fulfill_orders_persists_updated_inflow_payload()
     test_fulfill_orders_accepts_already_fulfilled_inflow_order()
     test_fulfill_orders_preserves_unconfirmed_inflow_failure()
+    test_fulfill_orders_limits_inflow_concurrency()
     test_requeue_partial_delivery_returns_order_to_pre_delivery()
 
     print()
