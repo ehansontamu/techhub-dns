@@ -39,6 +39,95 @@ class BigCommerceCustomer(Base):
     synced_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
 
+class BigCommerceBrand(Base):
+    __tablename__ = "bc_brands"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(255), nullable=True, index=True)
+    page_title = Column(String(255), nullable=True)
+    meta_keywords = Column(Text, nullable=True)
+    meta_description = Column(Text, nullable=True)
+    image_url = Column(Text, nullable=True)
+    search_keywords = Column(Text, nullable=True)
+    raw_brand = Column(JSON, nullable=True)
+    synced_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class BigCommerceCategory(Base):
+    __tablename__ = "bc_categories"
+
+    id = Column(Integer, primary_key=True)
+    parent_id = Column(Integer, nullable=True, index=True)
+    name = Column(String(255), nullable=True, index=True)
+    description = Column(Text, nullable=True)
+    is_visible = Column(sa.Boolean, nullable=True)
+    page_title = Column(String(255), nullable=True)
+    search_keywords = Column(Text, nullable=True)
+    custom_url = Column(String(500), nullable=True)
+    raw_category = Column(JSON, nullable=True)
+    synced_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class BigCommerceProduct(Base):
+    __tablename__ = "bc_products"
+
+    __table_args__ = (
+        Index("ix_bc_products_name", "name"),
+        Index("ix_bc_products_sku", "sku"),
+        Index("ix_bc_products_brand_id", "brand_id"),
+        Index("ix_bc_products_is_visible", "is_visible"),
+        Index("ix_bc_products_manufacturer", "manufacturer"),
+        Index("ix_bc_products_cpu_family", "cpu_family"),
+        Index("ix_bc_products_product_kind", "product_kind"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(500), nullable=True)
+    sku = Column(String(255), nullable=True)
+    type = Column(String(50), nullable=True)
+    brand_id = Column(Integer, nullable=True)
+    price = Column(Numeric(18, 4), nullable=False, server_default="0")
+    cost_price = Column(Numeric(18, 4), nullable=False, server_default="0")
+    retail_price = Column(Numeric(18, 4), nullable=False, server_default="0")
+    sale_price = Column(Numeric(18, 4), nullable=False, server_default="0")
+    calculated_price = Column(Numeric(18, 4), nullable=False, server_default="0")
+    inventory_level = Column(Integer, nullable=True)
+    inventory_tracking = Column(String(50), nullable=True)
+    availability = Column(String(100), nullable=True)
+    condition = Column(String(100), nullable=True)
+    is_visible = Column(sa.Boolean, nullable=True)
+    custom_url = Column(String(500), nullable=True)
+    category_ids = Column(JSON, nullable=True)
+    description = Column(Text, nullable=True)
+    search_text = Column(Text, nullable=True)
+    manufacturer = Column(String(100), nullable=True)
+    cpu_family = Column(String(100), nullable=True)
+    product_kind = Column(String(100), nullable=True)
+    raw_product = Column(JSON, nullable=True)
+    synced_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class BigCommerceProductVariant(Base):
+    __tablename__ = "bc_product_variants"
+
+    __table_args__ = (
+        Index("ix_bc_product_variants_product_id", "product_id"),
+        Index("ix_bc_product_variants_sku", "sku"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    product_id = Column(Integer, ForeignKey("bc_products.id", ondelete="CASCADE"), nullable=False)
+    sku = Column(String(255), nullable=True)
+    price = Column(Numeric(18, 4), nullable=False, server_default="0")
+    calculated_price = Column(Numeric(18, 4), nullable=False, server_default="0")
+    cost_price = Column(Numeric(18, 4), nullable=False, server_default="0")
+    inventory_level = Column(Integer, nullable=True)
+    purchasing_disabled = Column(sa.Boolean, nullable=True)
+    option_values = Column(JSON, nullable=True)
+    raw_variant = Column(JSON, nullable=True)
+    synced_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
 class BigCommerceOrder(Base):
     __tablename__ = "bc_orders"
 

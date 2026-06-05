@@ -59,6 +59,7 @@ def test_mcp_initialize(monkeypatch):
     assert payload["id"] == 1
     assert payload["result"]["protocolVersion"] == "2025-06-18"
     assert payload["result"]["capabilities"]["tools"]["listChanged"] is False
+    assert payload["result"]["capabilities"]["resources"]["listChanged"] is False
 
 
 def test_mcp_tools_list_includes_read_only_annotations(monkeypatch):
@@ -83,7 +84,7 @@ def test_mcp_tools_list_includes_read_only_annotations(monkeypatch):
 def test_mcp_tools_call_dispatches_tool(monkeypatch):
     monkeypatch.setenv("MCP_BEARER_TOKEN", "secret-token")
     monkeypatch.setitem(
-        mcp.chat_cli.CHAT_TOOLS,
+        mcp.tool_registry.CHAT_TOOLS,
         "unit_test_echo",
         lambda message: {"echo": message},
     )
@@ -123,3 +124,21 @@ def test_mcp_tools_call_dispatches_tool(monkeypatch):
     result = response.get_json()["result"]
     assert result["isError"] is False
     assert result["structuredContent"] == {"echo": "hello"}
+
+
+def test_mcp_resources_list(monkeypatch):
+    monkeypatch.setenv("MCP_BEARER_TOKEN", "secret-token")
+    client = _app().test_client()
+
+    response = client.post(
+        "/mcp",
+        json={"jsonrpc": "2.0", "id": 4, "method": "resources/list"},
+        headers={"Authorization": "Bearer secret-token"},
+    )
+
+    assert response.status_code == 200
+    resources = response.get_json()["result"]["resources"]
+    resource_uris = {resource["uri"] for resource in resources}
+    assert "bigcommerce://analytics-schema" in resource_uris
+    assert "bigcommerce://business-rules" in resource_uris
+    assert "bigcommerce://classification-rules" in resource_uris

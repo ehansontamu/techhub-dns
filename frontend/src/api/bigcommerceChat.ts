@@ -39,6 +39,8 @@ export interface BigCommerceCacheStatus {
   } | null;
   order_count: number;
   line_item_count: number;
+  product_count?: number;
+  variant_count?: number;
   latest_order_modified_at: string | null;
   is_stale: boolean;
   stale_after_minutes: number;

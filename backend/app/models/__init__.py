@@ -12,11 +12,15 @@ from app.models.session import Session
 from app.models.system_setting import SystemSetting
 from app.models.print_job import PrintJob
 from app.models.bigcommerce_cache import (
+    BigCommerceBrand,
+    BigCommerceCategory,
     BigCommerceCustomer,
     BigCommerceOrder,
     BigCommerceOrderAddress,
     BigCommerceOrderCustomField,
     BigCommerceOrderItem,
+    BigCommerceProduct,
+    BigCommerceProductVariant,
     BigCommerceSyncRun,
 )
 
@@ -38,10 +42,14 @@ __all__ = [
     "Session",
     "SystemSetting",
     "PrintJob",
+    "BigCommerceBrand",
+    "BigCommerceCategory",
     "BigCommerceCustomer",
     "BigCommerceOrder",
     "BigCommerceOrderAddress",
     "BigCommerceOrderCustomField",
     "BigCommerceOrderItem",
+    "BigCommerceProduct",
+    "BigCommerceProductVariant",
     "BigCommerceSyncRun",
 ]

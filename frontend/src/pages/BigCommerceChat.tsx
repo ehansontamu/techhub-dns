@@ -492,7 +492,9 @@ export default function BigCommerceChat() {
             >
               Data last synced {formatCacheTimestamp(cacheStatus.last_successful_sync?.completed_at ?? null)} ·{" "}
               {cacheStatus.order_count.toLocaleString()} orders ·{" "}
-              {cacheStatus.line_item_count.toLocaleString()} line items
+              {cacheStatus.line_item_count.toLocaleString()} line items ·{" "}
+              {(cacheStatus.product_count ?? 0).toLocaleString()} products ·{" "}
+              {(cacheStatus.variant_count ?? 0).toLocaleString()} variants
             </p>
           )}
         </div>

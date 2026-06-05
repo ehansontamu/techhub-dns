@@ -12,11 +12,15 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db_session
 from app.models.bigcommerce_cache import (
+    BigCommerceBrand,
+    BigCommerceCategory,
     BigCommerceCustomer,
     BigCommerceOrder,
     BigCommerceOrderAddress,
     BigCommerceOrderCustomField,
     BigCommerceOrderItem,
+    BigCommerceProduct,
+    BigCommerceProductVariant,
     BigCommerceSyncRun,
 )
 from app.services.bigcommerce_chat.bigcommerce_tools import (
@@ -52,6 +56,10 @@ ALLOWED_BC_TABLES = {
     "bc_customers",
     "bc_order_addresses",
     "bc_order_custom_fields",
+    "bc_product_variants",
+    "bc_products",
+    "bc_brands",
+    "bc_categories",
     "bc_sync_runs",
 }
 
@@ -61,6 +69,10 @@ TABLE_DESCRIPTIONS: dict[str, str] = {
     "bc_customers": "BigCommerce customer accounts referenced by orders.",
     "bc_order_addresses": "Billing and shipping addresses for orders, including shipping method and address form fields.",
     "bc_order_custom_fields": "Flattened checkout/custom form fields from orders and addresses.",
+    "bc_products": "Local BigCommerce catalog product cache with pricing, visibility, inventory, categories, raw JSON, and normalized product classifications.",
+    "bc_product_variants": "Local BigCommerce product variant cache with SKU, price, inventory, options, and raw variant JSON.",
+    "bc_brands": "Local BigCommerce brand cache.",
+    "bc_categories": "Local BigCommerce category cache.",
     "bc_sync_runs": "Local sync run history and freshness/error metadata.",
 }
 
@@ -87,6 +99,13 @@ FIELD_HINTS: dict[str, dict[str, str]] = {
         "quantity": "Quantity purchased on this order line.",
         "total_inc_tax": "Line total including tax.",
         "base_total": "Line base total from BigCommerce. This is not a reliable savings metric by itself.",
+    },
+    "bc_products": {
+        "manufacturer": "Normalized manufacturer classification inferred from catalog text.",
+        "cpu_family": "Normalized CPU family classification such as Intel, AMD, Apple silicon, or Windows ARM.",
+        "product_kind": "Normalized product kind classification such as computer, accessory, display, printer, or unknown.",
+        "search_text": "Flattened catalog text from product fields, variants, options, and custom fields for broad local search.",
+        "raw_product": "Full cached BigCommerce catalog product JSON.",
     },
 }
 
@@ -205,6 +224,206 @@ def _fetch_products(order_id: int) -> list[dict[str, Any]]:
     except Exception:
         return []
     return data if isinstance(data, list) else []
+
+
+def _fetch_v3_collection(path: str, params: dict[str, Any] | None = None, max_records: int = 5000) -> list[dict[str, Any]]:
+    client = _client()
+    rows: list[dict[str, Any]] = []
+    page = 1
+    while len(rows) < max_records:
+        page_limit = min(250, max_records - len(rows))
+        request_params = {
+            **(params or {}),
+            "page": page,
+            "limit": page_limit,
+        }
+        data = client.get(path, request_params)
+        page_rows = data.get("data", []) if isinstance(data, dict) else []
+        rows.extend(row for row in page_rows if isinstance(row, dict))
+        pagination = data.get("meta", {}).get("pagination", {}) if isinstance(data, dict) else {}
+        total_pages = int(pagination.get("total_pages") or 0)
+        if len(page_rows) < page_limit or (total_pages and page >= total_pages):
+            break
+        page += 1
+    return rows
+
+
+def _brand_lookup(brands: list[dict[str, Any]]) -> dict[int, str]:
+    lookup: dict[int, str] = {}
+    for brand in brands:
+        brand_id = _int_or_none(brand.get("id"))
+        if brand_id is not None and brand.get("name"):
+            lookup[brand_id] = str(brand["name"])
+    return lookup
+
+
+def _classify_manufacturer(text: str, brand_name: str | None = None) -> str | None:
+    normalized = f" {(brand_name or '').lower()} {text.lower()} "
+    checks = [
+        ("Dell", r"\b(dell|latitude|precision|optiplex|alienware)\b"),
+        ("Apple", r"\b(apple|macbook|mac mini|mac studio|imac|ipad|iphone)\b"),
+        ("HP", r"\b(hp|hewlett[-\s]?packard|elitebook|probook|zbook|prodesk)\b"),
+        ("Lenovo", r"\b(lenovo|thinkpad|thinkcentre|thinkstation|yoga)\b"),
+        ("Microsoft Surface", r"\b(surface|microsoft)\b"),
+    ]
+    for manufacturer, pattern in checks:
+        if re.search(pattern, normalized):
+            return manufacturer
+    return brand_name
+
+
+def _classify_product_kind(text: str) -> str:
+    normalized = f" {text.lower()} "
+    if re.search(r"\b(laptop|notebook|desktop|workstation|computer|macbook|imac|optiplex|latitude|precision|probook|elitebook|thinkpad|surface)\b", normalized):
+        return "computer"
+    if re.search(r"\b(monitor|display|screen)\b", normalized):
+        return "display"
+    if re.search(r"\b(printer|scanner)\b", normalized):
+        return "printer"
+    if re.search(r"\b(dock|adapter|cable|charger|keyboard|mouse|headset|case|sleeve|stand)\b", normalized):
+        return "accessory"
+    return "unknown"
+
+
+def _upsert_catalog_brands(db: Session, brands: list[dict[str, Any]], synced_at: datetime) -> int:
+    for brand in brands:
+        brand_id = _int_or_none(brand.get("id"))
+        if brand_id is None:
+            continue
+        row = db.get(BigCommerceBrand, brand_id)
+        if row is None:
+            row = BigCommerceBrand(id=brand_id)
+            db.add(row)
+        row.name = brand.get("name")
+        row.page_title = brand.get("page_title")
+        row.meta_keywords = ", ".join(brand.get("meta_keywords") or []) if isinstance(brand.get("meta_keywords"), list) else brand.get("meta_keywords")
+        row.meta_description = brand.get("meta_description")
+        row.image_url = brand.get("image_url")
+        row.search_keywords = brand.get("search_keywords")
+        row.raw_brand = brand
+        row.synced_at = synced_at
+    return len(brands)
+
+
+def _upsert_catalog_categories(db: Session, categories: list[dict[str, Any]], synced_at: datetime) -> int:
+    for category in categories:
+        category_id = _int_or_none(category.get("id"))
+        if category_id is None:
+            continue
+        row = db.get(BigCommerceCategory, category_id)
+        if row is None:
+            row = BigCommerceCategory(id=category_id)
+            db.add(row)
+        custom_url = category.get("custom_url") or {}
+        row.parent_id = _int_or_none(category.get("parent_id"))
+        row.name = category.get("name")
+        row.description = category.get("description")
+        row.is_visible = category.get("is_visible")
+        row.page_title = category.get("page_title")
+        row.search_keywords = category.get("search_keywords")
+        row.custom_url = custom_url.get("url") if isinstance(custom_url, dict) else None
+        row.raw_category = category
+        row.synced_at = synced_at
+    return len(categories)
+
+
+def _upsert_catalog_products(
+    db: Session,
+    products: list[dict[str, Any]],
+    brand_names: dict[int, str],
+    synced_at: datetime,
+) -> tuple[int, int]:
+    variant_count = 0
+    for product in products:
+        product_id = _int_or_none(product.get("id"))
+        if product_id is None:
+            continue
+        brand_id = _int_or_none(product.get("brand_id"))
+        brand_name = brand_names.get(brand_id) if brand_id is not None else None
+        search_text = _catalog_search_text(product)
+        row = db.get(BigCommerceProduct, product_id)
+        if row is None:
+            row = BigCommerceProduct(id=product_id)
+            db.add(row)
+        custom_url = product.get("custom_url") or {}
+        row.name = product.get("name")
+        row.sku = product.get("sku")
+        row.type = product.get("type")
+        row.brand_id = brand_id
+        row.price = _money(product.get("price"))
+        row.cost_price = _money(product.get("cost_price"))
+        row.retail_price = _money(product.get("retail_price"))
+        row.sale_price = _money(product.get("sale_price"))
+        row.calculated_price = _money(product.get("calculated_price"))
+        row.inventory_level = _int_or_none(product.get("inventory_level"))
+        row.inventory_tracking = product.get("inventory_tracking")
+        row.availability = product.get("availability")
+        row.condition = product.get("condition")
+        row.is_visible = product.get("is_visible")
+        row.custom_url = custom_url.get("url") if isinstance(custom_url, dict) else None
+        row.category_ids = product.get("categories") if isinstance(product.get("categories"), list) else []
+        row.description = product.get("description")
+        row.search_text = search_text
+        row.manufacturer = _classify_manufacturer(search_text, brand_name)
+        row.cpu_family = _classify_cpu_family(search_text)
+        row.product_kind = _classify_product_kind(search_text)
+        row.raw_product = product
+        row.synced_at = synced_at
+
+        db.query(BigCommerceProductVariant).filter(BigCommerceProductVariant.product_id == product_id).delete()
+        for variant in product.get("variants") or []:
+            if not isinstance(variant, dict):
+                continue
+            variant_id = _int_or_none(variant.get("id"))
+            if variant_id is None:
+                continue
+            db.add(
+                BigCommerceProductVariant(
+                    id=variant_id,
+                    product_id=product_id,
+                    sku=variant.get("sku"),
+                    price=_money(variant.get("price")),
+                    calculated_price=_money(variant.get("calculated_price")),
+                    cost_price=_money(variant.get("cost_price")),
+                    inventory_level=_int_or_none(variant.get("inventory_level")),
+                    purchasing_disabled=variant.get("purchasing_disabled"),
+                    option_values=variant.get("option_values"),
+                    raw_variant=variant,
+                    synced_at=synced_at,
+                )
+            )
+            variant_count += 1
+    return len(products), variant_count
+
+
+def sync_bigcommerce_catalog_cache(max_products: int = 5000) -> dict[str, int]:
+    db = get_db_session()
+    try:
+        synced_at = datetime.utcnow()
+        brands = _fetch_v3_collection("/v3/catalog/brands", max_records=1000)
+        categories = _fetch_v3_collection("/v3/catalog/categories", max_records=2000)
+        products = _fetch_v3_collection(
+            "/v3/catalog/products",
+            {"include": "variants,images,custom_fields"},
+            max_records=max_products,
+        )
+        brands_upserted = _upsert_catalog_brands(db, brands, synced_at)
+        categories_upserted = _upsert_catalog_categories(db, categories, synced_at)
+        products_upserted, variants_upserted = _upsert_catalog_products(
+            db,
+            products,
+            _brand_lookup(brands),
+            synced_at,
+        )
+        db.commit()
+        return {
+            "brands_upserted": brands_upserted,
+            "categories_upserted": categories_upserted,
+            "products_upserted": products_upserted,
+            "variants_upserted": variants_upserted,
+        }
+    finally:
+        db.close()
 
 
 def _last_successful_sync(db: Session) -> BigCommerceSyncRun | None:
@@ -433,6 +652,34 @@ def sync_bigcommerce_analytics_cache(
             addresses_upserted += address_count
             custom_fields_upserted += field_count
 
+        catalog_sync: dict[str, int] = {}
+        try:
+            brands = _fetch_v3_collection("/v3/catalog/brands", max_records=1000)
+            categories = _fetch_v3_collection("/v3/catalog/categories", max_records=2000)
+            products = _fetch_v3_collection(
+                "/v3/catalog/products",
+                {"include": "variants,images,custom_fields"},
+                max_records=5000,
+            )
+            catalog_sync = {
+                "brands_upserted": _upsert_catalog_brands(db, brands, synced_at),
+                "categories_upserted": _upsert_catalog_categories(db, categories, synced_at),
+            }
+            products_upserted, variants_upserted = _upsert_catalog_products(
+                db,
+                products,
+                _brand_lookup(brands),
+                synced_at,
+            )
+            catalog_sync.update(
+                {
+                    "products_upserted": products_upserted,
+                    "variants_upserted": variants_upserted,
+                }
+            )
+        except Exception as exc:
+            catalog_sync = {"error": str(exc)}
+
         modified_values = [_utc_naive(order.get("date_modified")) for order in orders]
         modified_values = [value for value in modified_values if value is not None]
 
@@ -448,6 +695,7 @@ def sync_bigcommerce_analytics_cache(
         sync_run.sync_metadata = {
             "max_orders": max_orders,
             "custom_fields_upserted": custom_fields_upserted,
+            "catalog_sync": catalog_sync,
             "min_date_created": min_date_created,
             "min_date_modified": min_date_modified,
         }
@@ -499,6 +747,9 @@ def get_bigcommerce_cache_status() -> dict[str, Any]:
         latest_order = db.query(BigCommerceOrder.date_modified).order_by(BigCommerceOrder.date_modified.desc()).first()
         order_count = db.query(BigCommerceOrder).count()
         item_count = db.query(BigCommerceOrderItem).count()
+        table_names = set(inspect(db.bind).get_table_names())
+        product_count = db.query(BigCommerceProduct).count() if "bc_products" in table_names else 0
+        variant_count = db.query(BigCommerceProductVariant).count() if "bc_product_variants" in table_names else 0
         now = datetime.utcnow()
         is_stale = True
         if last_sync and last_sync.completed_at:
@@ -507,6 +758,8 @@ def get_bigcommerce_cache_status() -> dict[str, Any]:
             "last_successful_sync": _sync_run_summary(last_sync),
             "order_count": order_count,
             "line_item_count": item_count,
+            "product_count": product_count,
+            "variant_count": variant_count,
             "latest_order_modified_at": _iso_utc(latest_order[0]) if latest_order and latest_order[0] else None,
             "is_stale": is_stale,
             "stale_after_minutes": SYNC_STALE_AFTER_MINUTES,
@@ -519,8 +772,11 @@ def get_bigcommerce_analytics_schema() -> dict[str, Any]:
     db = get_db_session()
     try:
         inspector = inspect(db.bind)
+        available_table_names = set(inspector.get_table_names())
         tables = []
         for table_name in sorted(ALLOWED_BC_TABLES):
+            if table_name not in available_table_names:
+                continue
             columns = []
             for column in inspector.get_columns(table_name):
                 column_name = column["name"]
@@ -541,11 +797,13 @@ def get_bigcommerce_analytics_schema() -> dict[str, Any]:
             )
         return {
             "tables": tables,
+            "missing_tables": sorted(ALLOWED_BC_TABLES - available_table_names),
             "rules": [
                 "Only SELECT queries are allowed.",
                 f"Queries are limited to {SQL_MAX_ROWS} rows.",
                 "Use bc_orders.id as the BigCommerce order ID and display it as Order <id>.",
                 "Cancelled, Declined, and Refunded statuses should usually be excluded from sales analytics unless the user asks otherwise.",
+                "The fiscal year runs from September 1 through August 31. Use half-open date ranges.",
             ],
             "cache_status": get_bigcommerce_cache_status(),
         }
@@ -632,6 +890,211 @@ def run_bigcommerce_readonly_query(sql: str, limit: int = SQL_DEFAULT_ROWS) -> d
         }
     except Exception as exc:
         raise BigCommerceAnalyticsQueryError(str(exc)) from exc
+    finally:
+        db.close()
+
+
+def _decimal_to_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    return float(value)
+
+
+def _catalog_product_summary(product: BigCommerceProduct, brand_name: str | None = None) -> dict[str, Any]:
+    return {
+        "id": product.id,
+        "name": product.name,
+        "sku": product.sku,
+        "type": product.type,
+        "brand_id": product.brand_id,
+        "brand_name": brand_name,
+        "manufacturer": product.manufacturer,
+        "cpu_family": product.cpu_family,
+        "product_kind": product.product_kind,
+        "price": _decimal_to_float(product.price),
+        "calculated_price": _decimal_to_float(product.calculated_price),
+        "retail_price": _decimal_to_float(product.retail_price),
+        "sale_price": _decimal_to_float(product.sale_price),
+        "cost_price": _decimal_to_float(product.cost_price),
+        "inventory_level": product.inventory_level,
+        "inventory_tracking": product.inventory_tracking,
+        "availability": product.availability,
+        "is_visible": product.is_visible,
+        "custom_url": product.custom_url,
+        "category_ids": product.category_ids or [],
+        "synced_at": product.synced_at.isoformat() if product.synced_at else None,
+    }
+
+
+def search_catalog_cache(
+    query: str | None = None,
+    manufacturer: str | None = None,
+    cpu_family: str | None = None,
+    product_kind: str | None = None,
+    is_visible: bool | None = None,
+    limit: int = 20,
+) -> dict[str, Any]:
+    """Search the local BigCommerce catalog warehouse without hitting the live API."""
+
+    limit = min(max(int(limit or 20), 1), 100)
+    db = get_db_session()
+    try:
+        table_names = set(inspect(db.bind).get_table_names())
+        if "bc_products" not in table_names:
+            return {
+                "query": query,
+                "products": [],
+                "count": 0,
+                "error": "Catalog cache tables are not available. Run alembic upgrade head and sync the cache.",
+                "cache_status": get_bigcommerce_cache_status(),
+            }
+
+        products_query = db.query(BigCommerceProduct)
+        if query:
+            normalized_query = f"%{query.strip().lower()}%"
+            products_query = products_query.filter(
+                or_(
+                    func.lower(BigCommerceProduct.name).like(normalized_query),
+                    func.lower(BigCommerceProduct.sku).like(normalized_query),
+                    func.lower(BigCommerceProduct.search_text).like(normalized_query),
+                )
+            )
+        if manufacturer:
+            products_query = products_query.filter(BigCommerceProduct.manufacturer == manufacturer)
+        if cpu_family:
+            products_query = products_query.filter(BigCommerceProduct.cpu_family == cpu_family)
+        if product_kind:
+            products_query = products_query.filter(BigCommerceProduct.product_kind == product_kind)
+        if is_visible is not None:
+            products_query = products_query.filter(BigCommerceProduct.is_visible.is_(bool(is_visible)))
+
+        rows = products_query.order_by(BigCommerceProduct.name.asc()).limit(limit).all()
+        brand_ids = {row.brand_id for row in rows if row.brand_id is not None}
+        brands = {}
+        if brand_ids and "bc_brands" in table_names:
+            brands = {
+                brand.id: brand.name
+                for brand in db.query(BigCommerceBrand).filter(BigCommerceBrand.id.in_(brand_ids)).all()
+            }
+        return {
+            "query": query,
+            "manufacturer": manufacturer,
+            "cpu_family": cpu_family,
+            "product_kind": product_kind,
+            "is_visible": is_visible,
+            "count": len(rows),
+            "limit": limit,
+            "products": [_catalog_product_summary(row, brands.get(row.brand_id)) for row in rows],
+            "cache_status": get_bigcommerce_cache_status(),
+        }
+    finally:
+        db.close()
+
+
+def get_catalog_product_profile(
+    product_id: int | None = None,
+    sku: str | None = None,
+) -> dict[str, Any]:
+    """Return one cached catalog product with variants and local sales history."""
+
+    if product_id is None and not sku:
+        return {"error": "Provide product_id or sku."}
+
+    db = get_db_session()
+    try:
+        table_names = set(inspect(db.bind).get_table_names())
+        if "bc_products" not in table_names:
+            return {
+                "product": None,
+                "error": "Catalog cache tables are not available. Run alembic upgrade head and sync the cache.",
+                "cache_status": get_bigcommerce_cache_status(),
+            }
+
+        product_query = db.query(BigCommerceProduct)
+        if product_id is not None:
+            product_query = product_query.filter(BigCommerceProduct.id == int(product_id))
+        else:
+            product_query = product_query.filter(func.lower(BigCommerceProduct.sku) == sku.strip().lower())
+        product = product_query.first()
+        if product is None:
+            return {"product": None, "cache_status": get_bigcommerce_cache_status()}
+
+        brand_name = None
+        if product.brand_id is not None and "bc_brands" in table_names:
+            brand = db.get(BigCommerceBrand, product.brand_id)
+            brand_name = brand.name if brand else None
+
+        category_names: list[str] = []
+        if product.category_ids and "bc_categories" in table_names:
+            category_rows = (
+                db.query(BigCommerceCategory)
+                .filter(BigCommerceCategory.id.in_([int(category_id) for category_id in product.category_ids]))
+                .order_by(BigCommerceCategory.name.asc())
+                .all()
+            )
+            category_names = [category.name for category in category_rows]
+
+        variants = []
+        if "bc_product_variants" in table_names:
+            variants = [
+                {
+                    "id": variant.id,
+                    "sku": variant.sku,
+                    "price": _decimal_to_float(variant.price),
+                    "calculated_price": _decimal_to_float(variant.calculated_price),
+                    "cost_price": _decimal_to_float(variant.cost_price),
+                    "inventory_level": variant.inventory_level,
+                    "purchasing_disabled": variant.purchasing_disabled,
+                    "option_values": variant.option_values or [],
+                    "synced_at": variant.synced_at.isoformat() if variant.synced_at else None,
+                }
+                for variant in (
+                    db.query(BigCommerceProductVariant)
+                    .filter(BigCommerceProductVariant.product_id == product.id)
+                    .order_by(BigCommerceProductVariant.sku.asc())
+                    .all()
+                )
+            ]
+
+        sales_rows = (
+            db.query(
+                func.sum(BigCommerceOrderItem.quantity).label("quantity_sold"),
+                func.sum(BigCommerceOrderItem.total_inc_tax).label("revenue_inc_tax"),
+                func.count(func.distinct(BigCommerceOrderItem.order_id)).label("order_count"),
+                func.min(BigCommerceOrder.date_created).label("first_order_date"),
+                func.max(BigCommerceOrder.date_created).label("last_order_date"),
+            )
+            .join(BigCommerceOrder, BigCommerceOrder.id == BigCommerceOrderItem.order_id)
+            .filter(BigCommerceOrder.status.notin_(EXCLUDED_SALES_STATUSES))
+            .filter(
+                or_(
+                    BigCommerceOrderItem.product_id == product.id,
+                    BigCommerceOrderItem.sku == product.sku,
+                )
+            )
+            .one()
+        )
+        sales_summary = {
+            "quantity_sold": int(sales_rows.quantity_sold or 0),
+            "revenue_inc_tax": _coerce_cell(sales_rows.revenue_inc_tax or 0),
+            "order_count": int(sales_rows.order_count or 0),
+            "first_order_date": sales_rows.first_order_date.isoformat() if sales_rows.first_order_date else None,
+            "last_order_date": sales_rows.last_order_date.isoformat() if sales_rows.last_order_date else None,
+            "excluded_statuses": EXCLUDED_SALES_STATUSES,
+        }
+
+        return {
+            "product": {
+                **_catalog_product_summary(product, brand_name),
+                "category_names": category_names,
+                "description": product.description,
+                "search_text": product.search_text,
+                "variants": variants,
+                "raw_product": product.raw_product,
+            },
+            "sales_summary": sales_summary,
+            "cache_status": get_bigcommerce_cache_status(),
+        }
     finally:
         db.close()
 

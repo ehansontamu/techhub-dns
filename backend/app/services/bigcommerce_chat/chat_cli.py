@@ -10,28 +10,13 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from dotenv import load_dotenv
 
-from app.services.bigcommerce_chat.bigcommerce_tools import READ_ONLY_TOOLS
 from app.services.bigcommerce_analytics_cache import (
-    get_catalog_filtered_product_sales,
-    get_bigcommerce_analytics_schema,
-    get_bigcommerce_cache_status,
-    get_cpu_family_sales_breakdown,
-    get_order_financial_summary,
     run_bigcommerce_readonly_query,
 )
+from app.services.bigcommerce_tool_registry import CHAT_TOOLS, READ_ONLY_TOOLS, call_tool
 from app.services.bigcommerce_chat.llm_client import chat_completion
 
 load_dotenv()
-
-CHAT_TOOLS = {
-    **READ_ONLY_TOOLS,
-    "get_bigcommerce_analytics_schema": get_bigcommerce_analytics_schema,
-    "get_bigcommerce_cache_status": get_bigcommerce_cache_status,
-    "get_catalog_filtered_product_sales": get_catalog_filtered_product_sales,
-    "get_cpu_family_sales_breakdown": get_cpu_family_sales_breakdown,
-    "get_order_financial_summary": get_order_financial_summary,
-    "run_bigcommerce_readonly_query": run_bigcommerce_readonly_query,
-}
 
 ORDER_ADMIN_BASE_URL = os.getenv(
     "BC_ORDER_ADMIN_BASE_URL",
@@ -52,7 +37,7 @@ Current date: {date.today().isoformat()}.
 Before choosing tools for analytics questions, identify the entity being ranked or counted, the metric, the date range, and any customer/product/checkout filters. Choose the smallest tool call that directly answers that metric.
 When you mention a specific order ID, write it as "Order 1234"; the web UI will make it clickable. Do not print raw BigCommerce admin URLs.
 For BigCommerce analytics over orders, products, customers, dates, statuses, colleges/units, departments, account numbers, recipients, or line items, prefer the local analytics cache: first use get_bigcommerce_analytics_schema if you need column names, then use run_bigcommerce_readonly_query. This is usually better than live BigCommerce API tools because it lets you sort, join, group, and filter precisely in SQL.
-When using run_bigcommerce_readonly_query, write one read-only SELECT against bc_orders, bc_order_items, bc_customers, bc_order_addresses, bc_order_custom_fields, or bc_sync_runs. Exclude Cancelled, Declined, and Refunded orders for sales analytics unless the user asks otherwise. Include bc_orders.id in results when specific orders matter.
+When using run_bigcommerce_readonly_query, write one read-only SELECT against bc_orders, bc_order_items, bc_customers, bc_order_addresses, bc_order_custom_fields, bc_products, bc_product_variants, bc_brands, bc_categories, or bc_sync_runs. Exclude Cancelled, Declined, and Refunded orders for sales analytics unless the user asks otherwise. Include bc_orders.id in results when specific orders matter.
 For total sales/revenue, sum bc_orders.total_inc_tax at the order grain. Do not join bc_order_items and then sum bc_orders.total_inc_tax, because that duplicates order totals once per line item. For quantity sold, sum bc_order_items.quantity. "Savings" is ambiguous; do not use line-item base_total minus total_inc_tax as savings. Use explicit BigCommerce discount/coupon fields only if verified; if those fields are absent, say the available BigCommerce cache does not expose a reliable savings metric. Do not report unknown savings as $0.
 Use get_bigcommerce_cache_status when the user asks about data freshness or when an answer depends on whether the local cache is current. Do not mention cache staleness for normal historical analytics; mention it only when the user asks about sync/freshness, asks for live/current/today/right-now data, or the answer truly depends on orders that may have changed since the last sync.
 When asked for total/store-wide revenue, prefer run_bigcommerce_readonly_query against bc_orders. Do not use college/unit breakdowns unless the user explicitly asks for a breakdown/by college/by unit.
@@ -60,7 +45,7 @@ When asked what customers were charged for shipping by carrier or method, use ge
 For flexible analytics, prefer run_bigcommerce_readonly_query. Use get_order_summary, get_grouped_order_summary, get_ranked_orders, get_product_sales_leaderboard, and get_source_orders_for_summary only as live API fallbacks when the cache cannot answer.
 For order ranking questions, prefer SQL over bc_orders. Choose the rank metric from the user's words: dollars/value/amount means total_inc_tax; first/earliest/submitted date means date_created ascending; latest/newest/most recent means date_created descending; first order number means id ascending; most/fewest items means items_total.
 For product popularity, top products, "which product sold most", "which order had the most of a product", or combined product/source-order questions, prefer SQL joining bc_orders to bc_order_items.
-For questions about products currently on the BigCommerce site/catalog, product details, SKUs, prices, visibility, availability, variants, inventory levels, images, custom fields, or category/catalog browsing, use the live read-only catalog tools. Product sales/history/popularity questions are different from catalog questions: use SQL for sold/sales/revenue/quantity ordered, and catalog tools for site/catalog/product-page facts.
+For questions about products currently on the BigCommerce site/catalog, product details, SKUs, prices, visibility, availability, variants, inventory levels, images, custom fields, or category/catalog browsing, use search_catalog_cache or get_catalog_product_profile first. Use live read-only catalog tools only when the local catalog cache is missing the product or current live site freshness matters. Product sales/history/popularity questions are different from catalog questions: use SQL or get_catalog_product_profile for sold/sales/revenue/quantity ordered, and catalog tools for site/catalog/product-page facts.
 For machine CPU-family sales comparisons involving Windows ARM, Apple silicon, Intel, or AMD, use get_cpu_family_sales_breakdown. For calendar Q3/Q4 2025 through Q1/Q2 2026, use start_date="2025-07-01" and end_date="2026-07-01"; Q2 2026 may be partial if current data is before July 2026. If the user says month over month, use group_by="month" even when the date range is described by quarters.
 When asked which orders took the longest to fulfill, use get_fulfillment_aging_report so the answer includes both longest completed fulfillment durations and oldest currently-open orders. Use get_oldest_unfulfilled_orders only when the user explicitly asks for currently open/unfulfilled orders.
 When asked how long a specific order took to fulfill, use get_order_fulfillment_timing.
@@ -144,6 +129,50 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     },
                 },
                 "required": ["sql"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_catalog_cache",
+            "description": "Search the local BigCommerce catalog cache by text and normalized classifications. Use first for product/site catalog questions before live API catalog calls.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Text to search across cached product name, SKU, description, variants, and custom-field text.",
+                    },
+                    "manufacturer": {
+                        "type": "string",
+                        "enum": ["Dell", "Apple", "HP", "Lenovo", "Microsoft Surface"],
+                    },
+                    "cpu_family": {
+                        "type": "string",
+                        "enum": ["Windows ARM", "Apple silicon", "Intel", "AMD"],
+                    },
+                    "product_kind": {
+                        "type": "string",
+                        "enum": ["computer", "display", "printer", "accessory", "unknown"],
+                    },
+                    "is_visible": {"type": "boolean"},
+                    "limit": {"type": "integer", "default": 20},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_catalog_product_profile",
+            "description": "Get one cached catalog product by product ID or SKU, including catalog details, variants, categories, normalized classifications, and local sales history.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "product_id": {"type": "integer"},
+                    "sku": {"type": "string"},
+                },
             },
         },
     },
@@ -984,9 +1013,11 @@ CACHE_TOOL_NAMES = {
     "get_bigcommerce_analytics_schema",
     "get_bigcommerce_cache_status",
     "get_catalog_filtered_product_sales",
+    "get_catalog_product_profile",
     "get_cpu_family_sales_breakdown",
     "get_order_financial_summary",
     "run_bigcommerce_readonly_query",
+    "search_catalog_cache",
 }
 CATALOG_TOOL_NAMES = {
     "list_catalog_products",
@@ -1011,6 +1042,7 @@ Available tables:
 - bc_order_items: one row per order line. Important fields: order_id, product_id, name, sku, quantity, total_inc_tax, base_total, product_options.
 - bc_customers: customer account records.
 - bc_order_addresses and bc_order_custom_fields: recipient, shipping, college/unit, department code, account number, and other checkout fields.
+- bc_products, bc_product_variants, bc_brands, and bc_categories: cached BigCommerce catalog data, normalized manufacturer, CPU family, product kind, pricing, visibility, inventory, and variants.
 - bc_sync_runs: sync history.
 
 Rules:
@@ -1018,8 +1050,9 @@ Rules:
 - Call run_bigcommerce_readonly_query for analytics, rankings, counts, totals, date questions, products, customers, colleges/units, departments, accounts, and shipping-charge questions.
 - Call get_bigcommerce_analytics_schema only when you need exact column details.
 - Call get_bigcommerce_cache_status when the user asks about freshness or sync status.
-- For questions about products currently on the BigCommerce site/catalog, product details, SKUs, prices, visibility, availability, variants, inventory levels, images, custom fields, or category/catalog browsing, use the live read-only catalog tools: list_catalog_products, search_products, get_product_by_sku, get_catalog_product, get_low_stock_products, or find_products_missing_images.
-- Product sales/history/popularity questions are different from catalog questions. For "sold", "sales", "ordered", "popular", "revenue", or "quantity sold", use SQL over bc_orders and bc_order_items. For "on the site", "catalog", "visible", "price", "SKU", "inventory", "image", "variant", or "product page", use catalog tools.
+- For questions about products currently on the BigCommerce site/catalog, product details, SKUs, prices, visibility, availability, variants, inventory levels, custom fields, category/catalog browsing, or catalog-level filters like manufacturer/CPU/product type, use search_catalog_cache or get_catalog_product_profile first.
+- Use live read-only catalog tools only when the local catalog cache is missing the product or current live site freshness matters.
+- Product sales/history/popularity questions are different from catalog questions. For "sold", "sales", "ordered", "popular", "revenue", or "quantity sold", use SQL over bc_orders and bc_order_items, or get_catalog_product_profile when the question is about one known catalog product. For "on the site", "catalog", "visible", "price", "SKU", "inventory", "image", "variant", or "product page", use catalog tools.
 - For questions combining catalog/spec filters with sales ranking, such as "best selling computer with an AMD CPU", "which touchscreen laptop sells best", or "sales for products with Ryzen", use get_catalog_filtered_product_sales instead of manually fetching broad catalog results and writing a large SQL query. For month-over-month versions of those questions, call it with group_by="month".
 - For CPU-family percentage breakdowns or comparisons involving Windows ARM, Apple silicon, Intel, and AMD, use get_cpu_family_sales_breakdown instead of SQL. For calendar Q3/Q4 2025 through Q1/Q2 2026, use start_date="2025-07-01" and end_date="2026-07-01"; Q2 2026 may be partial if current data is before July 2026. If the user says month over month, use group_by="month" even when the date range is described by quarters.
 - Catalog tools are read-only. Never claim you can create, update, delete, publish, hide, price, or inventory-adjust a product.
@@ -1089,10 +1122,7 @@ def _call_tool(name: str, arguments_json: str) -> str:
     except json.JSONDecodeError as exc:
         return json.dumps({"error": f"Invalid tool arguments JSON: {exc}"})
 
-    try:
-        result = CHAT_TOOLS[name](**arguments)
-    except Exception as exc:
-        return json.dumps({"error": str(exc)})
+    result = call_tool(name, arguments)
     return json.dumps(result, default=str)
 
 
@@ -1132,11 +1162,14 @@ def _format_direct_tool_answer(name: str, result: dict[str, Any]) -> str | None:
     if name in {
         "list_catalog_products",
         "search_products",
+        "search_catalog_cache",
         "get_product_by_sku",
         "get_low_stock_products",
         "find_products_missing_images",
     }:
         return _format_catalog_products(result)
+    if name == "get_catalog_product_profile":
+        return _format_catalog_product_profile(result)
     if name == "get_catalog_filtered_product_sales":
         return _format_catalog_filtered_product_sales(result)
     if name == "get_cpu_family_sales_breakdown":
@@ -1223,8 +1256,10 @@ def _is_tool_plan_without_answer(answer: str) -> bool:
         "run_bigcommerce_readonly_query",
         "get_bigcommerce_analytics_schema",
         "get_catalog_filtered_product_sales",
+        "get_catalog_product_profile",
         "list_catalog_products",
         "search_products",
+        "search_catalog_cache",
         "get_product_by_sku",
         "get_catalog_product",
         "local analytics cache to",
@@ -1331,9 +1366,10 @@ def _format_catalog_product_line(product: dict[str, Any], index: int) -> str:
 def _format_catalog_products(result: dict[str, Any]) -> str:
     products = result.get("products") or []
     if not products:
-        return "I did not find matching live catalog products."
+        return "I did not find matching catalog products."
 
-    lines = [f"Found {len(products)} live catalog product{'' if len(products) == 1 else 's'}:"]
+    source_label = "cached" if "cache_status" in result else "live"
+    lines = [f"Found {len(products)} {source_label} catalog product{'' if len(products) == 1 else 's'}:"]
     for index, product in enumerate(products[:20], start=1):
         lines.append(_format_catalog_product_line(product, index))
 
@@ -1342,6 +1378,51 @@ def _format_catalog_products(result: dict[str, Any]) -> str:
     if total and int(total) > len(products):
         lines.append(f"Showing {len(products)} of {total} matching catalog products.")
 
+    return "\n".join(lines)
+
+
+def _format_catalog_product_profile(result: dict[str, Any]) -> str:
+    product = result.get("product") or {}
+    if not product:
+        return "I did not find that product in the cached catalog."
+
+    sales = result.get("sales_summary") or {}
+    lines = [
+        f"{product.get('name') or 'Unnamed product'}",
+        f"- SKU: {product.get('sku') or 'unknown'}",
+        f"- Price: {_format_catalog_price(product.get('price'))}",
+        f"- Availability: {product.get('availability') or 'unknown'}",
+        f"- Visible on site: {'Yes' if product.get('is_visible') else 'No'}",
+        f"- Inventory: {_format_number(product.get('inventory_level')) if product.get('inventory_level') is not None else 'unknown'}",
+    ]
+    if product.get("manufacturer"):
+        lines.append(f"- Manufacturer: {product.get('manufacturer')}")
+    if product.get("cpu_family"):
+        lines.append(f"- CPU family: {product.get('cpu_family')}")
+    if product.get("product_kind"):
+        lines.append(f"- Product kind: {product.get('product_kind')}")
+    if product.get("custom_url"):
+        lines.append(f"- Product page: {product.get('custom_url')}")
+    variants = product.get("variants") or []
+    if variants:
+        lines.append(f"- Variants: {len(variants)}")
+
+    lines.extend(
+        [
+            "",
+            "Sales history from the local order cache:",
+            (
+                f"- {_format_number(sales.get('quantity_sold') or 0)} units across "
+                f"{_format_number(sales.get('order_count') or 0)} orders"
+            ),
+            f"- Revenue: {_format_money(float(sales.get('revenue_inc_tax') or 0))}",
+        ]
+    )
+    if sales.get("first_order_date") or sales.get("last_order_date"):
+        lines.append(
+            f"- First/most recent order: {sales.get('first_order_date') or 'unknown'} / "
+            f"{sales.get('last_order_date') or 'unknown'}"
+        )
     return "\n".join(lines)
 
 

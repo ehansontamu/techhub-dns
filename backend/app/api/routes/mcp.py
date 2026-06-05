@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 from typing import Any
 
 from flask import Blueprint, Response, jsonify, request
 
+from app.services import bigcommerce_tool_registry as tool_registry
+from app.services.bigcommerce_analytics_cache import get_bigcommerce_analytics_schema
 from app.services.bigcommerce_chat import chat_cli
 
 
@@ -21,6 +24,24 @@ INSTRUCTIONS = (
     "Read-only BigCommerce and local analytics-cache tools for TechHub. "
     "Tools never create, update, delete, fulfill, cancel, refund, or mutate store data."
 )
+RESOURCE_DIR = Path(__file__).resolve().parents[2] / "services" / "bigcommerce_chat"
+RESOURCES = {
+    "bigcommerce://analytics-schema": {
+        "name": "BigCommerce Analytics Warehouse Schema",
+        "description": "Allowed local warehouse tables, columns, field hints, SQL rules, and cache status.",
+        "mimeType": "application/json",
+    },
+    "bigcommerce://business-rules": {
+        "name": "BigCommerce Business Rules",
+        "description": "Checkout dimension aliases and business naming rules used by the assistant.",
+        "mimeType": "application/json",
+    },
+    "bigcommerce://classification-rules": {
+        "name": "BigCommerce Product Classification Rules",
+        "description": "Product group, manufacturer, and organization classification rules.",
+        "mimeType": "application/json",
+    },
+}
 
 
 def _json_response(payload: Any, status: int = 200) -> Response:
@@ -72,7 +93,7 @@ def _require_authorized() -> Response | None:
 def _tool_schema_from_openai_schema(schema: dict[str, Any]) -> dict[str, Any] | None:
     function = schema.get("function") or {}
     name = function.get("name")
-    if not name or name not in chat_cli.CHAT_TOOLS:
+    if not name or name not in tool_registry.CHAT_TOOLS:
         return None
 
     return {
@@ -109,16 +130,58 @@ def _initialize_result(params: dict[str, Any]) -> dict[str, Any]:
     )
     return {
         "protocolVersion": protocol_version,
-        "capabilities": {"tools": {"listChanged": False}},
+        "capabilities": {
+            "tools": {"listChanged": False},
+            "resources": {"subscribe": False, "listChanged": False},
+        },
         "serverInfo": SERVER_INFO,
         "instructions": INSTRUCTIONS,
+    }
+
+
+def _list_resources() -> dict[str, Any]:
+    return {
+        "resources": [
+            {
+                "uri": uri,
+                "name": metadata["name"],
+                "description": metadata["description"],
+                "mimeType": metadata["mimeType"],
+            }
+            for uri, metadata in RESOURCES.items()
+        ]
+    }
+
+
+def _read_resource(params: dict[str, Any]) -> dict[str, Any]:
+    uri = params.get("uri")
+    if uri not in RESOURCES:
+        raise ValueError(f"Unknown resource: {uri}")
+
+    if uri == "bigcommerce://analytics-schema":
+        text = json.dumps(get_bigcommerce_analytics_schema(), indent=2, default=str)
+    elif uri == "bigcommerce://business-rules":
+        text = (RESOURCE_DIR / "business_rules.json").read_text(encoding="utf-8")
+    elif uri == "bigcommerce://classification-rules":
+        text = (RESOURCE_DIR / "classification_rules.json").read_text(encoding="utf-8")
+    else:
+        raise ValueError(f"Unknown resource: {uri}")
+
+    return {
+        "contents": [
+            {
+                "uri": uri,
+                "mimeType": RESOURCES[uri]["mimeType"],
+                "text": text,
+            }
+        ]
     }
 
 
 def _call_tool(params: dict[str, Any]) -> dict[str, Any]:
     name = params.get("name")
     arguments = params.get("arguments") or {}
-    if not isinstance(name, str) or name not in chat_cli.CHAT_TOOLS:
+    if not isinstance(name, str) or name not in tool_registry.CHAT_TOOLS:
         return {
             "content": [{"type": "text", "text": f"Unknown tool: {name}"}],
             "isError": True,
@@ -129,11 +192,10 @@ def _call_tool(params: dict[str, Any]) -> dict[str, Any]:
             "isError": True,
         }
 
-    try:
-        result = chat_cli.CHAT_TOOLS[name](**arguments)
-    except Exception as exc:
+    result = tool_registry.call_tool(name, arguments)
+    if isinstance(result, dict) and result.get("error"):
         return {
-            "content": [{"type": "text", "text": str(exc) or "Tool call failed."}],
+            "content": [{"type": "text", "text": str(result.get("error") or "Tool call failed.")}],
             "isError": True,
         }
 
@@ -172,8 +234,19 @@ def _handle_request(message: dict[str, Any]) -> dict[str, Any] | None:
         result = {"tools": _mcp_tools()}
     elif method == "tools/call":
         result = _call_tool(params)
-    elif method in {"resources/list", "prompts/list"}:
-        result = {"resources": []} if method == "resources/list" else {"prompts": []}
+    elif method == "resources/list":
+        result = _list_resources()
+    elif method == "resources/read":
+        try:
+            result = _read_resource(params)
+        except ValueError as exc:
+            return {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "error": {"code": -32602, "message": str(exc)},
+            }
+    elif method == "prompts/list":
+        result = {"prompts": []}
     else:
         return {
             "jsonrpc": "2.0",
@@ -197,7 +270,7 @@ def mcp_info() -> Any:
             "serverInfo": SERVER_INFO,
             "transport": "http-json-rpc",
             "endpoint": "/mcp",
-            "methods": ["initialize", "tools/list", "tools/call", "ping"],
+            "methods": ["initialize", "tools/list", "tools/call", "resources/list", "resources/read", "ping"],
         }
     )
 

@@ -12,11 +12,15 @@ from app.database import Base
 from app.config import settings
 from app.models import (
     AuditLog,
+    BigCommerceBrand,
+    BigCommerceCategory,
     BigCommerceCustomer,
     BigCommerceOrder,
     BigCommerceOrderAddress,
     BigCommerceOrderCustomField,
     BigCommerceOrderItem,
+    BigCommerceProduct,
+    BigCommerceProductVariant,
     BigCommerceSyncRun,
     DeliveryRun,
     InflowWebhook,
