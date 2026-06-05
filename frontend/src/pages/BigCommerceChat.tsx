@@ -613,14 +613,15 @@ export default function BigCommerceChat() {
               aria-label="Ask BigCommerce"
               disabled={isSending}
             />
-            <Button
-              type="submit"
-              size="icon"
-              disabled={!canSend}
-              aria-label="Send"
-              title="Send"
-              className="h-auto min-h-12 w-12"
-            >
+<Button
+               type="submit"
+               size="icon"
+               variant="maroon"
+               disabled={!canSend}
+               aria-label="Send"
+               title="Send"
+               className="h-auto min-h-12 w-12"
+             >
               {isSending ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
               ) : (
