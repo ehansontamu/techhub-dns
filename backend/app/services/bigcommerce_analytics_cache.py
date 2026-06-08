@@ -1111,6 +1111,112 @@ def get_catalog_product_profile(
         db.close()
 
 
+def _machine_form_matches(product: BigCommerceProduct, machine_form: str | None) -> bool:
+    if not machine_form or machine_form == "computer":
+        return True
+
+    text_value = " ".join(
+        str(value or "")
+        for value in [product.name, product.sku, product.search_text]
+    ).lower()
+    laptop_pattern = (
+        r"\b(laptop|notebook|macbook|latitude|probook|elitebook|thinkpad|"
+        r"surface laptop|mobile precision|dell pro 14|dell pro 16|precision 5490|precision 5690)\b"
+    )
+    desktop_pattern = r"\b(desktop|tower|aio|all-in-one|optiplex|micro|small form|sff|pro slim|workstation)\b"
+
+    if machine_form == "laptop":
+        return bool(re.search(laptop_pattern, text_value)) and not bool(re.search(desktop_pattern, text_value))
+    if machine_form == "desktop":
+        return bool(re.search(desktop_pattern, text_value))
+    return True
+
+
+def get_catalog_classified_product_sales(
+    cpu_family: str | None = None,
+    machine_form: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    limit: int = 10,
+) -> dict[str, Any]:
+    """Rank sold products using cached catalog CPU/form classification."""
+
+    limit = min(max(int(limit or 10), 1), 50)
+    machine_form = machine_form if machine_form in {None, "computer", "laptop", "desktop"} else None
+    db = get_db_session()
+    try:
+        table_names = set(inspect(db.bind).get_table_names())
+        if "bc_products" not in table_names:
+            return {
+                "products": [],
+                "error": "Catalog cache tables are not available. Run alembic upgrade head and sync the cache.",
+                "cache_status": get_bigcommerce_cache_status(),
+            }
+
+        query = (
+            db.query(
+                BigCommerceProduct,
+                func.sum(BigCommerceOrderItem.quantity).label("quantity_sold"),
+                func.sum(BigCommerceOrderItem.total_inc_tax).label("revenue_inc_tax"),
+                func.count(func.distinct(BigCommerceOrderItem.order_id)).label("order_count"),
+                func.min(BigCommerceOrder.date_created).label("first_order_date"),
+                func.max(BigCommerceOrder.date_created).label("last_order_date"),
+            )
+            .join(
+                BigCommerceOrderItem,
+                or_(
+                    BigCommerceOrderItem.product_id == BigCommerceProduct.id,
+                    BigCommerceOrderItem.sku == BigCommerceProduct.sku,
+                ),
+            )
+            .join(BigCommerceOrder, BigCommerceOrder.id == BigCommerceOrderItem.order_id)
+            .filter(BigCommerceOrder.status.notin_(EXCLUDED_SALES_STATUSES))
+            .filter(BigCommerceProduct.product_kind == "computer")
+        )
+        if cpu_family:
+            query = query.filter(BigCommerceProduct.cpu_family == cpu_family)
+        if start_date:
+            query = query.filter(BigCommerceOrder.date_created >= datetime.fromisoformat(start_date))
+        if end_date:
+            query = query.filter(BigCommerceOrder.date_created < datetime.fromisoformat(end_date))
+
+        rows = (
+            query.group_by(BigCommerceProduct.id)
+            .order_by(func.sum(BigCommerceOrderItem.quantity).desc())
+            .limit(200)
+            .all()
+        )
+
+        products = []
+        for product, quantity_sold, revenue_inc_tax, order_count, first_order_date, last_order_date in rows:
+            if not _machine_form_matches(product, machine_form):
+                continue
+            products.append(
+                {
+                    **_catalog_product_summary(product),
+                    "quantity_sold": int(quantity_sold or 0),
+                    "revenue_inc_tax": _coerce_cell(revenue_inc_tax or 0),
+                    "order_count": int(order_count or 0),
+                    "first_order_date": first_order_date.isoformat() if first_order_date else None,
+                    "last_order_date": last_order_date.isoformat() if last_order_date else None,
+                }
+            )
+            if len(products) >= limit:
+                break
+
+        return {
+            "cpu_family": cpu_family,
+            "machine_form": machine_form,
+            "start_date": start_date,
+            "end_date": end_date,
+            "count": len(products),
+            "products": products,
+            "cache_status": get_bigcommerce_cache_status(),
+        }
+    finally:
+        db.close()
+
+
 def get_order_financial_summary(
     start_date: str | None = None,
     end_date: str | None = None,

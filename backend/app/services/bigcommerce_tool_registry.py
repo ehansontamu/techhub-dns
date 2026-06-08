@@ -6,6 +6,7 @@ from typing import Any
 from app.services.bigcommerce_analytics_cache import (
     get_bigcommerce_analytics_schema,
     get_bigcommerce_cache_status,
+    get_catalog_classified_product_sales,
     get_catalog_filtered_product_sales,
     get_catalog_product_profile,
     get_cpu_family_sales_breakdown,
@@ -20,6 +21,7 @@ ToolCallable = Callable[..., dict[str, Any]]
 WAREHOUSE_TOOL_NAMES = {
     "get_bigcommerce_analytics_schema",
     "get_bigcommerce_cache_status",
+    "get_catalog_classified_product_sales",
     "get_catalog_filtered_product_sales",
     "get_catalog_product_profile",
     "get_cpu_family_sales_breakdown",
@@ -32,6 +34,7 @@ CHAT_TOOLS: dict[str, ToolCallable] = {
     **READ_ONLY_TOOLS,
     "get_bigcommerce_analytics_schema": get_bigcommerce_analytics_schema,
     "get_bigcommerce_cache_status": get_bigcommerce_cache_status,
+    "get_catalog_classified_product_sales": get_catalog_classified_product_sales,
     "get_catalog_filtered_product_sales": get_catalog_filtered_product_sales,
     "get_catalog_product_profile": get_catalog_product_profile,
     "get_cpu_family_sales_breakdown": get_cpu_family_sales_breakdown,
@@ -49,4 +52,3 @@ def call_tool(name: str, arguments: dict[str, Any] | None = None) -> dict[str, A
         return CHAT_TOOLS[name](**(arguments or {}))
     except Exception as exc:
         return {"error": str(exc)}
-

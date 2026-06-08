@@ -46,7 +46,8 @@ For flexible analytics, prefer run_bigcommerce_readonly_query. Use get_order_sum
 For order ranking questions, prefer SQL over bc_orders. Choose the rank metric from the user's words: dollars/value/amount means total_inc_tax; first/earliest/submitted date means date_created ascending; latest/newest/most recent means date_created descending; first order number means id ascending; most/fewest items means items_total.
 For product popularity, top products, "which product sold most", "which order had the most of a product", or combined product/source-order questions, prefer SQL joining bc_orders to bc_order_items.
 For questions about products currently on the BigCommerce site/catalog, product details, SKUs, prices, visibility, availability, variants, inventory levels, images, custom fields, or category/catalog browsing, use search_catalog_cache or get_catalog_product_profile first. Use live read-only catalog tools only when the local catalog cache is missing the product or current live site freshness matters. Product sales/history/popularity questions are different from catalog questions: use SQL or get_catalog_product_profile for sold/sales/revenue/quantity ordered, and catalog tools for site/catalog/product-page facts.
-For machine CPU-family sales comparisons involving Windows ARM, Apple silicon, Intel, or AMD, use get_cpu_family_sales_breakdown. For calendar Q3/Q4 2025 through Q1/Q2 2026, use start_date="2025-07-01" and end_date="2026-07-01"; Q2 2026 may be partial if current data is before July 2026. If the user says month over month, use group_by="month" even when the date range is described by quarters.
+For product popularity questions filtered by CPU family or machine form, such as "most popular Intel laptop" or "best-selling AMD desktop", use get_catalog_classified_product_sales.
+For machine CPU-family sales comparisons over time involving Windows ARM, Apple silicon, Intel, or AMD, use get_cpu_family_sales_breakdown. For calendar Q3/Q4 2025 through Q1/Q2 2026, use start_date="2025-07-01" and end_date="2026-07-01"; Q2 2026 may be partial if current data is before July 2026. If the user says month over month, use group_by="month" even when the date range is described by quarters.
 AMD CPU means AMD processor, such as Ryzen, Threadripper, EPYC, Athlon, or an explicit AMD processor/CPU/APU field. Do not count AMD Radeon, Radeon Graphics, or AMD graphics as AMD CPU.
 When answering CPU-family sales questions, mention the top contributing products for the family or period when the tool provides them. If one product dominates a total, include that product name and quantity.
 When asked which orders took the longest to fulfill, use get_fulfillment_aging_report so the answer includes both longest completed fulfillment durations and oldest currently-open orders. Use get_oldest_unfulfilled_orders only when the user explicitly asks for currently open/unfulfilled orders.
@@ -174,6 +175,29 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "properties": {
                     "product_id": {"type": "integer"},
                     "sku": {"type": "string"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_catalog_classified_product_sales",
+            "description": "Rank sold products using cached catalog classifications such as CPU family and laptop/desktop form. Use for questions like most popular Intel laptop sold in 2026 or best-selling AMD desktop.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "cpu_family": {
+                        "type": "string",
+                        "enum": ["Windows ARM", "Apple silicon", "Intel", "AMD"],
+                    },
+                    "machine_form": {
+                        "type": "string",
+                        "enum": ["computer", "laptop", "desktop"],
+                    },
+                    "start_date": {"type": "string"},
+                    "end_date": {"type": "string"},
+                    "limit": {"type": "integer", "default": 10},
                 },
             },
         },
@@ -1014,6 +1038,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
 CACHE_TOOL_NAMES = {
     "get_bigcommerce_analytics_schema",
     "get_bigcommerce_cache_status",
+    "get_catalog_classified_product_sales",
     "get_catalog_filtered_product_sales",
     "get_catalog_product_profile",
     "get_cpu_family_sales_breakdown",
@@ -1055,6 +1080,7 @@ Rules:
 - For questions about products currently on the BigCommerce site/catalog, product details, SKUs, prices, visibility, availability, variants, inventory levels, custom fields, category/catalog browsing, or catalog-level filters like manufacturer/CPU/product type, use search_catalog_cache or get_catalog_product_profile first.
 - Use live read-only catalog tools only when the local catalog cache is missing the product or current live site freshness matters.
 - Product sales/history/popularity questions are different from catalog questions. For "sold", "sales", "ordered", "popular", "revenue", or "quantity sold", use SQL over bc_orders and bc_order_items, or get_catalog_product_profile when the question is about one known catalog product. For "on the site", "catalog", "visible", "price", "SKU", "inventory", "image", "variant", or "product page", use catalog tools.
+- For product popularity questions filtered by CPU family or machine form, such as "most popular Intel laptop" or "best-selling AMD desktop", use get_catalog_classified_product_sales.
 - For questions combining catalog/spec filters with sales ranking, such as "best selling computer with an AMD CPU", "which touchscreen laptop sells best", or "sales for products with Ryzen", use get_catalog_filtered_product_sales instead of manually fetching broad catalog results and writing a large SQL query. For month-over-month versions of those questions, call it with group_by="month".
 - For CPU-family percentage breakdowns or comparisons involving Windows ARM, Apple silicon, Intel, and AMD, use get_cpu_family_sales_breakdown instead of SQL. For calendar Q3/Q4 2025 through Q1/Q2 2026, use start_date="2025-07-01" and end_date="2026-07-01"; Q2 2026 may be partial if current data is before July 2026. If the user says month over month, use group_by="month" even when the date range is described by quarters.
 - AMD CPU means AMD processor, such as Ryzen, Threadripper, EPYC, Athlon, or an explicit AMD processor/CPU/APU field. Do not count AMD Radeon, Radeon Graphics, or AMD graphics as AMD CPU.
@@ -1259,6 +1285,7 @@ def _is_tool_plan_without_answer(answer: str) -> bool:
         "checking ",
         "run_bigcommerce_readonly_query",
         "get_bigcommerce_analytics_schema",
+        "get_catalog_classified_product_sales",
         "get_catalog_filtered_product_sales",
         "get_catalog_product_profile",
         "list_catalog_products",
@@ -3133,6 +3160,10 @@ def _extract_cpu_family_sales_request(question: str) -> dict[str, Any] | None:
         return None
     if not any(term in normalized for term in ["sold", "sell", "sales", "purchased", "bought", "machines", "computers"]):
         return None
+    if any(term in normalized for term in ["most popular", "best selling", "best-selling", "top product", "what product", "what computer", "what laptop"]):
+        return None
+    if not any(term in normalized for term in ["month", "months", "monthly", "over time", "trend", "breakdown", "compare", "comparison", "highest amount"]):
+        return None
 
     family = None
     if re.search(r"\bamd\b", normalized):
@@ -3171,6 +3202,83 @@ def _extract_cpu_family_sales_request(question: str) -> dict[str, Any] | None:
         "group_by": "month",
         "rank_months": any(term in normalized for term in ["highest", "top", "most", "peak"]),
     }
+
+
+def _extract_catalog_classified_product_sales_request(question: str) -> dict[str, Any] | None:
+    normalized = question.lower()
+    if not any(term in normalized for term in ["most popular", "best selling", "best-selling", "top", "sold the most"]):
+        return None
+    if not any(term in normalized for term in ["sold", "sell", "sales", "purchased", "bought"]):
+        return None
+
+    cpu_family = None
+    if re.search(r"\bamd\b", normalized):
+        cpu_family = "AMD"
+    elif "apple silicon" in normalized:
+        cpu_family = "Apple silicon"
+    elif "windows arm" in normalized or "snapdragon" in normalized or "qualcomm" in normalized:
+        cpu_family = "Windows ARM"
+    elif re.search(r"\bintel\b", normalized):
+        cpu_family = "Intel"
+    if cpu_family is None:
+        return None
+
+    machine_form = "computer"
+    if "laptop" in normalized or "notebook" in normalized:
+        machine_form = "laptop"
+    elif any(term in normalized for term in ["desktop", "tower", "aio", "all-in-one"]):
+        machine_form = "desktop"
+
+    today = date.today()
+    start_date = date(today.year, 1, 1)
+    end_date = _add_months(date(today.year, today.month, 1), 1)
+    year_match = re.search(r"\b(20\d{2})\b", normalized)
+    if year_match:
+        year = int(year_match.group(1))
+        start_date = date(year, 1, 1)
+        end_date = date(year + 1, 1, 1) if year != today.year else end_date
+
+    return {
+        "cpu_family": cpu_family,
+        "machine_form": machine_form,
+        "start_date": start_date.isoformat(),
+        "end_date": end_date.isoformat(),
+        "limit": 10,
+    }
+
+
+def _format_catalog_classified_product_sales(result: dict[str, Any], request: dict[str, Any]) -> str:
+    products = result.get("products") or []
+    label = " ".join(
+        part
+        for part in [request.get("cpu_family"), request.get("machine_form")]
+        if part
+    )
+    range_label = f"{request.get('start_date')} through {request.get('end_date')}"
+    if not products:
+        return f"I did not find sold {label} products for {range_label}."
+
+    top = products[0]
+    lines = [
+        (
+            f"The most popular {label} sold for {range_label} was "
+            f"{top.get('name') or 'Unknown product'} with {_format_number(top.get('quantity_sold') or 0)} units sold."
+        ),
+        "",
+        "| Rank | Product | SKU | Units sold | Revenue | Orders |",
+        "|---:|---|---|---:|---:|---:|",
+    ]
+    for index, product in enumerate(products[:10], start=1):
+        lines.append(
+            (
+                f"| {index} | {product.get('name') or 'Unknown'} | "
+                f"{product.get('sku') or ''} | "
+                f"{_format_number(product.get('quantity_sold') or 0)} | "
+                f"{_format_money(float(product.get('revenue_inc_tax') or 0))} | "
+                f"{_format_number(product.get('order_count') or 0)} |"
+            )
+        )
+    return "\n".join(lines)
 
 
 def _format_cpu_family_month_ranking(result: dict[str, Any], request: dict[str, Any]) -> str:
@@ -3266,6 +3374,26 @@ def ask(question: str, messages: list[dict[str, Any]] | None = None) -> tuple[st
     if _looks_like_model_info_request(question):
         model = os.getenv("LLM_MODEL", "").strip() or "not set"
         answer = f"This local chat is configured to use `{model}` via `LLM_MODEL`."
+        history.append({"role": "user", "content": question})
+        history.append({"role": "assistant", "content": answer})
+        return answer, history
+
+    classified_product_request = _extract_catalog_classified_product_sales_request(question)
+    if classified_product_request:
+        result = call_tool(
+            "get_catalog_classified_product_sales",
+            {
+                "cpu_family": classified_product_request["cpu_family"],
+                "machine_form": classified_product_request["machine_form"],
+                "start_date": classified_product_request["start_date"],
+                "end_date": classified_product_request["end_date"],
+                "limit": classified_product_request["limit"],
+            },
+        )
+        if result.get("error"):
+            answer = f"I could not calculate the product ranking from the local cache: {result['error']}"
+        else:
+            answer = _format_catalog_classified_product_sales(result, classified_product_request)
         history.append({"role": "user", "content": question})
         history.append({"role": "assistant", "content": answer})
         return answer, history
