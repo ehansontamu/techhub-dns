@@ -22,6 +22,8 @@ from app.models.bigcommerce_cache import (
     BigCommerceProduct,
     BigCommerceProductVariant,
     BigCommerceSyncRun,
+    ProductIntelligenceItem,
+    ProductIntelligencePriceRow,
 )
 
 __all__ = [
@@ -52,4 +54,6 @@ __all__ = [
     "BigCommerceProduct",
     "BigCommerceProductVariant",
     "BigCommerceSyncRun",
+    "ProductIntelligenceItem",
+    "ProductIntelligencePriceRow",
 ]

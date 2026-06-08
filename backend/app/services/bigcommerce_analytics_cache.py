@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+import requests
 from sqlalchemy import func, inspect, or_, text
 from sqlalchemy.orm import Session
 
@@ -22,6 +24,8 @@ from app.models.bigcommerce_cache import (
     BigCommerceProduct,
     BigCommerceProductVariant,
     BigCommerceSyncRun,
+    ProductIntelligenceItem,
+    ProductIntelligencePriceRow,
 )
 from app.services.bigcommerce_chat.bigcommerce_tools import (
     BigCommerceConfigError,
@@ -49,6 +53,11 @@ SQL_QUERY_TIMEOUT_SECONDS = 20
 SQL_MAX_ROWS = 200
 SQL_DEFAULT_ROWS = 100
 EXCLUDED_SALES_STATUSES = ["Cancelled", "Declined", "Refunded"]
+PRODUCT_INTELLIGENCE_JSON_URL = os.getenv(
+    "PRODUCT_INTELLIGENCE_JSON_URL",
+    "https://store-jsj7fos9p1.mybigcommerce.com/content/JSON%20Files/filteredResponse.json",
+)
+PRODUCT_INTELLIGENCE_REQUEST_TIMEOUT_SECONDS = 30
 
 ALLOWED_BC_TABLES = {
     "bc_orders",
@@ -61,6 +70,8 @@ ALLOWED_BC_TABLES = {
     "bc_brands",
     "bc_categories",
     "bc_sync_runs",
+    "product_intelligence_items",
+    "product_intelligence_price_rows",
 }
 
 TABLE_DESCRIPTIONS: dict[str, str] = {
@@ -74,6 +85,8 @@ TABLE_DESCRIPTIONS: dict[str, str] = {
     "bc_brands": "Local BigCommerce brand cache.",
     "bc_categories": "Local BigCommerce category cache.",
     "bc_sync_runs": "Local sync run history and freshness/error metadata.",
+    "product_intelligence_items": "Downloaded Store Intelligence product snapshot from the public filteredResponse.json file. Includes Inflow available inventory, purchase order quantity, BigCommerce approval/verification status counts, price scheme values, closeout flag, product performance scores, architecture, GPU type, and product links.",
+    "product_intelligence_price_rows": "Flattened price rows from the Store Intelligence product snapshot, keyed by product and price scheme.",
 }
 
 FIELD_HINTS: dict[str, dict[str, str]] = {
@@ -106,6 +119,33 @@ FIELD_HINTS: dict[str, dict[str, str]] = {
         "product_kind": "Normalized product kind classification such as computer, accessory, display, printer, or unknown.",
         "search_text": "Flattened catalog text from product fields, variants, options, and custom fields for broad local search.",
         "raw_product": "Full cached BigCommerce catalog product JSON.",
+    },
+    "product_intelligence_items": {
+        "product_id": "Inflow product ID from filteredResponse.json.",
+        "sku": "Product SKU.",
+        "name": "Product display name.",
+        "category": "Inflow category.",
+        "qty": "Available inventory quantity from Inflow quantityAvailable.",
+        "quantity_on_purchase_order": "Inflow quantity currently on purchase order.",
+        "bc_status9": "Count of units/orders in BigCommerce status 9, AggieBuy Approval.",
+        "bc_status7": "Count of units/orders in BigCommerce status 7, Awaiting Verification.",
+        "normal_price": "Normal campus/customer price from the JSON NormalPrice field.",
+        "ab_price": "AggieBuy price from the JSON ABPrice field.",
+        "retail_price": "Retail/reference price from the JSON RetailPrice field.",
+        "closeout": "Closeout flag, typically Y or N.",
+        "overall_score": "Overall performance score from the inventory/performance feed.",
+        "cpu_score": "CPU performance score.",
+        "gpu_score": "GPU performance score.",
+        "memory_score": "Memory performance score.",
+        "storage_score": "Storage performance score.",
+        "architecture": "Architecture value from the feed, such as x86 or ARM.",
+        "gpu_type": "GPU type from the feed, such as Integrated or Discrete.",
+        "product_link": "Public product page URL.",
+    },
+    "product_intelligence_price_rows": {
+        "scheme_id": "Inflow price scheme ID.",
+        "price_type": "Price row type, usually fixedPrice.",
+        "unit_price": "Price row unit price.",
     },
 }
 
@@ -426,6 +466,156 @@ def sync_bigcommerce_catalog_cache(max_products: int = 5000) -> dict[str, int]:
         db.close()
 
 
+def _score_value(value: Any) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        return int(float(str(value)))
+    except (TypeError, ValueError):
+        return None
+
+
+def _fetch_product_intelligence_snapshot(url: str) -> list[dict[str, Any]]:
+    response = requests.get(
+        url,
+        timeout=PRODUCT_INTELLIGENCE_REQUEST_TIMEOUT_SECONDS,
+        headers={"Accept": "application/json"},
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
+    if isinstance(payload, dict):
+        for key in ("data", "items", "products"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                return [item for item in value if isinstance(item, dict)]
+    raise BigCommerceAnalyticsQueryError("Product intelligence JSON must be a list or contain a data/items/products list.")
+
+
+def _upsert_product_intelligence_items(
+    db: Session,
+    items: list[dict[str, Any]],
+    synced_at: datetime,
+) -> tuple[int, int, int]:
+    product_ids: set[str] = set()
+    price_row_count = 0
+    for item in items:
+        product_id = str(item.get("productId") or "").strip()
+        if not product_id:
+            continue
+        product_ids.add(product_id)
+
+        row = db.get(ProductIntelligenceItem, product_id)
+        if row is None:
+            row = ProductIntelligenceItem(product_id=product_id)
+            db.add(row)
+
+        row.sku = item.get("sku")
+        row.name = item.get("name")
+        row.category = item.get("Category")
+        row.qty = _int_value(item.get("Qty"))
+        row.quantity_on_purchase_order = _int_value(item.get("quantityOnPurchaseOrder"))
+        row.bc_status9 = _int_value(item.get("bc_status9"))
+        row.bc_status7 = _int_value(item.get("bc_status7"))
+        row.normal_price = _money(item.get("NormalPrice"))
+        row.ab_price = _money(item.get("ABPrice"))
+        row.retail_price = _money(item.get("RetailPrice"))
+        row.closeout = item.get("Closeout")
+        row.overall_score = _score_value(item.get("OverallScore"))
+        row.cpu_score = _score_value(item.get("CPUScore"))
+        row.gpu_score = _score_value(item.get("GPUScore"))
+        row.memory_score = _score_value(item.get("MemoryScore"))
+        row.storage_score = _score_value(item.get("StorageScore"))
+        row.architecture = item.get("Architecture")
+        row.product_link = item.get("ProductLink")
+        row.gpu_type = item.get("GPUType")
+        row.price_by_scheme_id = item.get("PriceBySchemeId") if isinstance(item.get("PriceBySchemeId"), dict) else None
+        row.raw_item = item
+        row.synced_at = synced_at
+
+        db.query(ProductIntelligencePriceRow).filter(
+            ProductIntelligencePriceRow.product_id == product_id
+        ).delete()
+        for price_row in item.get("PriceRows") or []:
+            if not isinstance(price_row, dict):
+                continue
+            db.add(
+                ProductIntelligencePriceRow(
+                    id=str(uuid.uuid4()),
+                    product_id=product_id,
+                    sku=item.get("sku"),
+                    scheme_id=price_row.get("schemeId"),
+                    price_type=price_row.get("priceType"),
+                    unit_price=_money(price_row.get("unitPrice")),
+                    synced_at=synced_at,
+                )
+            )
+            price_row_count += 1
+
+    deleted_count = 0
+    if product_ids:
+        deleted_count = (
+            db.query(ProductIntelligenceItem)
+            .filter(ProductIntelligenceItem.product_id.notin_(product_ids))
+            .delete(synchronize_session=False)
+        )
+
+    return len(product_ids), price_row_count, deleted_count
+
+
+def sync_product_intelligence_cache(url: str | None = None) -> dict[str, Any]:
+    db = get_db_session()
+    sync_run = BigCommerceSyncRun(
+        id=str(uuid.uuid4()),
+        mode="product_intelligence",
+        status="running",
+        started_at=datetime.utcnow(),
+        sync_metadata={"source_url": url or PRODUCT_INTELLIGENCE_JSON_URL},
+    )
+    db.add(sync_run)
+    db.commit()
+    try:
+        synced_at = datetime.utcnow()
+        source_url = url or PRODUCT_INTELLIGENCE_JSON_URL
+        items = _fetch_product_intelligence_snapshot(source_url)
+        items_upserted, price_rows_upserted, items_deleted = _upsert_product_intelligence_items(
+            db,
+            items,
+            synced_at,
+        )
+        sync_run.status = "completed"
+        sync_run.completed_at = datetime.utcnow()
+        sync_run.orders_scanned = len(items)
+        sync_run.orders_upserted = items_upserted
+        sync_run.line_items_upserted = price_rows_upserted
+        sync_run.sync_metadata = {
+            "source_url": source_url,
+            "items_upserted": items_upserted,
+            "items_deleted": items_deleted,
+            "price_rows_upserted": price_rows_upserted,
+            "synced_at": _iso_utc(synced_at),
+        }
+        db.commit()
+        return {
+            "items_upserted": items_upserted,
+            "items_deleted": items_deleted,
+            "price_rows_upserted": price_rows_upserted,
+            "source_url": source_url,
+            "synced_at": _iso_utc(synced_at),
+        }
+    except Exception as exc:
+        db.rollback()
+        sync_run.status = "failed"
+        sync_run.completed_at = datetime.utcnow()
+        sync_run.error = str(exc)
+        db.add(sync_run)
+        db.commit()
+        raise
+    finally:
+        db.close()
+
+
 def _last_successful_sync(db: Session) -> BigCommerceSyncRun | None:
     return (
         db.query(BigCommerceSyncRun)
@@ -437,6 +627,15 @@ def _last_successful_sync(db: Session) -> BigCommerceSyncRun | None:
 
 def _latest_sync(db: Session) -> BigCommerceSyncRun | None:
     return db.query(BigCommerceSyncRun).order_by(BigCommerceSyncRun.started_at.desc()).first()
+
+
+def _last_successful_sync_for_mode(db: Session, mode: str) -> BigCommerceSyncRun | None:
+    return (
+        db.query(BigCommerceSyncRun)
+        .filter(BigCommerceSyncRun.status == "completed", BigCommerceSyncRun.mode == mode)
+        .order_by(BigCommerceSyncRun.completed_at.desc())
+        .first()
+    )
 
 
 def _latest_order_modified_at(db: Session) -> datetime | None:
@@ -749,12 +948,23 @@ def get_bigcommerce_cache_status() -> dict[str, Any]:
     try:
         last_sync = _last_successful_sync(db)
         latest_sync = _latest_sync(db)
+        last_product_intelligence_sync = _last_successful_sync_for_mode(db, "product_intelligence")
         latest_order = db.query(BigCommerceOrder.date_modified).order_by(BigCommerceOrder.date_modified.desc()).first()
         order_count = db.query(BigCommerceOrder).count()
         item_count = db.query(BigCommerceOrderItem).count()
         table_names = set(inspect(db.bind).get_table_names())
         product_count = db.query(BigCommerceProduct).count() if "bc_products" in table_names else 0
         variant_count = db.query(BigCommerceProductVariant).count() if "bc_product_variants" in table_names else 0
+        product_intelligence_count = (
+            db.query(ProductIntelligenceItem).count()
+            if "product_intelligence_items" in table_names
+            else 0
+        )
+        product_intelligence_price_row_count = (
+            db.query(ProductIntelligencePriceRow).count()
+            if "product_intelligence_price_rows" in table_names
+            else 0
+        )
         now = datetime.utcnow()
         is_stale = True
         if last_sync and last_sync.completed_at:
@@ -766,12 +976,19 @@ def get_bigcommerce_cache_status() -> dict[str, Any]:
             "line_item_count": item_count,
             "product_count": product_count,
             "variant_count": variant_count,
+            "product_intelligence_count": product_intelligence_count,
+            "product_intelligence_price_row_count": product_intelligence_price_row_count,
             "catalog_tables_available": "bc_products" in table_names and "bc_product_variants" in table_names,
+            "product_intelligence_tables_available": (
+                "product_intelligence_items" in table_names
+                and "product_intelligence_price_rows" in table_names
+            ),
             "last_catalog_sync": (
                 (last_sync.sync_metadata or {}).get("catalog_sync")
                 if last_sync and isinstance(last_sync.sync_metadata, dict)
                 else None
             ),
+            "last_product_intelligence_sync": _sync_run_summary(last_product_intelligence_sync),
             "latest_order_modified_at": _iso_utc(latest_order[0]) if latest_order and latest_order[0] else None,
             "is_stale": is_stale,
             "stale_after_minutes": SYNC_STALE_AFTER_MINUTES,
@@ -816,6 +1033,8 @@ def get_bigcommerce_analytics_schema() -> dict[str, Any]:
                 "Use bc_orders.id as the BigCommerce order ID and display it as Order <id>.",
                 "Cancelled, Declined, and Refunded statuses should usually be excluded from sales analytics unless the user asks otherwise.",
                 "The fiscal year runs from September 1 through August 31. Use half-open date ranges.",
+                "Use product_intelligence_items for Inflow available inventory, purchase order quantity, performance scores, closeout flag, price tracking, and BigCommerce status 9/7 counts from filteredResponse.json.",
+                "In product_intelligence_items, bc_status9 means AggieBuy Approval and bc_status7 means Awaiting Verification.",
             ],
             "cache_status": get_bigcommerce_cache_status(),
         }
@@ -910,6 +1129,154 @@ def _decimal_to_float(value: Any) -> float | None:
     if value is None:
         return None
     return float(value)
+
+
+def _product_intelligence_summary(item: ProductIntelligenceItem) -> dict[str, Any]:
+    return {
+        "product_id": item.product_id,
+        "sku": item.sku,
+        "name": item.name,
+        "category": item.category,
+        "qty": item.qty,
+        "quantity_on_purchase_order": item.quantity_on_purchase_order,
+        "bc_status9_aggiebuy_approval": item.bc_status9,
+        "bc_status7_awaiting_verification": item.bc_status7,
+        "normal_price": _decimal_to_float(item.normal_price),
+        "ab_price": _decimal_to_float(item.ab_price),
+        "retail_price": _decimal_to_float(item.retail_price),
+        "closeout": item.closeout,
+        "overall_score": item.overall_score,
+        "cpu_score": item.cpu_score,
+        "gpu_score": item.gpu_score,
+        "memory_score": item.memory_score,
+        "storage_score": item.storage_score,
+        "architecture": item.architecture,
+        "product_link": item.product_link,
+        "gpu_type": item.gpu_type,
+        "synced_at": item.synced_at.isoformat() if item.synced_at else None,
+    }
+
+
+def search_product_intelligence_cache(
+    query: str | None = None,
+    category: str | None = None,
+    closeout: str | None = None,
+    architecture: str | None = None,
+    gpu_type: str | None = None,
+    min_qty: int | None = None,
+    limit: int = 20,
+) -> dict[str, Any]:
+    """Search the downloaded Store Intelligence product snapshot."""
+
+    limit = min(max(int(limit or 20), 1), 100)
+    db = get_db_session()
+    try:
+        table_names = set(inspect(db.bind).get_table_names())
+        if "product_intelligence_items" not in table_names:
+            return {
+                "query": query,
+                "products": [],
+                "count": 0,
+                "error": "Store Intelligence cache tables are not available. Run alembic upgrade head and sync the cache.",
+                "cache_status": get_bigcommerce_cache_status(),
+            }
+
+        products_query = db.query(ProductIntelligenceItem)
+        if query:
+            normalized_query = f"%{query.strip().lower()}%"
+            products_query = products_query.filter(
+                or_(
+                    func.lower(ProductIntelligenceItem.name).like(normalized_query),
+                    func.lower(ProductIntelligenceItem.sku).like(normalized_query),
+                    func.lower(ProductIntelligenceItem.category).like(normalized_query),
+                )
+            )
+        if category:
+            products_query = products_query.filter(func.lower(ProductIntelligenceItem.category).like(f"%{category.strip().lower()}%"))
+        if closeout:
+            products_query = products_query.filter(func.lower(ProductIntelligenceItem.closeout) == closeout.strip().lower())
+        if architecture:
+            products_query = products_query.filter(func.lower(ProductIntelligenceItem.architecture) == architecture.strip().lower())
+        if gpu_type:
+            products_query = products_query.filter(func.lower(ProductIntelligenceItem.gpu_type) == gpu_type.strip().lower())
+        if min_qty is not None:
+            products_query = products_query.filter(ProductIntelligenceItem.qty >= int(min_qty))
+
+        rows = products_query.order_by(ProductIntelligenceItem.name.asc()).limit(limit).all()
+        return {
+            "query": query,
+            "category": category,
+            "closeout": closeout,
+            "architecture": architecture,
+            "gpu_type": gpu_type,
+            "min_qty": min_qty,
+            "count": len(rows),
+            "limit": limit,
+            "products": [_product_intelligence_summary(row) for row in rows],
+            "cache_status": get_bigcommerce_cache_status(),
+        }
+    finally:
+        db.close()
+
+
+def get_product_intelligence_profile(
+    product_id: str | None = None,
+    sku: str | None = None,
+    name: str | None = None,
+) -> dict[str, Any]:
+    """Return one Store Intelligence product snapshot record with price rows."""
+
+    if not product_id and not sku and not name:
+        return {"error": "Provide product_id, sku, or name."}
+
+    db = get_db_session()
+    try:
+        table_names = set(inspect(db.bind).get_table_names())
+        if "product_intelligence_items" not in table_names:
+            return {
+                "product": None,
+                "error": "Store Intelligence cache tables are not available. Run alembic upgrade head and sync the cache.",
+                "cache_status": get_bigcommerce_cache_status(),
+            }
+
+        product_query = db.query(ProductIntelligenceItem)
+        if product_id:
+            product_query = product_query.filter(ProductIntelligenceItem.product_id == product_id.strip())
+        elif sku:
+            product_query = product_query.filter(func.lower(ProductIntelligenceItem.sku) == sku.strip().lower())
+        else:
+            product_query = product_query.filter(func.lower(ProductIntelligenceItem.name).like(f"%{name.strip().lower()}%"))
+        product = product_query.order_by(ProductIntelligenceItem.name.asc()).first()
+        if product is None:
+            return {"product": None, "cache_status": get_bigcommerce_cache_status()}
+
+        price_rows = []
+        if "product_intelligence_price_rows" in table_names:
+            price_rows = [
+                {
+                    "scheme_id": row.scheme_id,
+                    "price_type": row.price_type,
+                    "unit_price": _decimal_to_float(row.unit_price),
+                }
+                for row in (
+                    db.query(ProductIntelligencePriceRow)
+                    .filter(ProductIntelligencePriceRow.product_id == product.product_id)
+                    .order_by(ProductIntelligencePriceRow.scheme_id.asc())
+                    .all()
+                )
+            ]
+
+        return {
+            "product": {
+                **_product_intelligence_summary(product),
+                "price_by_scheme_id": product.price_by_scheme_id or {},
+                "price_rows": price_rows,
+                "raw_item": product.raw_item,
+            },
+            "cache_status": get_bigcommerce_cache_status(),
+        }
+    finally:
+        db.close()
 
 
 def _catalog_product_summary(product: BigCommerceProduct, brand_name: str | None = None) -> dict[str, Any]:

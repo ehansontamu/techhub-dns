@@ -59,11 +59,11 @@ function chatErrorMessage(error: unknown): string {
   if (typeof error === "object" && error !== null && "response" in error) {
     const candidate = error as { response?: { status?: unknown } };
     if (candidate.response?.status === 504) {
-      return "BigCommerce chat timed out. Try a narrower question or a shorter date range.";
+      return "Store Intelligence timed out. Try a narrower question or a shorter date range.";
     }
   }
 
-  return extractApiErrorMessage(error, "BigCommerce chat is unavailable.");
+  return extractApiErrorMessage(error, "Store Intelligence is unavailable.");
 }
 
 function cleanMessageText(text: string) {
@@ -498,7 +498,7 @@ export default function BigCommerceChat() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="min-w-0">
           <h1 className="text-2xl font-semibold tracking-tight text-foreground">
-            BigCommerce Chat
+            Store Intelligence
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
             Read-only store assistant; information can and will be wrong. Double check what you can. This is a preliminary test of functionality.
@@ -510,11 +510,17 @@ export default function BigCommerceChat() {
                 cacheStatus.is_stale ? "text-amber-600" : "text-muted-foreground"
               )}
             >
-              Data last synced {formatCacheTimestamp(cacheStatus.last_successful_sync?.completed_at ?? null)} ·{" "}
-              {cacheStatus.order_count.toLocaleString()} orders ·{" "}
-              {cacheStatus.line_item_count.toLocaleString()} line items ·{" "}
-              {(cacheStatus.product_count ?? 0).toLocaleString()} products ·{" "}
+              Data last synced {formatCacheTimestamp(cacheStatus.last_successful_sync?.completed_at ?? null)}
+              {" | "}
+              {cacheStatus.order_count.toLocaleString()} orders
+              {" | "}
+              {cacheStatus.line_item_count.toLocaleString()} line items
+              {" | "}
+              {(cacheStatus.product_count ?? 0).toLocaleString()} products
+              {" | "}
               {(cacheStatus.variant_count ?? 0).toLocaleString()} variants
+              {" | "}
+              {(cacheStatus.product_intelligence_count ?? 0).toLocaleString()} intelligence items
             </p>
           )}
           {cacheHealthNotes.length > 0 && (
@@ -544,7 +550,7 @@ export default function BigCommerceChat() {
           onClick={() => {
             window.open("/chat-popout.html", "MCPChatPopout", "width=600,height=800,toolbar=no,location=no,status=no,menubar=no,scrollbars=yes,resizable=yes");
           }}
-          aria-label="Pop out BigCommerce Chat"
+          aria-label="Pop out Store Intelligence"
           title="Pop out"
           className="ml-2"
         >
@@ -567,7 +573,7 @@ export default function BigCommerceChat() {
                 </div>
                 <div>
                   <p className="text-base font-medium text-foreground">
-                    BigCommerce is ready.
+                    Store Intelligence is ready.
                   </p>
                   <p className="mt-1 text-sm text-muted-foreground">
                     Ask a store question to begin.
@@ -649,8 +655,8 @@ isUser
               rows={2}
               maxLength={4000}
               className="min-h-12 flex-1 resize-none rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground outline-none ring-offset-background placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-              placeholder="Ask BigCommerce..."
-              aria-label="Ask BigCommerce"
+              placeholder="Ask Store Intelligence..."
+              aria-label="Ask Store Intelligence"
               disabled={isSending}
             />
 <Button

@@ -271,8 +271,8 @@ export function Sidebar({ className }: { className?: string }) {
               <NavLink
                 key="/bigcommerce-chat"
                 to="/bigcommerce-chat"
-                aria-label="BigCommerce Chat"
-                title="BigCommerce Chat"
+                aria-label="Store Intelligence"
+                title="Store Intelligence"
                 className={({ isActive: isCurrentBigCommerceChat }) =>
                   cn(
                     "flex min-h-[44px] items-center rounded-lg py-2.5 text-sm font-medium transition-colors",
@@ -284,7 +284,7 @@ export function Sidebar({ className }: { className?: string }) {
                 }
               >
                 <MessageCircle className="h-5 w-5 flex-shrink-0" />
-                {showExpandedContent && <span className="overflow-hidden whitespace-nowrap">BigCommerce Chat</span>}
+                {showExpandedContent && <span className="overflow-hidden whitespace-nowrap">Store Intelligence</span>}
               </NavLink>
             </>
           )}

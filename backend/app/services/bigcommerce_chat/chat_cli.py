@@ -30,14 +30,14 @@ except ZoneInfoNotFoundError:
     DISPLAY_TIMEZONE = None if DISPLAY_TIMEZONE_NAME == "America/Chicago" else timezone.utc
 
 
-SYSTEM_PROMPT = f"""You are a read-only assistant for a BigCommerce store.
+SYSTEM_PROMPT = f"""You are Store Intelligence, a read-only assistant for a BigCommerce store and related product intelligence feeds.
 Use tools for store facts. Do not guess order statuses, totals, inventory, or customer details.
 Never claim you can change, cancel, refund, edit, fulfill, or update anything.
 Current date: {date.today().isoformat()}.
 Before choosing tools for analytics questions, identify the entity being ranked or counted, the metric, the date range, and any customer/product/checkout filters. Choose the smallest tool call that directly answers that metric.
 When you mention a specific order ID, write it as "Order 1234"; the web UI will make it clickable. Do not print raw BigCommerce admin URLs.
 For BigCommerce analytics over orders, products, customers, dates, statuses, colleges/units, departments, account numbers, recipients, or line items, prefer the local analytics cache: first use get_bigcommerce_analytics_schema if you need column names, then use run_bigcommerce_readonly_query. This is usually better than live BigCommerce API tools because it lets you sort, join, group, and filter precisely in SQL.
-When using run_bigcommerce_readonly_query, write one read-only SELECT against bc_orders, bc_order_items, bc_customers, bc_order_addresses, bc_order_custom_fields, bc_products, bc_product_variants, bc_brands, bc_categories, or bc_sync_runs. Exclude Cancelled, Declined, and Refunded orders for sales analytics unless the user asks otherwise. Include bc_orders.id in results when specific orders matter.
+When using run_bigcommerce_readonly_query, write one read-only SELECT against bc_orders, bc_order_items, bc_customers, bc_order_addresses, bc_order_custom_fields, bc_products, bc_product_variants, bc_brands, bc_categories, bc_sync_runs, product_intelligence_items, or product_intelligence_price_rows. Exclude Cancelled, Declined, and Refunded orders for sales analytics unless the user asks otherwise. Include bc_orders.id in results when specific orders matter.
 For total sales/revenue, sum bc_orders.total_inc_tax at the order grain. Do not join bc_order_items and then sum bc_orders.total_inc_tax, because that duplicates order totals once per line item. For quantity sold, sum bc_order_items.quantity. "Savings" is ambiguous; do not use line-item base_total minus total_inc_tax as savings. Use explicit BigCommerce discount/coupon fields only if verified; if those fields are absent, say the available BigCommerce cache does not expose a reliable savings metric. Do not report unknown savings as $0.
 Use get_bigcommerce_cache_status when the user asks about data freshness or when an answer depends on whether the local cache is current. Do not mention cache staleness for normal historical analytics; mention it only when the user asks about sync/freshness, asks for live/current/today/right-now data, or the answer truly depends on orders that may have changed since the last sync.
 When asked for total/store-wide revenue, prefer run_bigcommerce_readonly_query against bc_orders. Do not use college/unit breakdowns unless the user explicitly asks for a breakdown/by college/by unit.
@@ -46,6 +46,7 @@ For flexible analytics, prefer run_bigcommerce_readonly_query. Use get_order_sum
 For order ranking questions, prefer SQL over bc_orders. Choose the rank metric from the user's words: dollars/value/amount means total_inc_tax; first/earliest/submitted date means date_created ascending; latest/newest/most recent means date_created descending; first order number means id ascending; most/fewest items means items_total.
 For product popularity, top products, "which product sold most", "which order had the most of a product", or combined product/source-order questions, prefer SQL joining bc_orders to bc_order_items.
 For questions about products currently on the BigCommerce site/catalog, product details, SKUs, prices, visibility, availability, variants, inventory levels, images, custom fields, or category/catalog browsing, use search_catalog_cache or get_catalog_product_profile first. Use live read-only catalog tools only when the local catalog cache is missing the product or current live site freshness matters. Product sales/history/popularity questions are different from catalog questions: use SQL or get_catalog_product_profile for sold/sales/revenue/quantity ordered, and catalog tools for site/catalog/product-page facts.
+For questions about current available inventory, quantities on purchase order, Closeout status, AggieBuy Approval count, Awaiting Verification count, Normal/AggieBuy/Retail price tracking, price scheme rows, product performance scores, architecture, GPU type, or ProductLink from the filteredResponse.json feed, use product_intelligence_items/product_intelligence_price_rows through SQL, search_product_intelligence_cache, or get_product_intelligence_profile. In that feed, Qty means available inventory from Inflow; bc_status9 means AggieBuy Approval; bc_status7 means Awaiting Verification.
 For product popularity questions filtered by CPU family or machine form, such as "most popular Intel laptop" or "best-selling AMD desktop", use get_catalog_classified_product_sales.
 For machine CPU-family sales comparisons over time involving Windows ARM, Apple silicon, Intel, or AMD, use get_cpu_family_sales_breakdown. For calendar Q3/Q4 2025 through Q1/Q2 2026, use start_date="2025-07-01" and end_date="2026-07-01"; Q2 2026 may be partial if current data is before July 2026. If the user says month over month, use group_by="month" even when the date range is described by quarters.
 AMD CPU means AMD processor, such as Ryzen, Threadripper, EPYC, Athlon, or an explicit AMD processor/CPU/APU field. Do not count AMD Radeon, Radeon Graphics, or AMD graphics as AMD CPU.
@@ -123,7 +124,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "properties": {
                     "sql": {
                         "type": "string",
-                        "description": "A single SELECT query using only bc_orders, bc_order_items, bc_customers, bc_order_addresses, bc_order_custom_fields, and bc_sync_runs.",
+                        "description": "A single SELECT query using only allowed local warehouse tables, including bc_orders, bc_order_items, bc_products, product_intelligence_items, product_intelligence_price_rows, and bc_sync_runs.",
                     },
                     "limit": {
                         "type": "integer",
@@ -175,6 +176,46 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "properties": {
                     "product_id": {"type": "integer"},
                     "sku": {"type": "string"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_product_intelligence_cache",
+            "description": "Search the downloaded Store Intelligence filteredResponse.json product snapshot. Use for current available inventory, quantity on purchase order, closeout flag, BigCommerce status 9 AggieBuy Approval count, status 7 Awaiting Verification count, Normal/AggieBuy/Retail prices, performance scores, architecture, GPU type, and product links.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Text to search across product name, SKU, and category.",
+                    },
+                    "category": {"type": "string"},
+                    "closeout": {
+                        "type": "string",
+                        "description": "Closeout flag, usually Y or N.",
+                    },
+                    "architecture": {"type": "string"},
+                    "gpu_type": {"type": "string"},
+                    "min_qty": {"type": "integer"},
+                    "limit": {"type": "integer", "default": 20},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_product_intelligence_profile",
+            "description": "Get one Store Intelligence filteredResponse.json product snapshot by product ID, SKU, or name, including prices, price rows, stock, status counts, performance scores, architecture, GPU type, and raw source item.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "product_id": {"type": "string"},
+                    "sku": {"type": "string"},
+                    "name": {"type": "string"},
                 },
             },
         },
@@ -1043,8 +1084,10 @@ CACHE_TOOL_NAMES = {
     "get_catalog_product_profile",
     "get_cpu_family_sales_breakdown",
     "get_order_financial_summary",
+    "get_product_intelligence_profile",
     "run_bigcommerce_readonly_query",
     "search_catalog_cache",
+    "search_product_intelligence_cache",
 }
 CATALOG_TOOL_NAMES = {
     "list_catalog_products",
@@ -1061,7 +1104,7 @@ PRIMARY_TOOL_SCHEMAS = [
     if schema.get("function", {}).get("name") in PRIMARY_TOOL_NAMES
 ]
 
-ANALYTICS_CACHE_PROMPT = f"""You are a read-only BigCommerce store assistant.
+ANALYTICS_CACHE_PROMPT = f"""You are Store Intelligence, a read-only assistant for a BigCommerce store and related product intelligence feeds.
 Use read-only tools for store facts. Your default job is to choose the smallest safe read-only tool call, inspect the results, and answer in plain English.
 
 Available tables:
@@ -1070,6 +1113,8 @@ Available tables:
 - bc_customers: customer account records.
 - bc_order_addresses and bc_order_custom_fields: recipient, shipping, college/unit, department code, account number, and other checkout fields.
 - bc_products, bc_product_variants, bc_brands, and bc_categories: cached BigCommerce catalog data, normalized manufacturer, CPU family, product kind, pricing, visibility, inventory, and variants.
+- product_intelligence_items: downloaded filteredResponse.json product intelligence. Important fields: product_id, sku, name, category, qty, quantity_on_purchase_order, bc_status9, bc_status7, normal_price, ab_price, retail_price, closeout, overall_score, cpu_score, gpu_score, memory_score, storage_score, architecture, product_link, gpu_type.
+- product_intelligence_price_rows: flattened price scheme rows from filteredResponse.json. Important fields: product_id, sku, scheme_id, price_type, unit_price.
 - bc_sync_runs: sync history.
 
 Rules:
@@ -1078,6 +1123,7 @@ Rules:
 - Call get_bigcommerce_analytics_schema only when you need exact column details.
 - Call get_bigcommerce_cache_status when the user asks about freshness or sync status.
 - For questions about products currently on the BigCommerce site/catalog, product details, SKUs, prices, visibility, availability, variants, inventory levels, custom fields, category/catalog browsing, or catalog-level filters like manufacturer/CPU/product type, use search_catalog_cache or get_catalog_product_profile first.
+- For questions about current available stock, quantity on purchase order, closeouts, BigCommerce status 9/7 queued counts, product performance scores, architecture, GPU type, price tracking, AggieBuy/retail/normal price, price scheme rows, or ProductLink from the uploaded JSON feed, use search_product_intelligence_cache, get_product_intelligence_profile, or SQL over product_intelligence_items/product_intelligence_price_rows. In that feed, qty means available inventory from Inflow, bc_status9 means AggieBuy Approval, and bc_status7 means Awaiting Verification.
 - Use live read-only catalog tools only when the local catalog cache is missing the product or current live site freshness matters.
 - Product sales/history/popularity questions are different from catalog questions. For "sold", "sales", "ordered", "popular", "revenue", or "quantity sold", use SQL over bc_orders and bc_order_items, or get_catalog_product_profile when the question is about one known catalog product. For "on the site", "catalog", "visible", "price", "SKU", "inventory", "image", "variant", or "product page", use catalog tools.
 - For product popularity questions filtered by CPU family or machine form, such as "most popular Intel laptop" or "best-selling AMD desktop", use get_catalog_classified_product_sales.
@@ -3578,7 +3624,7 @@ def ask(question: str, messages: list[dict[str, Any]] | None = None) -> tuple[st
 
     if cache_loop_error:
         answer = (
-            "BigCommerce chat timed out while asking the language model to query the local cache. "
+            "Store Intelligence timed out while asking the language model to query the local cache. "
             "The cache may still be available, but I couldn't safely turn this question into a SQL answer this time."
         )
         history.append({"role": "user", "content": question})
@@ -3653,7 +3699,7 @@ def main() -> None:
     messages: list[dict[str, Any]] | None = None
 
     while True:
-        question = input("\nAsk BigCommerce: ").strip()
+        question = input("\nAsk Store Intelligence: ").strip()
         if question.lower() in {"exit", "quit"}:
             break
         if not question:

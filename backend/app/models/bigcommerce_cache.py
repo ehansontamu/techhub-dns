@@ -128,6 +128,60 @@ class BigCommerceProductVariant(Base):
     synced_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
 
+class ProductIntelligenceItem(Base):
+    __tablename__ = "product_intelligence_items"
+
+    __table_args__ = (
+        Index("ix_product_intelligence_items_sku", "sku"),
+        Index("ix_product_intelligence_items_name", "name"),
+        Index("ix_product_intelligence_items_category", "category"),
+        Index("ix_product_intelligence_items_closeout", "closeout"),
+        Index("ix_product_intelligence_items_architecture", "architecture"),
+        Index("ix_product_intelligence_items_gpu_type", "gpu_type"),
+    )
+
+    product_id = Column(String(80), primary_key=True)
+    sku = Column(String(255), nullable=True)
+    name = Column(String(500), nullable=True)
+    category = Column(String(255), nullable=True)
+    qty = Column(Integer, nullable=False, server_default="0")
+    quantity_on_purchase_order = Column(Integer, nullable=False, server_default="0")
+    bc_status9 = Column(Integer, nullable=False, server_default="0")
+    bc_status7 = Column(Integer, nullable=False, server_default="0")
+    normal_price = Column(Numeric(18, 4), nullable=True)
+    ab_price = Column(Numeric(18, 4), nullable=True)
+    retail_price = Column(Numeric(18, 4), nullable=True)
+    closeout = Column(String(10), nullable=True)
+    overall_score = Column(Integer, nullable=True)
+    cpu_score = Column(Integer, nullable=True)
+    gpu_score = Column(Integer, nullable=True)
+    memory_score = Column(Integer, nullable=True)
+    storage_score = Column(Integer, nullable=True)
+    architecture = Column(String(100), nullable=True)
+    product_link = Column(String(1000), nullable=True)
+    gpu_type = Column(String(100), nullable=True)
+    price_by_scheme_id = Column(JSON, nullable=True)
+    raw_item = Column(JSON, nullable=True)
+    synced_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class ProductIntelligencePriceRow(Base):
+    __tablename__ = "product_intelligence_price_rows"
+
+    __table_args__ = (
+        Index("ix_product_intelligence_price_rows_product", "product_id"),
+        Index("ix_product_intelligence_price_rows_scheme", "scheme_id"),
+    )
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    product_id = Column(String(80), ForeignKey("product_intelligence_items.product_id", ondelete="CASCADE"), nullable=False)
+    sku = Column(String(255), nullable=True)
+    scheme_id = Column(String(80), nullable=True)
+    price_type = Column(String(100), nullable=True)
+    unit_price = Column(Numeric(18, 4), nullable=True)
+    synced_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
 class BigCommerceOrder(Base):
     __tablename__ = "bc_orders"
 

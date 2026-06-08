@@ -13,7 +13,7 @@ const LABELS: Record<string, string> = {
   golf_cart: "Golf Cart",
   shipping: "Shipping",
   "vetting-editor": "Vetting Editor",
-  "bigcommerce-chat": "BigCommerce Chat",
+  "bigcommerce-chat": "Store Intelligence",
   settings: "Settings",
   admin: "Admin Tools",
   sessions: "Sessions",

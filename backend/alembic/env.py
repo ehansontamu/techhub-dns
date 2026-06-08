@@ -25,6 +25,8 @@ from app.models import (
     DeliveryRun,
     InflowWebhook,
     Order,
+    ProductIntelligenceItem,
+    ProductIntelligencePriceRow,
     TeamsConfig,
     TeamsNotification,
     VehicleCheckout,

@@ -14,6 +14,7 @@ from app.services.bigcommerce_analytics_cache import (
     get_bigcommerce_cache_status,
     sync_bigcommerce_catalog_cache,
     sync_bigcommerce_analytics_cache,
+    sync_product_intelligence_cache,
 )
 
 
@@ -37,7 +38,7 @@ def chat() -> Any:
     try:
         return jsonify(ask_bigcommerce_chat(question, messages))
     except BigCommerceChatError as exc:
-        logger.warning("BigCommerce chat request failed: %s", exc)
+        logger.warning("Store Intelligence request failed: %s", exc)
         return jsonify({"error": str(exc)}), 502
 
 
@@ -82,4 +83,14 @@ def catalog_cache_sync() -> Any:
         return jsonify(sync_bigcommerce_catalog_cache(max_products=max_products))
     except Exception as exc:
         logger.warning("BigCommerce catalog cache sync failed: %s", exc, exc_info=True)
+        return jsonify({"error": str(exc)}), 502
+
+
+@bp.route("/cache/product-intelligence-sync", methods=["POST"])
+@require_admin
+def product_intelligence_cache_sync() -> Any:
+    try:
+        return jsonify(sync_product_intelligence_cache())
+    except Exception as exc:
+        logger.warning("Store Intelligence cache sync failed: %s", exc, exc_info=True)
         return jsonify({"error": str(exc)}), 502

@@ -7,7 +7,7 @@ from app.services.bigcommerce_chat import chat_cli
 
 
 class BigCommerceChatError(RuntimeError):
-    """Raised when the BigCommerce chat bridge cannot answer a request."""
+    """Raised when the Store Intelligence bridge cannot answer a request."""
 
 
 CHART_REQUEST_RE = re.compile(
@@ -199,7 +199,7 @@ def ask_bigcommerce_chat(
     try:
         answer, history = chat_cli.ask(trimmed_question, chat_history)
     except Exception as exc:
-        raise BigCommerceChatError(str(exc) or "BigCommerce chat request failed.") from exc
+        raise BigCommerceChatError(str(exc) or "Store Intelligence request failed.") from exc
 
     return {
         "answer": str(answer or "").strip(),

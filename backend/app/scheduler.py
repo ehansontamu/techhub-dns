@@ -6,7 +6,10 @@ from datetime import datetime, timedelta
 import asyncio
 from app.database import get_db_session
 from app.services.inflow_service import InflowService
-from app.services.bigcommerce_analytics_cache import sync_bigcommerce_analytics_cache
+from app.services.bigcommerce_analytics_cache import (
+    sync_bigcommerce_analytics_cache,
+    sync_product_intelligence_cache,
+)
 from app.models.inflow_webhook import InflowWebhook, WebhookStatus
 from app.config import settings
 from app.api.routes.inflow import _run_inflow_sync
@@ -22,6 +25,7 @@ _WEBHOOK_HEALTH_CHECK_INTERVAL_MINUTES = 60
 _BIGCOMMERCE_ANALYTICS_SYNC_INTERVAL_MINUTES = 15
 _BIGCOMMERCE_ANALYTICS_NIGHTLY_BACKFILL_HOUR = 0
 _BIGCOMMERCE_ANALYTICS_NIGHTLY_BACKFILL_MINUTE = 0
+_PRODUCT_INTELLIGENCE_SYNC_INTERVAL_MINUTES = 5
 _INFLOW_EVENT_MAPPING = {
     "orderCreated": "salesOrder.created",
     "orderUpdated": "salesOrder.updated",
@@ -208,6 +212,16 @@ def backfill_bigcommerce_analytics_cache_job() -> None:
             exc,
             exc_info=True,
         )
+
+
+def sync_product_intelligence_cache_job() -> None:
+    """Background task to refresh the lightweight Store Intelligence product feed."""
+
+    try:
+        result = sync_product_intelligence_cache()
+        logger.info("Store Intelligence product feed sync finished: %s", result)
+    except Exception as exc:
+        logger.error("Store Intelligence product feed sync failed: %s", exc, exc_info=True)
 
 
 def reconcile_inflow_webhook_state() -> None:
@@ -425,6 +439,14 @@ def start_scheduler():
         id="bigcommerce_analytics_nightly_backfill",
         name="Nightly BigCommerce analytics cache backfill",
         replace_existing=True,
+    )
+    scheduler.add_job(
+        sync_product_intelligence_cache_job,
+        trigger=IntervalTrigger(minutes=_PRODUCT_INTELLIGENCE_SYNC_INTERVAL_MINUTES),
+        id="product_intelligence_sync",
+        name="Sync Store Intelligence product feed",
+        replace_existing=True,
+        next_run_time=datetime.now() + timedelta(minutes=1),
     )
 
     scheduler.start()

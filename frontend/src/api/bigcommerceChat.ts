@@ -46,8 +46,12 @@ export interface BigCommerceCacheStatus {
   line_item_count: number;
   product_count?: number;
   variant_count?: number;
+  product_intelligence_count?: number;
+  product_intelligence_price_row_count?: number;
   catalog_tables_available?: boolean;
+  product_intelligence_tables_available?: boolean;
   last_catalog_sync?: Record<string, unknown> | null;
+  last_product_intelligence_sync?: Record<string, unknown> | null;
   latest_order_modified_at: string | null;
   is_stale: boolean;
   stale_after_minutes: number;
@@ -79,6 +83,17 @@ export const bigcommerceChatApi = {
     const response = await apiClient.post("/bigcommerce-chat/cache/catalog-sync", {
       max_products: maxProducts,
     });
+    return response.data;
+  },
+
+  async syncProductIntelligence(): Promise<{
+    items_upserted: number;
+    items_deleted: number;
+    price_rows_upserted: number;
+    source_url: string;
+    synced_at: string;
+  }> {
+    const response = await apiClient.post("/bigcommerce-chat/cache/product-intelligence-sync");
     return response.data;
   },
 };

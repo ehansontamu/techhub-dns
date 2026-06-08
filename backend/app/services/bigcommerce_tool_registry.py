@@ -11,8 +11,10 @@ from app.services.bigcommerce_analytics_cache import (
     get_catalog_product_profile,
     get_cpu_family_sales_breakdown,
     get_order_financial_summary,
+    get_product_intelligence_profile,
     run_bigcommerce_readonly_query,
     search_catalog_cache,
+    search_product_intelligence_cache,
 )
 from app.services.bigcommerce_chat.bigcommerce_tools import READ_ONLY_TOOLS
 
@@ -26,8 +28,10 @@ WAREHOUSE_TOOL_NAMES = {
     "get_catalog_product_profile",
     "get_cpu_family_sales_breakdown",
     "get_order_financial_summary",
+    "get_product_intelligence_profile",
     "run_bigcommerce_readonly_query",
     "search_catalog_cache",
+    "search_product_intelligence_cache",
 }
 
 CHAT_TOOLS: dict[str, ToolCallable] = {
@@ -39,8 +43,10 @@ CHAT_TOOLS: dict[str, ToolCallable] = {
     "get_catalog_product_profile": get_catalog_product_profile,
     "get_cpu_family_sales_breakdown": get_cpu_family_sales_breakdown,
     "get_order_financial_summary": get_order_financial_summary,
+    "get_product_intelligence_profile": get_product_intelligence_profile,
     "run_bigcommerce_readonly_query": run_bigcommerce_readonly_query,
     "search_catalog_cache": search_catalog_cache,
+    "search_product_intelligence_cache": search_product_intelligence_cache,
 }
 
 
