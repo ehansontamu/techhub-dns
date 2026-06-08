@@ -21,6 +21,7 @@ import {
   ResponsiveContainer,
   Scatter,
   ScatterChart,
+  Label,
   Tooltip,
   XAxis,
   YAxis,
@@ -360,14 +361,24 @@ function BigCommerceChatChart({ chart }: { chart: BigCommerceChartData }) {
               name={chart.xKey}
               tick={{ fontSize: 11 }}
               tickFormatter={xTickFormatter}
-            />
+            >
+              <Label value={chart.xKey} offset={-16} position="insideBottom" fontSize={12} />
+            </XAxis>
             <YAxis
               type="number"
               dataKey={firstSeries.key}
               name={firstSeries.label}
               tick={{ fontSize: 11 }}
               tickFormatter={yTickFormatter}
-            />
+            >
+              <Label
+                value={firstSeries.label}
+                angle={-90}
+                position="insideLeft"
+                style={{ textAnchor: "middle" }}
+                fontSize={12}
+              />
+            </YAxis>
             <Tooltip
               cursor={{ strokeDasharray: "3 3" }}
               formatter={tooltipFormatter}

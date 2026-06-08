@@ -106,6 +106,31 @@ def _value_kind_for_column(header: str, values: list[str], question: str = "") -
     return "number"
 
 
+def _is_scatter_axis_candidate(header: str, values: list[str], prefer_percent: bool) -> bool:
+    normalized_header = re.sub(r"[^a-z0-9]+", " ", header.strip().lower()).strip()
+    label_headers = {
+        "product",
+        "product name",
+        "name",
+        "sku",
+        "category",
+        "customer",
+        "college",
+        "unit",
+        "department",
+        "order",
+        "order id",
+        "month",
+        "date",
+    }
+    if normalized_header in label_headers:
+        return False
+
+    parsed_values = [_parse_chart_number(value, prefer_percent) for value in values]
+    parsed_count = sum(value is not None for value in parsed_values)
+    return parsed_count >= max(2, int(len(values) * 0.6))
+
+
 def _build_chart_from_answer(question: str, answer: str) -> dict[str, Any] | None:
     if not CHART_REQUEST_RE.search(question):
         return None
@@ -148,12 +173,14 @@ def _build_chart_from_answer(question: str, answer: str) -> dict[str, Any] | Non
         if chart_type == "scatter":
             numeric_columns: list[tuple[int, str, list[float | None]]] = []
             for column_index, header in enumerate(headers):
+                column_values = [row[column_index] for row in rows]
+                if not _is_scatter_axis_candidate(header, column_values, prefer_percent):
+                    continue
                 parsed_values = [
-                    _parse_chart_number(row[column_index], prefer_percent)
-                    for row in rows
+                    _parse_chart_number(value, prefer_percent)
+                    for value in column_values
                 ]
-                if any(value is not None for value in parsed_values):
-                    numeric_columns.append((column_index, header or f"Value {column_index + 1}", parsed_values))
+                numeric_columns.append((column_index, header or f"Value {column_index + 1}", parsed_values))
 
             if len(numeric_columns) < 2:
                 continue
