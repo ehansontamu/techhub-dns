@@ -14,7 +14,18 @@ class LLMConfigError(RuntimeError):
     pass
 
 
-LLM_REQUEST_TIMEOUT_SECONDS = 25
+def _int_env(name: str, default: int) -> int:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+LLM_REQUEST_TIMEOUT_SECONDS = _int_env("LLM_REQUEST_TIMEOUT_SECONDS", 25)
+LLM_MAX_ROUNDS = _int_env("LLM_MAX_ROUNDS", 5)
 
 
 def _config() -> tuple[str, str, str]:
@@ -109,6 +120,7 @@ def chat_completion(
         "model": model,
         "messages": messages,
         "stream": False,
+        "temperature": 0,
     }
     if tools:
         payload["tools"] = tools

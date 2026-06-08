@@ -14,7 +14,11 @@ from app.services.bigcommerce_analytics_cache import (
     run_bigcommerce_readonly_query,
 )
 from app.services.bigcommerce_tool_registry import CHAT_TOOLS, READ_ONLY_TOOLS, call_tool
-from app.services.bigcommerce_chat.llm_client import chat_completion
+from app.services.bigcommerce_chat.llm_client import LLM_MAX_ROUNDS, chat_completion
+from app.services.bigcommerce_chat.prompts import (
+    build_analytics_cache_prompt,
+    build_system_prompt,
+)
 
 load_dotenv()
 
@@ -30,60 +34,7 @@ except ZoneInfoNotFoundError:
     DISPLAY_TIMEZONE = None if DISPLAY_TIMEZONE_NAME == "America/Chicago" else timezone.utc
 
 
-SYSTEM_PROMPT = f"""You are Store Intelligence, a read-only assistant for a BigCommerce store and related product intelligence feeds.
-Use tools for store facts. Do not guess order statuses, totals, inventory, or customer details.
-Never claim you can change, cancel, refund, edit, fulfill, or update anything.
-Current date: {date.today().isoformat()}.
-Before choosing tools for analytics questions, identify the entity being ranked or counted, the metric, the date range, and any customer/product/checkout filters. Choose the smallest tool call that directly answers that metric.
-When you mention a specific order ID, write it as "Order 1234"; the web UI will make it clickable. Do not print raw BigCommerce admin URLs.
-For BigCommerce analytics over orders, products, customers, dates, statuses, colleges/units, departments, account numbers, recipients, or line items, prefer the local analytics cache: first use get_bigcommerce_analytics_schema if you need column names, then use run_bigcommerce_readonly_query. This is usually better than live BigCommerce API tools because it lets you sort, join, group, and filter precisely in SQL.
-When using run_bigcommerce_readonly_query, write one read-only SELECT against bc_orders, bc_order_items, bc_customers, bc_order_addresses, bc_order_custom_fields, bc_products, bc_product_variants, bc_brands, bc_categories, bc_sync_runs, product_intelligence_items, or product_intelligence_price_rows. Exclude Cancelled, Declined, and Refunded orders for sales analytics unless the user asks otherwise. Include bc_orders.id in results when specific orders matter.
-For total sales/revenue, sum bc_orders.total_inc_tax at the order grain. Do not join bc_order_items and then sum bc_orders.total_inc_tax, because that duplicates order totals once per line item. For quantity sold, sum bc_order_items.quantity. "Savings" is ambiguous; do not use line-item base_total minus total_inc_tax as savings. Use explicit BigCommerce discount/coupon fields only if verified; if those fields are absent, say the available BigCommerce cache does not expose a reliable savings metric. Do not report unknown savings as $0.
-Use get_bigcommerce_cache_status when the user asks about data freshness or when an answer depends on whether the local cache is current. Do not mention cache staleness for normal historical analytics; mention it only when the user asks about sync/freshness, asks for live/current/today/right-now data, or the answer truly depends on orders that may have changed since the last sync.
-When asked for total/store-wide revenue, prefer run_bigcommerce_readonly_query against bc_orders. Do not use college/unit breakdowns unless the user explicitly asks for a breakdown/by college/by unit.
-When asked what customers were charged for shipping by carrier or method, use get_shipping_spend_by_method. Do not treat shipping carriers like product keywords. When asked what the store/team spent or paid to carriers for shipping, explain that the current BigCommerce order API data does not expose actual carrier invoice cost.
-For flexible analytics, prefer run_bigcommerce_readonly_query. Use get_order_summary, get_grouped_order_summary, get_ranked_orders, get_product_sales_leaderboard, and get_source_orders_for_summary only as live API fallbacks when the cache cannot answer.
-For order ranking questions, prefer SQL over bc_orders. Choose the rank metric from the user's words: dollars/value/amount means total_inc_tax; first/earliest/submitted date means date_created ascending; latest/newest/most recent means date_created descending; first order number means id ascending; most/fewest items means items_total.
-For product popularity, top products, "which product sold most", "which order had the most of a product", or combined product/source-order questions, prefer SQL joining bc_orders to bc_order_items.
-For questions about products currently on the BigCommerce site/catalog, product details, SKUs, prices, visibility, availability, variants, inventory levels, images, custom fields, or category/catalog browsing, use search_catalog_cache or get_catalog_product_profile first. Use live read-only catalog tools only when the local catalog cache is missing the product or current live site freshness matters. Product sales/history/popularity questions are different from catalog questions: use SQL or get_catalog_product_profile for sold/sales/revenue/quantity ordered, and catalog tools for site/catalog/product-page facts.
-For questions about current available inventory, quantities on purchase order, Closeout status, AggieBuy Approval count, Awaiting Verification count, Normal/AggieBuy/Retail price tracking, price scheme rows, product performance scores, architecture, GPU type, or ProductLink from the filteredResponse.json feed, use product_intelligence_items/product_intelligence_price_rows through SQL, search_product_intelligence_cache, or get_product_intelligence_profile. In that feed, Qty means available inventory from Inflow; bc_status9 means AggieBuy Approval; bc_status7 means Awaiting Verification. For "best performance" questions, filter by category/name as needed and sort by the relevant score descending, such as cpu_score for CPU performance.
-When a user says "currently sell" for a product in the Store Intelligence feed, treat it as products present in the current feed/site product set. Do not add an in-stock/qty > 0 filter unless the user says in stock, available, on hand, inventory, or similar.
-For product popularity questions filtered by CPU family or machine form, such as "most popular Intel laptop" or "best-selling AMD desktop", use get_catalog_classified_product_sales.
-For machine CPU-family sales comparisons over time involving Windows ARM, Apple silicon, Intel, or AMD, use get_cpu_family_sales_breakdown. For calendar Q3/Q4 2025 through Q1/Q2 2026, use start_date="2025-07-01" and end_date="2026-07-01"; Q2 2026 may be partial if current data is before July 2026. If the user says month over month, use group_by="month" even when the date range is described by quarters.
-AMD CPU means AMD processor, such as Ryzen, Threadripper, EPYC, Athlon, or an explicit AMD processor/CPU/APU field. Do not count AMD Radeon, Radeon Graphics, or AMD graphics as AMD CPU.
-When answering CPU-family sales questions, mention the top contributing products for the family or period when the tool provides them. If one product dominates a total, include that product name and quantity.
-When asked which orders took the longest to fulfill, use get_fulfillment_aging_report so the answer includes both longest completed fulfillment durations and oldest currently-open orders. Use get_oldest_unfulfilled_orders only when the user explicitly asks for currently open/unfulfilled orders.
-When asked how long a specific order took to fulfill, use get_order_fulfillment_timing.
-When a user gives a name like "Jim's order", first search recent orders by customer name.
-When asked who placed or ordered a specific order ID, use get_order_identity and include placed-by, recipient, shipping, and billing/contact context.
-When asked about a department or company, count recent orders using company/name/message fields.
-When asked about popular/top products for a college/unit, department code, account number, or recipient, use get_top_products_for_dimension_value.
-Use get_top_products_sold_to only for older fuzzy customer/company text searches when no checkout dimension is implied.
-When asked which customer bought the most of a product brand/type, treat customer as a person/name and use get_top_customers_for_product_keyword with group_by="person".
-When asked who/customer bought the most of a product brand/type within a college/unit, department code, account number, or recipient, use get_top_customers_for_product_keyword_in_dimension.
-For "customer" or "who ordered/placed", use the BigCommerce attached customer account from order.customer_id, not billing/shipping contact. Billing contact and recipient are separate context fields.
-When asked which college, unit, school, group, or department bought the most, use get_top_customers_for_product_keyword with group_by="college_unit".
-If the word customer seems ambiguous between a person and a college/unit, answer with the person view and mention the related college/unit values. Ask a brief follow-up only if the user's next decision depends on that distinction.
-Treat typos and broad phrases like "HP machines" as product keyword searches.
-When asked a follow-up like "what did he order" or "which items were those", use get_product_keyword_order_lines_for_customer with the customer and product keyword from context.
-When asked for the full contents of orders, every item on those orders, or all items purchased on each order, use get_full_order_contents_for_customer_product_in_dimension when the context includes a customer, product keyword, and checkout dimension. Use get_full_order_contents when the user gives explicit order IDs.
-When asked what orders a person placed, use get_full_order_contents_for_placed_by_customer. If the person only appears as billing/shipping contact, say that clearly and do not call those placed-by orders.
-If a tool reports a tie, say it is a tie and list the tied customers instead of naming only one winner.
-When asked for a percentage breakdown or comparison of Dell vs HP computers, use compare_computer_brand_sales_since.
-When asked for purchases, sales, revenue, or order breakdown by college/unit, use get_sales_by_dimension with dimension="college_unit". The college/unit is the custom address field named Recipient College/Unit; do not combine it with Department Code.
-When asked specifically for department code breakdowns, use get_sales_by_dimension with dimension="department_code".
-When asked for account number breakdowns, use get_sales_by_dimension with dimension="account_number".
-When asked for recipient breakdowns, use get_sales_by_dimension with dimension="recipient".
-When asked for orders, top products, or comparisons for a checkout dimension value such as a college/unit, department code, account number, or recipient, use the dimension tools. Valid dimensions are college_unit, department_code, account_number, and recipient.
-For these breakdowns, clearly say how many groups are displayed, how many total groups exist, how many displayed orders are covered, and include an "All other groups" summary when remaining_totals is nonzero.
-For "since the beginning of 2026", pass start_date="2026-01-01".
-For "all time", "all-time", or "ever", pass start_date="2000-01-01" unless the selected tool explicitly says it defaults to all-time.
-The fiscal year runs from September 1 through August 31. For example, fiscal year 2026 means 2025-09-01 through 2026-09-01 as a half-open date range.
-Non-precise names can be aliases. "Bush School" can mean Bush or Bush School of Government and Public Service.
-"Arts and Sciences" can mean College of Arts and Sciences or Arts & Sciences.
-Keep answers concise and include order IDs when relevant. Do not end answers with generic follow-up menus like "If you want, I can also..." unless the user explicitly asks what else can be done.
-When the user asks for a graph, chart, plot, or visualization, include a compact markdown table containing the values to chart.
-"""
+SYSTEM_PROMPT = build_system_prompt()
 
 
 TOOL_SCHEMAS: list[dict[str, Any]] = [
@@ -1135,53 +1086,7 @@ PRIMARY_TOOL_SCHEMAS = [
     if schema.get("function", {}).get("name") in PRIMARY_TOOL_NAMES
 ]
 
-ANALYTICS_CACHE_PROMPT = f"""You are Store Intelligence, a read-only assistant for a BigCommerce store and related product intelligence feeds.
-Use read-only tools for store facts. Your default job is to choose the smallest safe read-only tool call, inspect the results, and answer in plain English.
-
-Available tables:
-- bc_orders: one row per order. Important fields: id, date_created, status, total_inc_tax, subtotal_inc_tax, shipping_cost_inc_tax, items_total, customer_id, customer_name, company, billing_*.
-- bc_order_items: one row per order line. Important fields: order_id, product_id, name, sku, quantity, total_inc_tax, base_total, product_options.
-- bc_customers: customer account records.
-- bc_order_addresses and bc_order_custom_fields: recipient, shipping, college/unit, department code, account number, and other checkout fields.
-- bc_products, bc_product_variants, bc_brands, and bc_categories: cached BigCommerce catalog data, normalized manufacturer, CPU family, product kind, pricing, visibility, inventory, and variants.
-- product_intelligence_items: downloaded filteredResponse.json product intelligence. Important fields: product_id, sku, name, category, qty, quantity_on_purchase_order, bc_status9, bc_status7, normal_price, ab_price, retail_price, closeout, overall_score, cpu_score, gpu_score, memory_score, storage_score, architecture, product_link, gpu_type.
-- product_intelligence_price_rows: flattened price scheme rows from filteredResponse.json. Important fields: product_id, sku, scheme_id, price_type, unit_price.
-- bc_sync_runs: sync history.
-
-Rules:
-- Current date: {date.today().isoformat()}.
-- Call run_bigcommerce_readonly_query for analytics, rankings, counts, totals, date questions, products, customers, colleges/units, departments, accounts, and shipping-charge questions.
-- Call get_bigcommerce_analytics_schema only when you need exact column details.
-- Call get_bigcommerce_cache_status when the user asks about freshness or sync status.
-- For questions about products currently on the BigCommerce site/catalog, product details, SKUs, prices, visibility, availability, variants, inventory levels, custom fields, category/catalog browsing, or catalog-level filters like manufacturer/CPU/product type, use search_catalog_cache or get_catalog_product_profile first.
-- For questions about current available stock, quantity on purchase order, closeouts, BigCommerce status 9/7 queued counts, product performance scores, architecture, GPU type, price tracking, AggieBuy/retail/normal price, price scheme rows, or ProductLink from the uploaded JSON feed, use search_product_intelligence_cache, get_product_intelligence_profile, or SQL over product_intelligence_items/product_intelligence_price_rows. In that feed, qty means available inventory from Inflow, bc_status9 means AggieBuy Approval, and bc_status7 means Awaiting Verification.
-- For "best CPU/GPU/memory/storage/overall performing" product questions, use product_intelligence_items and sort by cpu_score/gpu_score/memory_score/storage_score/overall_score descending. Filter category/name to the requested product type, such as category contains laptop. Do not use alphabetical product search results as if they were ranked.
-- When a user says "currently sell" for a product in the Store Intelligence feed, treat it as products present in the current feed/site product set. Do not add an in-stock/qty > 0 filter unless the user says in stock, available, on hand, inventory, or similar.
-- Use live read-only catalog tools only when the local catalog cache is missing the product or current live site freshness matters.
-- Product sales/history/popularity questions are different from catalog questions. For "sold", "sales", "ordered", "popular", "revenue", or "quantity sold", use SQL over bc_orders and bc_order_items, or get_catalog_product_profile when the question is about one known catalog product. For "on the site", "catalog", "visible", "price", "SKU", "inventory", "image", "variant", or "product page", use catalog tools.
-- For product popularity questions filtered by CPU family or machine form, such as "most popular Intel laptop" or "best-selling AMD desktop", use get_catalog_classified_product_sales.
-- For questions combining catalog/spec filters with sales ranking, such as "best selling computer with an AMD CPU", "which touchscreen laptop sells best", or "sales for products with Ryzen", use get_catalog_filtered_product_sales instead of manually fetching broad catalog results and writing a large SQL query. For month-over-month versions of those questions, call it with group_by="month".
-- For CPU-family percentage breakdowns or comparisons involving Windows ARM, Apple silicon, Intel, and AMD, use get_cpu_family_sales_breakdown instead of SQL. For calendar Q3/Q4 2025 through Q1/Q2 2026, use start_date="2025-07-01" and end_date="2026-07-01"; Q2 2026 may be partial if current data is before July 2026. If the user says month over month, use group_by="month" even when the date range is described by quarters.
-- AMD CPU means AMD processor, such as Ryzen, Threadripper, EPYC, Athlon, or an explicit AMD processor/CPU/APU field. Do not count AMD Radeon, Radeon Graphics, or AMD graphics as AMD CPU.
-- When answering CPU-family sales questions, mention the top contributing products for the family or period when the tool provides them. If one product dominates a total, include that product name and quantity.
-- Catalog tools are read-only. Never claim you can create, update, delete, publish, hide, price, or inventory-adjust a product.
-- Write only SELECT queries against the tables above.
-- For sales/revenue analytics, exclude statuses 'Cancelled', 'Declined', and 'Refunded' unless the user explicitly asks to include them. For "complete only", filter status IN ('Completed', 'Complete').
-- For total sales/revenue by date range, sum bc_orders.total_inc_tax from bc_orders only. Do not join bc_order_items and then sum bc_orders.total_inc_tax, because that duplicates each order once per line item. If line-item filters are needed, first select distinct matching order IDs or aggregate one row per order, then sum order totals.
-- For quantity sold, sum bc_order_items.quantity. For product/line revenue, sum bc_order_items.total_inc_tax. Keep order-total metrics and line-item metrics at the correct grain.
-- "Savings" is ambiguous. For sales plus savings/discount questions, prefer get_order_financial_summary. Do not calculate savings as bc_order_items.base_total minus bc_order_items.total_inc_tax. If explicit BigCommerce discount/coupon fields are absent, say the available BigCommerce cache does not expose a reliable savings metric and ask what savings definition/source should be used. Do not report unknown savings as $0.
-- For all-time/ever, use a broad lower bound such as date_created >= '2000-01-01' or omit the date bound if the question truly asks all rows.
-- For calendar years/months, use half-open ranges: date_created >= '2025-01-01' AND date_created < '2026-01-01'.
-- The fiscal year runs from September 1 through August 31. Use half-open ranges for fiscal years: fiscal year 2026 is date_created >= '2025-09-01' AND date_created < '2026-09-01'.
-- For "last week", use the previous Monday through current Monday unless the user says "last 7 days". For "last month", use the previous calendar month.
-- For comparisons like "this year's monthly sales volume compared with last year", return a month-by-month table comparing the current year to the same months in the prior year. Include both quantity and dollars if requested; do not collapse the answer to a single year-to-date total.
-- When ranking orders by dollars/value/largest/biggest, use bc_orders.total_inc_tax DESC. First/earliest/submitted means date_created ASC. Latest/newest means date_created DESC. Most items means items_total DESC.
-- For product popularity, join bc_orders to bc_order_items and rank by SUM(bc_order_items.quantity), not revenue, unless the user asks for revenue.
-- When a specific order matters, include bc_orders.id as order_id in the query and write it as "Order 1234"; do not print raw admin URLs.
-- Keep answers concise. Do not mention cache staleness or last sync time for normal historical analytics. Mention cache freshness only when the user asks about sync/freshness, asks for live/current/today/right-now data, or the answer truly depends on orders that may have changed since the last sync. Do not end answers with generic follow-up menus like "If you want, I can also..." unless the user explicitly asks what else can be done.
-- When the user asks for a graph, chart, plot, or visualization, include a compact markdown table containing the values to chart.
-- If a SQL query errors, fix the SQL and try again. Do not ask the user to narrow the question just because SQL needs repair.
-"""
+ANALYTICS_CACHE_PROMPT = build_analytics_cache_prompt()
 
 LIVE_TOOL_SCHEMAS = [
     schema
@@ -1235,9 +1140,126 @@ def _call_tool(name: str, arguments_json: str) -> str:
     return json.dumps(result, default=str)
 
 
+def _is_money_column(column: str) -> bool:
+    lowered = column.lower()
+    return any(
+        token in lowered
+        for token in (
+            "total",
+            "revenue",
+            "sales",
+            "shipping",
+            "amount",
+            "price",
+            "cost",
+            "subtotal",
+            "discount",
+        )
+    )
+
+
+def _is_count_column(column: str) -> bool:
+    lowered = column.lower()
+    return "count" in lowered or lowered in {"quantity", "qty", "items_total"}
+
+
+def _format_sql_cell(column: str, value: Any) -> str:
+    if value is None:
+        return "n/a"
+    if isinstance(value, bool):
+        return "yes" if value else "no"
+    if isinstance(value, (int, float)):
+        if _is_money_column(column):
+            return _format_money(float(value))
+        return _format_number(value)
+    return str(value)
+
+
+def _format_single_row_sql_aggregate(
+    row: dict[str, Any],
+    columns: list[str],
+) -> str | None:
+    if not row or not columns:
+        return None
+
+    parts: list[str] = []
+    for column in columns:
+        value = row.get(column)
+        if value is None:
+            continue
+        label = column.replace("_", " ")
+        if _is_money_column(column) or _is_count_column(column) or isinstance(value, (int, float)):
+            parts.append(f"{label}: {_format_sql_cell(column, value)}")
+        else:
+            parts.append(f"{label}: {value}")
+
+    if not parts:
+        return None
+    return ". ".join(parts) + "."
+
+
+def _format_ranking_sql_rows(
+    rows: list[dict[str, Any]],
+    columns: list[str],
+) -> str | None:
+    if len(columns) < 2 or not rows:
+        return None
+
+    label_column = columns[0]
+    value_columns = columns[1:]
+    if not any(
+        isinstance(row.get(column), (int, float))
+        for row in rows
+        for column in value_columns
+    ):
+        return None
+
+    lines: list[str] = []
+    for index, row in enumerate(rows, start=1):
+        label = row.get(label_column)
+        order_id = row.get("order_id") or row.get("id")
+        prefix = f"Order {order_id} | " if order_id is not None else ""
+        value_parts = [
+            f"{column.replace('_', ' ')}: {_format_sql_cell(column, row.get(column))}"
+            for column in value_columns
+            if row.get(column) is not None
+        ]
+        lines.append(f"{index}. {prefix}{label} | " + " | ".join(value_parts))
+
+    return "\n".join(lines)
+
+
+def _format_sql_query_result(result: dict[str, Any], _question: str) -> str | None:
+    if result.get("error"):
+        return None
+
+    rows = result.get("rows") or []
+    columns = result.get("columns") or []
+    if not rows:
+        return "No matching rows in the local analytics cache."
+
+    if len(rows) == 1:
+        aggregate_answer = _format_single_row_sql_aggregate(rows[0], columns)
+        if aggregate_answer:
+            return aggregate_answer
+
+    if 1 <= len(rows) <= 50 and len(columns) <= 8:
+        ranking_answer = _format_ranking_sql_rows(rows, columns)
+        if ranking_answer:
+            if result.get("truncated"):
+                ranking_answer += (
+                    f"\nNote: results were truncated at {result.get('limit')} rows."
+                )
+            return ranking_answer
+
+    return None
+
+
 def _format_direct_tool_answer(name: str, result: dict[str, Any]) -> str | None:
     if result.get("error"):
         return None
+    if name == "run_bigcommerce_readonly_query":
+        return _format_sql_query_result(result, "")
     if name in {"get_purchase_breakdown_by_college_unit", "get_sales_by_dimension"}:
         return _format_purchase_breakdown(result)
     if name == "get_revenue_summary":
@@ -1384,12 +1406,13 @@ def _is_tool_plan_without_answer(answer: str) -> bool:
 def _run_primary_cache_chat(
     question: str,
     history: list[dict[str, Any]],
-    max_rounds: int = 5,
+    max_rounds: int | None = None,
 ) -> tuple[str | None, bool]:
     cache_history = _compact_chat_history_for_cache(history, question)
     saw_cache_failure = False
+    round_limit = max_rounds or LLM_MAX_ROUNDS
 
-    for round_index in range(max_rounds):
+    for round_index in range(round_limit):
         message = _coerce_text_tool_call(
             chat_completion(
                 messages=cache_history,
@@ -1408,12 +1431,17 @@ def _run_primary_cache_chat(
             message = dict(message)
             message["tool_calls"] = tool_calls
             cache_history.append(_assistant_history_message(message))
-            _, cache_failed = _run_tool_calls(tool_calls, cache_history)
+            formatted_direct_answer, cache_failed = _run_tool_calls(tool_calls, cache_history)
             saw_cache_failure = saw_cache_failure or cache_failed
+            if formatted_direct_answer:
+                return (
+                    _prepare_final_answer(formatted_direct_answer, question),
+                    saw_cache_failure,
+                )
             continue
 
         answer = _sanitize_assistant_answer(message.get("content") or "")
-        if _is_tool_plan_without_answer(answer) and round_index < max_rounds - 1:
+        if _is_tool_plan_without_answer(answer) and round_index < round_limit - 1:
             cache_history.append({"role": "assistant", "content": answer})
             cache_history.append(
                 {
@@ -2861,6 +2889,203 @@ def _looks_like_secret_request(question: str) -> bool:
     return any(term in normalized for term in secret_terms)
 
 
+def _extract_sales_by_dimension_request(question: str) -> dict[str, Any] | None:
+    normalized = question.lower()
+    if not any(term in normalized for term in ["breakdown", " by ", "per "]):
+        return None
+    if not any(term in normalized for term in ["sales", "revenue", "purchases", "orders"]):
+        return None
+
+    dimension = None
+    if any(term in normalized for term in ["college/unit", "college unit", "college", "unit", "school"]):
+        dimension = "college_unit"
+    elif "department code" in normalized or "department" in normalized:
+        dimension = "department_code"
+    elif "account number" in normalized:
+        dimension = "account_number"
+    elif "recipient" in normalized:
+        dimension = "recipient"
+    else:
+        return None
+
+    days = 90
+    month_match = re.search(r"\blast\s+(\d+)\s+months?\b", normalized)
+    if month_match:
+        days = _months_to_days(int(month_match.group(1)))
+    day_match = re.search(r"\blast\s+(\d+)\s+days?\b", normalized)
+    if day_match:
+        days = int(day_match.group(1))
+    if "this year" in normalized or "year to date" in normalized or "ytd" in normalized:
+        days = max(1, (date.today() - date(date.today().year, 1, 1)).days + 1)
+
+    return {
+        "dimension": dimension,
+        "days": days,
+        "limit": 25,
+        "max_orders": 1000,
+    }
+
+
+def _answer_from_sales_total_request(request: dict[str, Any]) -> str:
+    answer = None
+    try:
+        cache_result = run_bigcommerce_readonly_query(request["sql"], limit=1)
+        cache_status = cache_result.get("cache_status") or {}
+        rows = cache_result.get("rows") or []
+        if int(cache_status.get("order_count") or 0) > 0 and rows:
+            row = rows[0]
+            answer = _format_sales_total_result(
+                row.get("total_sales"),
+                row.get("order_count"),
+                row.get("item_count"),
+                request,
+                "local analytics cache",
+            )
+    except Exception:
+        answer = None
+
+    if answer is None:
+        live_result = READ_ONLY_TOOLS["get_revenue_summary"](**request["live_args"])
+        answer = _format_sales_total_result(
+            live_result.get("total_revenue_inc_tax"),
+            live_result.get("included_order_count"),
+            None,
+            request,
+            "live BigCommerce API",
+        )
+        if live_result.get("is_truncated"):
+            answer += (
+                f" Warning: order scan hit max_orders={live_result.get('max_orders')}; "
+                "total may be incomplete."
+            )
+    return answer
+
+
+def _answer_from_shipping_total_request(request: dict[str, Any]) -> str:
+    answer = None
+    try:
+        cache_result = run_bigcommerce_readonly_query(request["sql"], limit=1)
+        cache_status = cache_result.get("cache_status") or {}
+        rows = cache_result.get("rows") or []
+        if int(cache_status.get("order_count") or 0) > 0 and rows:
+            row = rows[0]
+            answer = _format_shipping_total_result(
+                row.get("total_shipping_charged"),
+                row.get("order_count"),
+                request,
+                "local analytics cache",
+            )
+    except Exception:
+        answer = None
+
+    if answer is None:
+        live_result = READ_ONLY_TOOLS["get_shipping_charge_total"](**request["live_args"])
+        answer = _format_shipping_total_result(
+            live_result.get("matched_shipping_total_inc_tax"),
+            live_result.get("matched_order_count"),
+            request,
+            "live BigCommerce API",
+        )
+        if live_result.get("is_truncated"):
+            answer += (
+                f" Warning: order scan hit max_orders={live_result.get('max_orders')}; "
+                "total may be incomplete."
+            )
+    return answer
+
+
+def _answer_from_revenue_summary_request(request: dict[str, Any]) -> str:
+    result = call_tool(
+        "get_order_financial_summary",
+        {
+            "start_date": request.get("start_date"),
+            "end_date": request.get("end_date"),
+            "exclude_statuses": request.get("exclude_statuses"),
+        },
+    )
+    if not result.get("error"):
+        return _format_order_financial_summary(result)
+
+    live_result = READ_ONLY_TOOLS["get_revenue_summary"](
+        start_date=request.get("start_date"),
+        end_date=request.get("end_date"),
+        max_orders=request.get("max_orders", 50000),
+        exclude_statuses=request.get("exclude_statuses"),
+    )
+    answer = _format_sales_total_result(
+        live_result.get("total_revenue_inc_tax"),
+        live_result.get("included_order_count"),
+        None,
+        {
+            "label": (
+                f"calendar year {request.get('start_date', '')[:4]}"
+                if request.get("start_date")
+                else "the requested period"
+            ),
+        },
+        "live BigCommerce API",
+    )
+    if live_result.get("is_truncated"):
+        answer += (
+            f" Warning: order scan hit max_orders={live_result.get('max_orders')}; "
+            "total may be incomplete."
+        )
+    return answer
+
+
+def _answer_from_shipping_spend_request(request: dict[str, Any]) -> str:
+    if request.get("unsupported_actual_carrier_spend"):
+        return (
+            "The current BigCommerce order data does not expose actual carrier invoice "
+            "cost or what the store paid carriers. I can report what customers were "
+            "charged for shipping by method instead."
+        )
+
+    tool_args = {
+        key: value
+        for key, value in request.items()
+        if key != "unsupported_actual_carrier_spend"
+    }
+    result = READ_ONLY_TOOLS["get_shipping_spend_by_method"](**tool_args)
+    formatted = _format_shipping_spend(result)
+    return formatted or "I could not calculate shipping charges for that request."
+
+
+def _answer_from_ranked_order_request(request: dict[str, Any]) -> str:
+    result = READ_ONLY_TOOLS["get_ranked_orders"](**request)
+    return _add_order_links(_format_ranked_orders(result))
+
+
+def _try_deterministic_analytics_answer(question: str) -> str | None:
+    sales_total_request = _extract_sales_total_request(question)
+    if sales_total_request:
+        return _answer_from_sales_total_request(sales_total_request)
+
+    revenue_summary_request = _extract_revenue_summary_request(question)
+    if revenue_summary_request:
+        return _answer_from_revenue_summary_request(revenue_summary_request)
+
+    shipping_total_request = _extract_shipping_total_request(question)
+    if shipping_total_request:
+        return _answer_from_shipping_total_request(shipping_total_request)
+
+    shipping_spend_request = _extract_shipping_spend_request(question)
+    if shipping_spend_request:
+        return _answer_from_shipping_spend_request(shipping_spend_request)
+
+    ranked_order_args = _extract_ranked_order_request(question)
+    if ranked_order_args:
+        return _answer_from_ranked_order_request(ranked_order_args)
+
+    dimension_request = _extract_sales_by_dimension_request(question)
+    if dimension_request:
+        result = READ_ONLY_TOOLS["get_sales_by_dimension"](**dimension_request)
+        formatted = _format_purchase_breakdown(result)
+        return formatted or "I could not build that sales breakdown."
+
+    return None
+
+
 def _extract_revenue_summary_request(question: str) -> dict[str, Any] | None:
     normalized = question.lower()
     wants_total = any(phrase in normalized for phrase in ["total revenue", "store revenue", "gross revenue"])
@@ -3497,6 +3722,12 @@ def ask(question: str, messages: list[dict[str, Any]] | None = None) -> tuple[st
         history.append({"role": "assistant", "content": answer})
         return answer, history
 
+    deterministic_answer = _try_deterministic_analytics_answer(question)
+    if deterministic_answer:
+        history.append({"role": "user", "content": question})
+        history.append({"role": "assistant", "content": deterministic_answer})
+        return deterministic_answer, history
+
     cache_answer = None
     cache_failed = False
     cache_loop_error: str | None = None
@@ -3510,92 +3741,6 @@ def ask(question: str, messages: list[dict[str, Any]] | None = None) -> tuple[st
         history.append({"role": "user", "content": question})
         history.append({"role": "assistant", "content": cache_answer})
         return cache_answer, history
-
-    sales_total_request = _extract_sales_total_request(question)
-    if sales_total_request and cache_failed:
-        answer = None
-        try:
-            cache_result = run_bigcommerce_readonly_query(
-                sales_total_request["sql"],
-                limit=1,
-            )
-            cache_status = cache_result.get("cache_status") or {}
-            rows = cache_result.get("rows") or []
-            if int(cache_status.get("order_count") or 0) > 0 and rows:
-                row = rows[0]
-                answer = _format_sales_total_result(
-                    row.get("total_sales"),
-                    row.get("order_count"),
-                    row.get("item_count"),
-                    sales_total_request,
-                    "local analytics cache",
-                )
-        except Exception:
-            answer = None
-
-        if answer is None:
-            live_result = READ_ONLY_TOOLS["get_revenue_summary"](
-                **sales_total_request["live_args"]
-            )
-            answer = _format_sales_total_result(
-                live_result.get("total_revenue_inc_tax"),
-                live_result.get("included_order_count"),
-                None,
-                sales_total_request,
-                "live BigCommerce API",
-            )
-            if live_result.get("is_truncated"):
-                answer += f" Warning: order scan hit max_orders={live_result.get('max_orders')}; total may be incomplete."
-
-        history.append({"role": "user", "content": question})
-        history.append({"role": "assistant", "content": answer})
-        return answer, history
-
-    shipping_total_request = _extract_shipping_total_request(question)
-    if shipping_total_request and cache_failed:
-        answer = None
-        try:
-            cache_result = run_bigcommerce_readonly_query(
-                shipping_total_request["sql"],
-                limit=1,
-            )
-            cache_status = cache_result.get("cache_status") or {}
-            rows = cache_result.get("rows") or []
-            if int(cache_status.get("order_count") or 0) > 0 and rows:
-                row = rows[0]
-                answer = _format_shipping_total_result(
-                    row.get("total_shipping_charged"),
-                    row.get("order_count"),
-                    shipping_total_request,
-                    "local analytics cache",
-                )
-        except Exception:
-            answer = None
-
-        if answer is None:
-            live_result = READ_ONLY_TOOLS["get_shipping_charge_total"](
-                **shipping_total_request["live_args"]
-            )
-            answer = _format_shipping_total_result(
-                live_result.get("matched_shipping_total_inc_tax"),
-                live_result.get("matched_order_count"),
-                shipping_total_request,
-                "live BigCommerce API",
-            )
-            if live_result.get("is_truncated"):
-                answer += f" Warning: order scan hit max_orders={live_result.get('max_orders')}; total may be incomplete."
-
-        history.append({"role": "user", "content": question})
-        history.append({"role": "assistant", "content": answer})
-        return answer, history
-
-    ranked_order_args = _extract_ranked_order_request(question)
-    if ranked_order_args and cache_failed:
-        result = READ_ONLY_TOOLS["get_ranked_orders"](**ranked_order_args)
-        answer = _add_order_links(_format_ranked_orders(result))
-        history.append({"role": "user", "content": question})
-        history.append({"role": "assistant", "content": answer})
-        return answer, history
 
     fulfillment_order_id = _extract_fulfillment_timing_request(question)
     if fulfillment_order_id:

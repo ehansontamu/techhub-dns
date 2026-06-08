@@ -1056,6 +1056,56 @@ def _referenced_tables(sql: str) -> set[str]:
     return tables
 
 
+ORDER_GRAIN_AGGREGATE_COLUMNS = frozenset(
+    {
+        "total_inc_tax",
+        "subtotal_inc_tax",
+        "shipping_cost_inc_tax",
+        "subtotal_ex_tax",
+        "total_ex_tax",
+        "items_total",
+    }
+)
+
+
+def _sql_aggregates_order_grain_columns(sql: str) -> bool:
+    normalized = re.sub(r"\s+", " ", sql.lower())
+    for column in ORDER_GRAIN_AGGREGATE_COLUMNS:
+        if re.search(
+            rf"\b(?:sum|avg|max|min)\s*\(\s*(?:[\w]+\.)?{re.escape(column)}\s*\)",
+            normalized,
+        ):
+            return True
+    return False
+
+
+def _sql_deduplicates_orders_before_aggregate(sql: str) -> bool:
+    normalized = re.sub(r"\s+", " ", sql.lower())
+    if re.search(r"\bselect\s+distinct\s+(?:[\w]+\.)?id\b", normalized):
+        return True
+    if re.search(r"\bfrom\s*\(\s*select\s+distinct\b", normalized):
+        return True
+    if re.search(r"\bgroup\s+by\s+(?:[\w]+\.)?id\b", normalized):
+        return True
+    return False
+
+
+def _check_sql_order_grain(sql: str, referenced: set[str]) -> None:
+    if "bc_orders" not in referenced or "bc_order_items" not in referenced:
+        return
+    if not _sql_aggregates_order_grain_columns(sql):
+        return
+    if _sql_deduplicates_orders_before_aggregate(sql):
+        return
+    raise BigCommerceAnalyticsQueryError(
+        "Query joins bc_orders to bc_order_items while aggregating order-level "
+        "columns (total_inc_tax, subtotal_inc_tax, shipping_cost_inc_tax, items_total). "
+        "That duplicates each order once per line item. Aggregate at order grain first "
+        "(for example, select matching order IDs in a subquery, or GROUP BY bc_orders.id "
+        "before summing order totals)."
+    )
+
+
 def _validate_readonly_sql(sql: str) -> str:
     cleaned = _strip_sql_comments(sql).strip()
     if not cleaned:
@@ -1082,6 +1132,7 @@ def _validate_readonly_sql(sql: str) -> str:
         )
     if not referenced:
         raise BigCommerceAnalyticsQueryError("Query must read from a BigCommerce analytics table.")
+    _check_sql_order_grain(cleaned, referenced)
     return cleaned
 
 
