@@ -1198,10 +1198,49 @@ def _format_single_row_sql_aggregate(
     return ". ".join(parts) + "."
 
 
+def _looks_like_year_period_rows(rows: list[dict[str, Any]], columns: list[str]) -> bool:
+    if not rows or not columns:
+        return False
+    label_column = columns[0]
+    labels = [str(row.get(label_column) or "").strip() for row in rows]
+    return len(labels) >= 2 and all(re.fullmatch(r"20\d{2}", label) for label in labels)
+
+
+def _format_year_period_sql_rows(
+    rows: list[dict[str, Any]],
+    columns: list[str],
+) -> str | None:
+    if not _looks_like_year_period_rows(rows, columns):
+        return None
+
+    label_column = columns[0]
+    value_columns = [column for column in columns[1:] if column]
+    if not value_columns:
+        return None
+
+    lines = [
+        "Period comparison:",
+        "",
+        "| " + " | ".join([label_column.replace("_", " ").title(), *value_columns]) + " |",
+        "| " + " | ".join(["---", *["---:" for _ in value_columns]]) + " |",
+    ]
+    for row in rows:
+        values = [_format_sql_cell(column, row.get(column)) for column in value_columns]
+        lines.append(f"| {row.get(label_column)} | " + " | ".join(values) + " |")
+    lines.append("")
+    lines.append(
+        "Note: this table came directly from SQL. If the periods are not year-to-date through today, ask again with the exact date range you want."
+    )
+    return "\n".join(lines)
+
+
 def _format_ranking_sql_rows(
     rows: list[dict[str, Any]],
     columns: list[str],
 ) -> str | None:
+    if _looks_like_year_period_rows(rows, columns):
+        return None
+
     if len(columns) < 2 or not rows:
         return None
 
@@ -1244,6 +1283,10 @@ def _format_sql_query_result(result: dict[str, Any], _question: str) -> str | No
             return aggregate_answer
 
     if 1 <= len(rows) <= 50 and len(columns) <= 8:
+        year_period_answer = _format_year_period_sql_rows(rows, columns)
+        if year_period_answer:
+            return year_period_answer
+
         ranking_answer = _format_ranking_sql_rows(rows, columns)
         if ranking_answer:
             if result.get("truncated"):
@@ -2889,6 +2932,251 @@ def _looks_like_secret_request(question: str) -> bool:
     return any(term in normalized for term in secret_terms)
 
 
+def _same_month_day_prior_year(value: date) -> date:
+    try:
+        return value.replace(year=value.year - 1)
+    except ValueError:
+        return date(value.year - 1, value.month, 28)
+
+
+def _ytd_comparison_periods(reference_day: date | None = None) -> dict[str, Any]:
+    today = reference_day or date.today()
+    current_start = date(today.year, 1, 1)
+    prior_start = date(today.year - 1, 1, 1)
+    prior_cutoff = _same_month_day_prior_year(today)
+    prior_end_exclusive = prior_cutoff + timedelta(days=1)
+    return {
+        "current_year": today.year,
+        "prior_year": today.year - 1,
+        "current_start": current_start.isoformat(),
+        "current_end": None,
+        "prior_start": prior_start.isoformat(),
+        "prior_end": prior_end_exclusive.isoformat(),
+        "period_label": (
+            f"{current_start.isoformat()} through {today.isoformat()} "
+            f"vs {prior_start.isoformat()} through {prior_cutoff.isoformat()}"
+        ),
+    }
+
+
+def _comparison_metric_focus(question: str) -> str | None:
+    normalized = question.lower()
+    if any(term in normalized for term in ["dollar", "revenue", "sales", "money"]):
+        return "dollars"
+    if any(term in normalized for term in ["quantity", "items", "units", "volume"]):
+        return "quantity"
+    if any(term in normalized for term in ["order count", "orders", "order volume"]):
+        return "orders"
+    return None
+
+
+def _extract_ytd_comparison_request(
+    question: str,
+    _history: list[dict[str, Any]] | None = None,
+) -> dict[str, Any] | None:
+    normalized = question.lower()
+    comparison_terms = [
+        "compared to last year",
+        "compare to last year",
+        "compared with last year",
+        "compare with last year",
+        "vs last year",
+        "versus last year",
+        "against last year",
+        "year over year",
+        "yoy",
+        "same period last year",
+        "same time last year",
+        "at this time last year",
+        "last year at this time",
+    ]
+    has_comparison = any(term in normalized for term in comparison_terms)
+    has_progress_check = any(
+        phrase in normalized
+        for phrase in [
+            "how are we doing",
+            "how are we performing",
+            "how is it going",
+            "where are we",
+            "doing so far",
+        ]
+    )
+    has_year_context = (
+        str(date.today().year) in normalized
+        or "this year" in normalized
+        or "year to date" in normalized
+        or "ytd" in normalized
+        or "so far" in normalized
+    )
+
+    if not has_comparison and not (has_progress_check and has_year_context):
+        return None
+    if any(term in normalized for term in ["breakdown", " by college", " by unit", "per college"]):
+        return None
+
+    periods = _ytd_comparison_periods()
+    metric_focus = _comparison_metric_focus(question)
+    return {
+        **periods,
+        "metric_focus": metric_focus,
+    }
+
+
+def _last_assistant_message(history: list[dict[str, Any]] | None) -> str:
+    if not history:
+        return ""
+    for message in reversed(history):
+        if message.get("role") == "assistant" and isinstance(message.get("content"), str):
+            return message["content"]
+    return ""
+
+
+def _looks_like_ytd_comparison_answer(content: str) -> bool:
+    lowered = content.lower()
+    return (
+        "year-to-date comparison" in lowered
+        or "compared to the same period last year" in lowered
+        or (
+            "quantity sold" in lowered
+            and len(re.findall(r"\b20\d{2}\b", content)) >= 2
+        )
+    )
+
+
+def _extract_comparison_followup_request(
+    question: str,
+    history: list[dict[str, Any]] | None,
+) -> dict[str, Any] | None:
+    normalized = question.lower().strip()
+    if len(normalized) > 120:
+        return None
+
+    metric_focus = _comparison_metric_focus(question)
+    if metric_focus is None:
+        return None
+
+    if _extract_ytd_comparison_request(question, history):
+        return None
+
+    if not _looks_like_ytd_comparison_answer(_last_assistant_message(history)):
+        return None
+
+    periods = _ytd_comparison_periods()
+    return {
+        **periods,
+        "metric_focus": metric_focus,
+    }
+
+
+def _format_pct_change(current_value: float, prior_value: float) -> str:
+    if prior_value == 0:
+        return "unchanged" if current_value == 0 else "+100.0%"
+    delta = current_value - prior_value
+    pct = (delta / prior_value) * 100
+    return f"{pct:+.1f}%"
+
+
+def _format_delta_phrase(current_value: float, prior_value: float) -> str:
+    delta = current_value - prior_value
+    if delta == 0:
+        return "unchanged"
+    direction = "up" if delta > 0 else "down"
+    amount = (
+        _format_number(int(abs(delta)))
+        if float(abs(delta)).is_integer()
+        else f"{abs(delta):,.1f}"
+    )
+    return f"{direction} {amount} ({_format_pct_change(current_value, prior_value)})"
+
+
+def _format_ytd_comparison_answer(request: dict[str, Any], current: dict[str, Any], prior: dict[str, Any]) -> str:
+    metric_focus = request.get("metric_focus")
+    current_year = request["current_year"]
+    prior_year = request["prior_year"]
+    current_sales = float(current.get("total_sales_inc_tax") or 0)
+    prior_sales = float(prior.get("total_sales_inc_tax") or 0)
+    current_orders = int(current.get("order_count") or 0)
+    prior_orders = int(prior.get("order_count") or 0)
+    current_quantity = int(current.get("item_quantity") or 0)
+    prior_quantity = int(prior.get("item_quantity") or 0)
+
+    if metric_focus == "dollars":
+        return "\n".join(
+            [
+                f"Year-to-date sales comparison ({request['period_label']}):",
+                f"- {prior_year}: {_format_money(prior_sales)}",
+                f"- {current_year}: {_format_money(current_sales)}",
+                f"- Change: {_format_delta_phrase(current_sales, prior_sales)}",
+            ]
+        )
+
+    if metric_focus == "quantity":
+        return "\n".join(
+            [
+                f"Year-to-date quantity comparison ({request['period_label']}):",
+                f"- {prior_year}: {_format_number(prior_quantity)} items sold",
+                f"- {current_year}: {_format_number(current_quantity)} items sold",
+                f"- Change: {_format_delta_phrase(float(current_quantity), float(prior_quantity))}",
+            ]
+        )
+
+    if metric_focus == "orders":
+        return "\n".join(
+            [
+                f"Year-to-date order comparison ({request['period_label']}):",
+                f"- {prior_year}: {_format_number(prior_orders)} orders",
+                f"- {current_year}: {_format_number(current_orders)} orders",
+                f"- Change: {_format_delta_phrase(float(current_orders), float(prior_orders))}",
+            ]
+        )
+
+    return "\n".join(
+        [
+            f"Year-to-date comparison ({request['period_label']}):",
+            "",
+            "| Year | Sales | Orders | Quantity sold |",
+            "| --- | ---: | ---: | ---: |",
+            (
+                f"| {prior_year} | {_format_money(prior_sales)} | "
+                f"{_format_number(prior_orders)} | {_format_number(prior_quantity)} |"
+            ),
+            (
+                f"| {current_year} | {_format_money(current_sales)} | "
+                f"{_format_number(current_orders)} | {_format_number(current_quantity)} |"
+            ),
+            "",
+            "Change vs the same period last year:",
+            f"- Sales: {_format_delta_phrase(current_sales, prior_sales)}",
+            f"- Orders: {_format_delta_phrase(float(current_orders), float(prior_orders))}",
+            f"- Quantity sold: {_format_delta_phrase(float(current_quantity), float(prior_quantity))}",
+        ]
+    )
+
+
+def _financial_summary_for_period(
+    start_date: str,
+    end_date: str | None,
+) -> dict[str, Any]:
+    return call_tool(
+        "get_order_financial_summary",
+        {
+            "start_date": start_date,
+            "end_date": end_date,
+            "exclude_statuses": ["Cancelled", "Declined", "Refunded"],
+        },
+    )
+
+
+def _answer_from_ytd_comparison_request(request: dict[str, Any]) -> str:
+    current = _financial_summary_for_period(request["current_start"], request["current_end"])
+    prior = _financial_summary_for_period(request["prior_start"], request["prior_end"])
+    if current.get("error"):
+        return f"I could not load the current-year summary: {current['error']}"
+    if prior.get("error"):
+        return f"I could not load the prior-year summary: {prior['error']}"
+    return _format_ytd_comparison_answer(request, current, prior)
+
+
 def _extract_sales_by_dimension_request(question: str) -> dict[str, Any] | None:
     normalized = question.lower()
     if not any(term in normalized for term in ["breakdown", " by ", "per "]):
@@ -3056,7 +3344,18 @@ def _answer_from_ranked_order_request(request: dict[str, Any]) -> str:
     return _add_order_links(_format_ranked_orders(result))
 
 
-def _try_deterministic_analytics_answer(question: str) -> str | None:
+def _try_deterministic_analytics_answer(
+    question: str,
+    history: list[dict[str, Any]] | None = None,
+) -> str | None:
+    ytd_comparison_request = _extract_ytd_comparison_request(question, history)
+    if ytd_comparison_request:
+        return _answer_from_ytd_comparison_request(ytd_comparison_request)
+
+    comparison_followup_request = _extract_comparison_followup_request(question, history)
+    if comparison_followup_request:
+        return _answer_from_ytd_comparison_request(comparison_followup_request)
+
     sales_total_request = _extract_sales_total_request(question)
     if sales_total_request:
         return _answer_from_sales_total_request(sales_total_request)
@@ -3722,7 +4021,7 @@ def ask(question: str, messages: list[dict[str, Any]] | None = None) -> tuple[st
         history.append({"role": "assistant", "content": answer})
         return answer, history
 
-    deterministic_answer = _try_deterministic_analytics_answer(question)
+    deterministic_answer = _try_deterministic_analytics_answer(question, history)
     if deterministic_answer:
         history.append({"role": "user", "content": question})
         history.append({"role": "assistant", "content": deterministic_answer})
