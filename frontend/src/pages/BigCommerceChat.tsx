@@ -19,9 +19,6 @@ import {
   Pie,
   PieChart,
   ResponsiveContainer,
-  Scatter,
-  ScatterChart,
-  Label,
   Tooltip,
   XAxis,
   YAxis,
@@ -317,7 +314,6 @@ function BigCommerceChatChart({ chart }: { chart: BigCommerceChartData }) {
     String(name),
   ];
   const yTickFormatter = (value: unknown) => formatChartValue(value, chart.valueKind);
-  const xTickFormatter = (value: unknown) => formatChartValue(value, chart.xValueKind);
 
   if (chart.type === "pie") {
     const firstSeries = chart.series[0];
@@ -343,62 +339,6 @@ function BigCommerceChatChart({ chart }: { chart: BigCommerceChartData }) {
               ))}
             </Pie>
           </PieChart>
-        </ResponsiveContainer>
-      </div>
-    );
-  }
-
-  if (chart.type === "scatter") {
-    const firstSeries = chart.series[0];
-    return (
-      <div className="mt-3 h-80 rounded-md border border-border bg-muted/10 p-3">
-        <ResponsiveContainer width="100%" height="100%">
-          <ScatterChart margin={{ top: 10, right: 18, left: 8, bottom: 28 }}>
-            <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
-            <XAxis
-              type="number"
-              dataKey={chart.xKey}
-              name={chart.xKey}
-              tick={{ fontSize: 11 }}
-              tickFormatter={xTickFormatter}
-            >
-              <Label value={chart.xKey} offset={-16} position="insideBottom" fontSize={12} />
-            </XAxis>
-            <YAxis
-              type="number"
-              dataKey={firstSeries.key}
-              name={firstSeries.label}
-              tick={{ fontSize: 11 }}
-              tickFormatter={yTickFormatter}
-            >
-              <Label
-                value={firstSeries.label}
-                angle={-90}
-                position="insideLeft"
-                style={{ textAnchor: "middle" }}
-                fontSize={12}
-              />
-            </YAxis>
-            <Tooltip
-              cursor={{ strokeDasharray: "3 3" }}
-              formatter={tooltipFormatter}
-              labelFormatter={(_, payload) => {
-                const record = payload?.[0]?.payload as Record<string, unknown> | undefined;
-                const label = chart.labelKey ? record?.[chart.labelKey] : undefined;
-                const xValue = record?.[chart.xKey];
-                return label
-                  ? `${String(label)} (${chart.xKey}: ${formatChartValue(xValue, chart.xValueKind)})`
-                  : `${chart.xKey}: ${formatChartValue(xValue, chart.xValueKind)}`;
-              }}
-            />
-            <Legend wrapperStyle={{ fontSize: 12 }} />
-            <Scatter
-              name={firstSeries.label}
-              data={chart.data}
-              fill={CHART_COLORS[0]}
-              line={false}
-            />
-          </ScatterChart>
         </ResponsiveContainer>
       </div>
     );

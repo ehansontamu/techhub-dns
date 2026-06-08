@@ -2,7 +2,7 @@ import { apiClient } from "./client";
 
 export type BigCommerceChatRole = "user" | "assistant";
 
-export type BigCommerceChartType = "line" | "bar" | "pie" | "scatter";
+export type BigCommerceChartType = "line" | "bar" | "pie";
 export type BigCommerceChartValueKind = "number" | "percent" | "currency";
 
 export interface BigCommerceChartSeries {
@@ -14,10 +14,8 @@ export interface BigCommerceChartData {
   type: BigCommerceChartType;
   title?: string;
   xKey: string;
-  labelKey?: string;
   series: BigCommerceChartSeries[];
   data: Record<string, string | number | null>[];
-  xValueKind?: BigCommerceChartValueKind;
   valueKind?: BigCommerceChartValueKind;
 }
 
