@@ -46,7 +46,8 @@ For flexible analytics, prefer run_bigcommerce_readonly_query. Use get_order_sum
 For order ranking questions, prefer SQL over bc_orders. Choose the rank metric from the user's words: dollars/value/amount means total_inc_tax; first/earliest/submitted date means date_created ascending; latest/newest/most recent means date_created descending; first order number means id ascending; most/fewest items means items_total.
 For product popularity, top products, "which product sold most", "which order had the most of a product", or combined product/source-order questions, prefer SQL joining bc_orders to bc_order_items.
 For questions about products currently on the BigCommerce site/catalog, product details, SKUs, prices, visibility, availability, variants, inventory levels, images, custom fields, or category/catalog browsing, use search_catalog_cache or get_catalog_product_profile first. Use live read-only catalog tools only when the local catalog cache is missing the product or current live site freshness matters. Product sales/history/popularity questions are different from catalog questions: use SQL or get_catalog_product_profile for sold/sales/revenue/quantity ordered, and catalog tools for site/catalog/product-page facts.
-For questions about current available inventory, quantities on purchase order, Closeout status, AggieBuy Approval count, Awaiting Verification count, Normal/AggieBuy/Retail price tracking, price scheme rows, product performance scores, architecture, GPU type, or ProductLink from the filteredResponse.json feed, use product_intelligence_items/product_intelligence_price_rows through SQL, search_product_intelligence_cache, or get_product_intelligence_profile. In that feed, Qty means available inventory from Inflow; bc_status9 means AggieBuy Approval; bc_status7 means Awaiting Verification.
+For questions about current available inventory, quantities on purchase order, Closeout status, AggieBuy Approval count, Awaiting Verification count, Normal/AggieBuy/Retail price tracking, price scheme rows, product performance scores, architecture, GPU type, or ProductLink from the filteredResponse.json feed, use product_intelligence_items/product_intelligence_price_rows through SQL, search_product_intelligence_cache, or get_product_intelligence_profile. In that feed, Qty means available inventory from Inflow; bc_status9 means AggieBuy Approval; bc_status7 means Awaiting Verification. For "best performance" questions, filter by category/name as needed and sort by the relevant score descending, such as cpu_score for CPU performance.
+When a user says "currently sell" for a product in the Store Intelligence feed, treat it as products present in the current feed/site product set. Do not add an in-stock/qty > 0 filter unless the user says in stock, available, on hand, inventory, or similar.
 For product popularity questions filtered by CPU family or machine form, such as "most popular Intel laptop" or "best-selling AMD desktop", use get_catalog_classified_product_sales.
 For machine CPU-family sales comparisons over time involving Windows ARM, Apple silicon, Intel, or AMD, use get_cpu_family_sales_breakdown. For calendar Q3/Q4 2025 through Q1/Q2 2026, use start_date="2025-07-01" and end_date="2026-07-01"; Q2 2026 may be partial if current data is before July 2026. If the user says month over month, use group_by="month" even when the date range is described by quarters.
 AMD CPU means AMD processor, such as Ryzen, Threadripper, EPYC, Athlon, or an explicit AMD processor/CPU/APU field. Do not count AMD Radeon, Radeon Graphics, or AMD graphics as AMD CPU.
@@ -200,6 +201,36 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "architecture": {"type": "string"},
                     "gpu_type": {"type": "string"},
                     "min_qty": {"type": "integer"},
+                    "in_stock": {
+                        "type": "boolean",
+                        "description": "True for qty > 0, false for qty <= 0. Leave unset unless the user asks for in-stock/out-of-stock/available inventory.",
+                    },
+                    "sort_by": {
+                        "type": "string",
+                        "enum": [
+                            "name",
+                            "sku",
+                            "category",
+                            "qty",
+                            "quantity_on_purchase_order",
+                            "bc_status9",
+                            "bc_status7",
+                            "normal_price",
+                            "ab_price",
+                            "retail_price",
+                            "overall_score",
+                            "cpu_score",
+                            "gpu_score",
+                            "memory_score",
+                            "storage_score",
+                        ],
+                        "default": "name",
+                    },
+                    "sort_direction": {
+                        "type": "string",
+                        "enum": ["asc", "desc"],
+                        "default": "asc",
+                    },
                     "limit": {"type": "integer", "default": 20},
                 },
             },
@@ -1124,6 +1155,8 @@ Rules:
 - Call get_bigcommerce_cache_status when the user asks about freshness or sync status.
 - For questions about products currently on the BigCommerce site/catalog, product details, SKUs, prices, visibility, availability, variants, inventory levels, custom fields, category/catalog browsing, or catalog-level filters like manufacturer/CPU/product type, use search_catalog_cache or get_catalog_product_profile first.
 - For questions about current available stock, quantity on purchase order, closeouts, BigCommerce status 9/7 queued counts, product performance scores, architecture, GPU type, price tracking, AggieBuy/retail/normal price, price scheme rows, or ProductLink from the uploaded JSON feed, use search_product_intelligence_cache, get_product_intelligence_profile, or SQL over product_intelligence_items/product_intelligence_price_rows. In that feed, qty means available inventory from Inflow, bc_status9 means AggieBuy Approval, and bc_status7 means Awaiting Verification.
+- For "best CPU/GPU/memory/storage/overall performing" product questions, use product_intelligence_items and sort by cpu_score/gpu_score/memory_score/storage_score/overall_score descending. Filter category/name to the requested product type, such as category contains laptop. Do not use alphabetical product search results as if they were ranked.
+- When a user says "currently sell" for a product in the Store Intelligence feed, treat it as products present in the current feed/site product set. Do not add an in-stock/qty > 0 filter unless the user says in stock, available, on hand, inventory, or similar.
 - Use live read-only catalog tools only when the local catalog cache is missing the product or current live site freshness matters.
 - Product sales/history/popularity questions are different from catalog questions. For "sold", "sales", "ordered", "popular", "revenue", or "quantity sold", use SQL over bc_orders and bc_order_items, or get_catalog_product_profile when the question is about one known catalog product. For "on the site", "catalog", "visible", "price", "SKU", "inventory", "image", "variant", or "product page", use catalog tools.
 - For product popularity questions filtered by CPU family or machine form, such as "most popular Intel laptop" or "best-selling AMD desktop", use get_catalog_classified_product_sales.

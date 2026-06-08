@@ -1164,11 +1164,33 @@ def search_product_intelligence_cache(
     architecture: str | None = None,
     gpu_type: str | None = None,
     min_qty: int | None = None,
+    in_stock: bool | None = None,
+    sort_by: str = "name",
+    sort_direction: str = "asc",
     limit: int = 20,
 ) -> dict[str, Any]:
     """Search the downloaded Store Intelligence product snapshot."""
 
     limit = min(max(int(limit or 20), 1), 100)
+    sort_columns = {
+        "name": ProductIntelligenceItem.name,
+        "sku": ProductIntelligenceItem.sku,
+        "category": ProductIntelligenceItem.category,
+        "qty": ProductIntelligenceItem.qty,
+        "quantity_on_purchase_order": ProductIntelligenceItem.quantity_on_purchase_order,
+        "bc_status9": ProductIntelligenceItem.bc_status9,
+        "bc_status7": ProductIntelligenceItem.bc_status7,
+        "normal_price": ProductIntelligenceItem.normal_price,
+        "ab_price": ProductIntelligenceItem.ab_price,
+        "retail_price": ProductIntelligenceItem.retail_price,
+        "overall_score": ProductIntelligenceItem.overall_score,
+        "cpu_score": ProductIntelligenceItem.cpu_score,
+        "gpu_score": ProductIntelligenceItem.gpu_score,
+        "memory_score": ProductIntelligenceItem.memory_score,
+        "storage_score": ProductIntelligenceItem.storage_score,
+    }
+    sort_column = sort_columns.get((sort_by or "name").strip(), ProductIntelligenceItem.name)
+    descending = (sort_direction or "asc").strip().lower() == "desc"
     db = get_db_session()
     try:
         table_names = set(inspect(db.bind).get_table_names())
@@ -1201,8 +1223,14 @@ def search_product_intelligence_cache(
             products_query = products_query.filter(func.lower(ProductIntelligenceItem.gpu_type) == gpu_type.strip().lower())
         if min_qty is not None:
             products_query = products_query.filter(ProductIntelligenceItem.qty >= int(min_qty))
+        if in_stock is True:
+            products_query = products_query.filter(ProductIntelligenceItem.qty > 0)
+        elif in_stock is False:
+            products_query = products_query.filter(ProductIntelligenceItem.qty <= 0)
 
-        rows = products_query.order_by(ProductIntelligenceItem.name.asc()).limit(limit).all()
+        total_count = products_query.count()
+        order_clause = sort_column.desc() if descending else sort_column.asc()
+        rows = products_query.order_by(order_clause, ProductIntelligenceItem.name.asc()).limit(limit).all()
         return {
             "query": query,
             "category": category,
@@ -1210,7 +1238,11 @@ def search_product_intelligence_cache(
             "architecture": architecture,
             "gpu_type": gpu_type,
             "min_qty": min_qty,
+            "in_stock": in_stock,
+            "sort_by": sort_by,
+            "sort_direction": "desc" if descending else "asc",
             "count": len(rows),
+            "total_count": total_count,
             "limit": limit,
             "products": [_product_intelligence_summary(row) for row in rows],
             "cache_status": get_bigcommerce_cache_status(),
