@@ -82,7 +82,7 @@ The fiscal year runs from September 1 through August 31. For example, fiscal yea
 Non-precise names can be aliases. "Bush School" can mean Bush or Bush School of Government and Public Service.
 "Arts and Sciences" can mean College of Arts and Sciences or Arts & Sciences.
 Keep answers concise and include order IDs when relevant. Do not end answers with generic follow-up menus like "If you want, I can also..." unless the user explicitly asks what else can be done.
-When the user asks for a graph, chart, plot, or visualization, include a compact markdown table containing the values to chart.
+When the user asks for a graph, chart, plot, or visualization, include a compact markdown table containing the values to chart. For scatterplots, include one label column followed by two numeric columns, such as Product | CPU Score | AB Price.
 """
 
 
@@ -1179,7 +1179,7 @@ Rules:
 - For product popularity, join bc_orders to bc_order_items and rank by SUM(bc_order_items.quantity), not revenue, unless the user asks for revenue.
 - When a specific order matters, include bc_orders.id as order_id in the query and write it as "Order 1234"; do not print raw admin URLs.
 - Keep answers concise. Do not mention cache staleness or last sync time for normal historical analytics. Mention cache freshness only when the user asks about sync/freshness, asks for live/current/today/right-now data, or the answer truly depends on orders that may have changed since the last sync. Do not end answers with generic follow-up menus like "If you want, I can also..." unless the user explicitly asks what else can be done.
-- When the user asks for a graph, chart, plot, or visualization, include a compact markdown table containing the values to chart.
+- When the user asks for a graph, chart, plot, or visualization, include a compact markdown table containing the values to chart. For scatterplots, include one label column followed by two numeric columns, such as Product | CPU Score | AB Price.
 - If a SQL query errors, fix the SQL and try again. Do not ask the user to narrow the question just because SQL needs repair.
 """
 

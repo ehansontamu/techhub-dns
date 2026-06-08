@@ -11,7 +11,7 @@ class BigCommerceChatError(RuntimeError):
 
 
 CHART_REQUEST_RE = re.compile(
-    r"\b(graph|chart|plot|visuali[sz]e|line graph|line chart|bar graph|bar chart|pie chart|donut chart)\b",
+    r"\b(graph|chart|plot|visuali[sz]e|line graph|line chart|bar graph|bar chart|pie chart|donut chart|scatter|scatterplot|scatter plot)\b",
     re.IGNORECASE,
 )
 MARKDOWN_TABLE_SEPARATOR_RE = re.compile(
@@ -72,6 +72,8 @@ def _parse_chart_number(value: str, prefer_percent: bool) -> float | None:
 
 def _chart_type_for_question(question: str, x_values: list[str]) -> str:
     lower = question.lower()
+    if "scatter" in lower:
+        return "scatter"
     if "pie" in lower or "donut" in lower:
         return "pie"
     if "bar" in lower:
@@ -85,6 +87,23 @@ def _chart_type_for_question(question: str, x_values: list[str]) -> str:
     ):
         return "line"
     return "bar"
+
+
+def _value_kind_for_column(header: str, values: list[str], question: str = "") -> str:
+    header_text = header.lower()
+    if "%" in header_text or re.search(r"\b(percent|percentage|share|mix)\b", header_text, re.IGNORECASE):
+        return "percent"
+    if re.search(
+        r"\b(price|cost|revenue|sales|dollar|amount|spend|normal price|ab price|retail price)\b",
+        header_text,
+        re.IGNORECASE,
+    ):
+        return "currency"
+    if any("$" in value for value in values):
+        return "currency"
+    if re.search(r"\b(percent|percentage|share|mix)\b", question, re.IGNORECASE):
+        return "percent"
+    return "number"
 
 
 def _build_chart_from_answer(question: str, answer: str) -> dict[str, Any] | None:
@@ -126,6 +145,51 @@ def _build_chart_from_answer(question: str, answer: str) -> dict[str, Any] | Non
             continue
 
         chart_type = _chart_type_for_question(question, x_values)
+        if chart_type == "scatter":
+            numeric_columns: list[tuple[int, str, list[float | None]]] = []
+            for column_index, header in enumerate(headers):
+                parsed_values = [
+                    _parse_chart_number(row[column_index], prefer_percent)
+                    for row in rows
+                ]
+                if any(value is not None for value in parsed_values):
+                    numeric_columns.append((column_index, header or f"Value {column_index + 1}", parsed_values))
+
+            if len(numeric_columns) < 2:
+                continue
+
+            x_index, x_header, x_parsed_values = numeric_columns[0]
+            y_index, y_header, y_parsed_values = numeric_columns[1]
+            label_index = 0 if x_index != 0 else None
+            label_header = headers[label_index] if label_index is not None else None
+            scatter_data: list[dict[str, Any]] = []
+            for row_index, row in enumerate(rows[:100]):
+                x_value = x_parsed_values[row_index]
+                y_value = y_parsed_values[row_index]
+                if x_value is None or y_value is None:
+                    continue
+                record: dict[str, Any] = {
+                    x_header: x_value,
+                    y_header: y_value,
+                }
+                if label_index is not None and label_header:
+                    record[label_header] = row[label_index]
+                scatter_data.append(record)
+
+            if not scatter_data:
+                continue
+
+            return {
+                "type": "scatter",
+                "title": "Scatterplot",
+                "xKey": x_header,
+                "labelKey": label_header,
+                "series": [{"key": y_header, "label": y_header}],
+                "data": scatter_data,
+                "xValueKind": _value_kind_for_column(x_header, [row[x_index] for row in rows], question),
+                "valueKind": _value_kind_for_column(y_header, [row[y_index] for row in rows], question),
+            }
+
         if chart_type == "pie" and len(numeric_headers) > 1 and len(data) == 1:
             first_row = data[0]
             data = [
