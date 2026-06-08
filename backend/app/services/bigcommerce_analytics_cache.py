@@ -435,6 +435,10 @@ def _last_successful_sync(db: Session) -> BigCommerceSyncRun | None:
     )
 
 
+def _latest_sync(db: Session) -> BigCommerceSyncRun | None:
+    return db.query(BigCommerceSyncRun).order_by(BigCommerceSyncRun.started_at.desc()).first()
+
+
 def _latest_order_modified_at(db: Session) -> datetime | None:
     row = (
         db.query(BigCommerceOrder.date_modified)
@@ -744,6 +748,7 @@ def get_bigcommerce_cache_status() -> dict[str, Any]:
     db = get_db_session()
     try:
         last_sync = _last_successful_sync(db)
+        latest_sync = _latest_sync(db)
         latest_order = db.query(BigCommerceOrder.date_modified).order_by(BigCommerceOrder.date_modified.desc()).first()
         order_count = db.query(BigCommerceOrder).count()
         item_count = db.query(BigCommerceOrderItem).count()
@@ -756,10 +761,17 @@ def get_bigcommerce_cache_status() -> dict[str, Any]:
             is_stale = now - last_sync.completed_at > timedelta(minutes=SYNC_STALE_AFTER_MINUTES)
         return {
             "last_successful_sync": _sync_run_summary(last_sync),
+            "latest_sync": _sync_run_summary(latest_sync),
             "order_count": order_count,
             "line_item_count": item_count,
             "product_count": product_count,
             "variant_count": variant_count,
+            "catalog_tables_available": "bc_products" in table_names and "bc_product_variants" in table_names,
+            "last_catalog_sync": (
+                (last_sync.sync_metadata or {}).get("catalog_sync")
+                if last_sync and isinstance(last_sync.sync_metadata, dict)
+                else None
+            ),
             "latest_order_modified_at": _iso_utc(latest_order[0]) if latest_order and latest_order[0] else None,
             "is_stale": is_stale,
             "stale_after_minutes": SYNC_STALE_AFTER_MINUTES,
@@ -1808,6 +1820,7 @@ def get_cpu_family_sales_breakdown(
             },
             "catalog_products_scanned": catalog_products_scanned,
             "catalog_products_classified_by_cpu": catalog_family_counts,
+            "is_reliable_for_cpu_family": catalog_products_scanned > 0,
             "classification_source": (
                 "cached catalog plus order-line fallback"
                 if catalog_products_scanned

@@ -1514,6 +1514,13 @@ def _format_catalog_filtered_product_sales(result: dict[str, Any]) -> str:
 
 
 def _format_cpu_family_sales_breakdown(result: dict[str, Any]) -> str:
+    if not result.get("is_reliable_for_cpu_family"):
+        return (
+            "I can't reliably answer CPU-family sales questions yet because the local catalog cache has "
+            "0 products. CPU-family classification needs catalog/spec data; order-line text alone can "
+            "miss most machines or misclassify graphics as CPUs. Run a catalog/cache sync first, then ask again."
+        )
+
     periods = result.get("periods") or []
     families = result.get("cpu_families") or ["Windows ARM", "Apple silicon", "Intel", "AMD"]
     range_label = f"{result.get('start_date') or 'the beginning'} through {result.get('end_date') or 'now'}"
@@ -3168,6 +3175,13 @@ def _extract_cpu_family_sales_request(question: str) -> dict[str, Any] | None:
 
 def _format_cpu_family_month_ranking(result: dict[str, Any], request: dict[str, Any]) -> str:
     family = request["family"]
+    if not result.get("is_reliable_for_cpu_family"):
+        return (
+            f"I can't reliably rank {family} CPU machine sales yet because the local catalog cache has "
+            "0 products. CPU-family classification needs catalog/spec data; order-line text alone can "
+            "miss most machines or misclassify graphics as CPUs. Run a catalog/cache sync first, then ask again."
+        )
+
     periods = result.get("periods") or []
     ranked_periods = sorted(
         periods,

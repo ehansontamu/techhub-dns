@@ -37,10 +37,17 @@ export interface BigCommerceCacheStatus {
     status: string;
     orders_upserted: number;
   } | null;
+  latest_sync?: {
+    completed_at: string | null;
+    status: string;
+    error?: string | null;
+  } | null;
   order_count: number;
   line_item_count: number;
   product_count?: number;
   variant_count?: number;
+  catalog_tables_available?: boolean;
+  last_catalog_sync?: Record<string, unknown> | null;
   latest_order_modified_at: string | null;
   is_stale: boolean;
   stale_after_minutes: number;
@@ -60,6 +67,18 @@ export const bigcommerceChatApi = {
 
   async cacheStatus(): Promise<BigCommerceCacheStatus> {
     const response = await apiClient.get("/bigcommerce-chat/cache/status");
+    return response.data;
+  },
+
+  async syncCatalog(maxProducts = 5000): Promise<{
+    brands_upserted: number;
+    categories_upserted: number;
+    products_upserted: number;
+    variants_upserted: number;
+  }> {
+    const response = await apiClient.post("/bigcommerce-chat/cache/catalog-sync", {
+      max_products: maxProducts,
+    });
     return response.data;
   },
 };

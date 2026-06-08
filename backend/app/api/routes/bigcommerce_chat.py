@@ -12,6 +12,7 @@ from app.services.bigcommerce_chat_service import (
 )
 from app.services.bigcommerce_analytics_cache import (
     get_bigcommerce_cache_status,
+    sync_bigcommerce_catalog_cache,
     sync_bigcommerce_analytics_cache,
 )
 
@@ -65,4 +66,20 @@ def cache_sync() -> Any:
         )
     except Exception as exc:
         logger.warning("BigCommerce cache sync failed: %s", exc, exc_info=True)
+        return jsonify({"error": str(exc)}), 502
+
+
+@bp.route("/cache/catalog-sync", methods=["POST"])
+@require_admin
+def catalog_cache_sync() -> Any:
+    payload = request.get_json(silent=True) or {}
+    max_products = payload.get("max_products", 5000)
+    try:
+        max_products = int(max_products)
+    except (TypeError, ValueError):
+        return jsonify({"error": "max_products must be an integer."}), 400
+    try:
+        return jsonify(sync_bigcommerce_catalog_cache(max_products=max_products))
+    except Exception as exc:
+        logger.warning("BigCommerce catalog cache sync failed: %s", exc, exc_info=True)
         return jsonify({"error": str(exc)}), 502

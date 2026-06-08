@@ -400,6 +400,26 @@ export default function BigCommerceChat() {
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
 
   const canSend = useMemo(() => draft.trim().length > 0 && !isSending, [draft, isSending]);
+  const cacheHealthNotes = useMemo(() => {
+    if (!cacheStatus) {
+      return [];
+    }
+
+    const notes: string[] = [];
+    if (cacheStatus.latest_sync?.status === "failed") {
+      notes.push(`latest sync failed${cacheStatus.latest_sync.error ? `: ${cacheStatus.latest_sync.error}` : ""}`);
+    }
+    if (cacheStatus.catalog_tables_available === false) {
+      notes.push("catalog tables are missing");
+    } else if ((cacheStatus.product_count ?? 0) === 0) {
+      notes.push("catalog cache is empty");
+    }
+    const catalogSync = cacheStatus.last_catalog_sync;
+    if (catalogSync && typeof catalogSync.error === "string") {
+      notes.push(`catalog sync failed: ${catalogSync.error}`);
+    }
+    return notes;
+  }, [cacheStatus]);
 
   useEffect(() => {
     transcriptRef.current?.scrollTo({
@@ -495,6 +515,11 @@ export default function BigCommerceChat() {
               {cacheStatus.line_item_count.toLocaleString()} line items ·{" "}
               {(cacheStatus.product_count ?? 0).toLocaleString()} products ·{" "}
               {(cacheStatus.variant_count ?? 0).toLocaleString()} variants
+            </p>
+          )}
+          {cacheHealthNotes.length > 0 && (
+            <p className="mt-1 max-w-4xl text-xs text-amber-700">
+              Cache warning: {cacheHealthNotes.join("; ")}
             </p>
           )}
         </div>
