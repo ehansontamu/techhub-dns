@@ -65,7 +65,7 @@ The fiscal year runs from September 1 through August 31. For example, fiscal yea
 For calendar years/months, use half-open ranges: date_created >= '2025-01-01' AND date_created < '2026-01-01'.
 For "last week", use the previous Monday through current Monday unless the user says "last 7 days". For "last month", use the previous calendar month.
 Keep answers concise and include order IDs when relevant. Do not end answers with generic follow-up menus like "If you want, I can also..." unless the user explicitly asks what else can be done.
-When the user asks for a graph, chart, plot, or visualization, include a compact markdown table containing the values to chart.
+When the user asks for a graph, chart, plot, or visualization, include a compact markdown table containing the values to chart. Do not draw ASCII/code-block charts; the UI renders the chart from the table.
 {aliases_section}"""
 
 

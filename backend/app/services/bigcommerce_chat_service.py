@@ -60,11 +60,15 @@ def _extract_markdown_tables(text: str) -> list[tuple[list[str], list[list[str]]
 def _parse_chart_number(value: str, prefer_percent: bool) -> float | None:
     text = value.strip()
     if prefer_percent:
-        percent_match = re.search(r"(-?\d+(?:,\d{3})*(?:\.\d+)?)\s*%", text)
+        percent_match = re.fullmatch(r"\$?\s*(-?\d+(?:,\d{3})*(?:\.\d+)?)\s*%", text)
         if percent_match:
             return float(percent_match.group(1).replace(",", ""))
 
-    money_match = re.search(r"\$?\s*(-?\d+(?:,\d{3})*(?:\.\d+)?)", text)
+    money_match = re.fullmatch(
+        r"\$?\s*(-?\d+(?:,\d{3})*(?:\.\d+)?)\s*(?:%|units?|items?|orders?)?",
+        text,
+        re.IGNORECASE,
+    )
     if not money_match:
         return None
     return float(money_match.group(1).replace(",", ""))
@@ -104,6 +108,77 @@ def _value_kind_for_column(header: str, values: list[str], question: str = "") -
     return "number"
 
 
+def _normalized_header(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", value.strip().lower()).strip()
+
+
+def _is_identifier_column(header: str) -> bool:
+    normalized = _normalized_header(header)
+    return normalized in {
+        "rank",
+        "id",
+        "order id",
+        "product id",
+        "sku",
+        "code",
+    } or normalized.endswith(" id")
+
+
+def _is_metric_column_for_question(header: str, question: str) -> bool:
+    normalized = _normalized_header(header)
+    lower_question = question.lower()
+    wants_money = any(term in lower_question for term in ["revenue", "dollars", "sales dollars", "$"])
+    wants_units = any(term in lower_question for term in ["best selling", "units", "qty", "quantity", "sold"])
+
+    if wants_money and any(term in normalized for term in ["revenue", "dollars", "sales", "amount"]):
+        return True
+    if wants_units and any(term in normalized for term in ["unit", "qty", "quantity", "sold"]):
+        return True
+    if not wants_money and any(term in normalized for term in ["unit", "qty", "quantity", "sold"]):
+        return True
+    return False
+
+
+def _choose_x_column(headers: list[str], rows: list[list[str]], chart_type: str) -> int:
+    if chart_type == "line":
+        return 0
+
+    for index, header in enumerate(headers):
+        if _is_identifier_column(header):
+            continue
+        values = [row[index] for row in rows]
+        parsed_values = [_parse_chart_number(value, False) for value in values]
+        if not any(value is not None for value in parsed_values):
+            return index
+    return 0
+
+
+def _choose_numeric_headers(
+    headers: list[str],
+    rows: list[list[str]],
+    question: str,
+    x_index: int,
+    prefer_percent: bool,
+) -> list[str]:
+    candidates: list[str] = []
+    preferred: list[str] = []
+    for column_index, header in enumerate(headers):
+        if column_index == x_index or _is_identifier_column(header):
+            continue
+        parsed_values = [
+            _parse_chart_number(row[column_index], prefer_percent)
+            for row in rows
+        ]
+        if not any(value is not None for value in parsed_values):
+            continue
+        label = header or f"Series {column_index + 1}"
+        candidates.append(label)
+        if _is_metric_column_for_question(label, question):
+            preferred.append(label)
+
+    return preferred[:1] or candidates[:1]
+
+
 def _build_chart_from_answer(question: str, answer: str) -> dict[str, Any] | None:
     if not CHART_REQUEST_RE.search(question):
         return None
@@ -114,35 +189,30 @@ def _build_chart_from_answer(question: str, answer: str) -> dict[str, Any] | Non
         if len(headers) < 2 or not rows:
             continue
 
-        x_header = headers[0] or "Category"
-        x_values = [row[0] for row in rows[:50]]
+        initial_x_values = [row[0] for row in rows[:50]]
+        chart_type = _chart_type_for_question(question, initial_x_values)
+        x_index = _choose_x_column(headers, rows, chart_type)
+        x_header = headers[x_index] or "Category"
+        x_values = [row[x_index] for row in rows[:50]]
         data: list[dict[str, Any]] = []
-        numeric_headers: list[str] = []
-
-        for column_index, header in enumerate(headers[1:], start=1):
-            parsed_values = [
-                _parse_chart_number(row[column_index], prefer_percent)
-                for row in rows
-            ]
-            if any(value is not None for value in parsed_values):
-                numeric_headers.append(header or f"Series {column_index}")
+        numeric_headers = _choose_numeric_headers(headers, rows, question, x_index, prefer_percent)
 
         if not numeric_headers:
             continue
 
         for row in rows[:50]:
-            record: dict[str, Any] = {x_header: row[0]}
-            for column_index, header in enumerate(headers[1:], start=1):
-                if header not in numeric_headers:
+            record: dict[str, Any] = {x_header: row[x_index]}
+            for column_index, header in enumerate(headers):
+                label = header or f"Series {column_index + 1}"
+                if label not in numeric_headers:
                     continue
                 parsed = _parse_chart_number(row[column_index], prefer_percent)
-                record[header] = parsed
+                record[label] = parsed
             data.append(record)
 
         if not data:
             continue
 
-        chart_type = _chart_type_for_question(question, x_values)
         if chart_type == "pie" and len(numeric_headers) > 1 and len(data) == 1:
             first_row = data[0]
             data = [
