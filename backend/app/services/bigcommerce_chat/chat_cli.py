@@ -3375,10 +3375,163 @@ def _answer_from_ranked_order_request(request: dict[str, Any]) -> str:
     return _add_order_links(_format_ranked_orders(result))
 
 
+def _sql_literal(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _extract_named_product_sales_request(question: str) -> dict[str, Any] | None:
+    normalized = question.lower()
+    if not any(term in normalized for term in ["sold", "sales", "revenue", "quantity", "qty", "purchased", "bought", "ordered"]):
+        return None
+    if "product" not in normalized and not any(phrase in normalized for phrase in ["how many", "month over month", "per month"]):
+        return None
+
+    product_match = re.search(
+        r"(?:how many|sales for|revenue for|quantity sold for|qty sold for)\s+(.+?)\s+(?:have we sold|has sold|were sold|sold|in|for|month over month|per month)",
+        question,
+        re.IGNORECASE,
+    )
+    if not product_match:
+        product_match = re.search(
+            r"(.+?)\s+(?:have we sold|has sold|were sold)\b",
+            question,
+            re.IGNORECASE,
+        )
+    if not product_match:
+        return None
+
+    product_name = product_match.group(1).strip(" ?.,")
+    product_name = re.sub(r"^(?:the|a|an)\s+", "", product_name, flags=re.IGNORECASE).strip()
+    if len(product_name) < 4:
+        return None
+
+    year_match = re.search(r"\b(20\d{2})\b", question)
+    year = int(year_match.group(1)) if year_match else date.today().year
+    start_date = f"{year}-01-01"
+    end_date = f"{year + 1}-01-01"
+    label = f"calendar year {year}" if year != date.today().year else f"{year} so far"
+    monthly = any(phrase in normalized for phrase in ["month over month", "per month", "monthly", "by month"])
+
+    product_literal = _sql_literal(product_name)
+    product_like_literal = _sql_literal(f"%{product_name}%")
+    product_filter = (
+        "("
+        f"LOWER(i.name) = LOWER({product_literal}) "
+        f"OR LOWER(i.name) LIKE LOWER({product_like_literal}) "
+        "OR i.product_id IN ("
+        "SELECT p.id FROM bc_products p "
+        f"WHERE LOWER(p.name) = LOWER({product_literal}) "
+        f"OR LOWER(p.name) LIKE LOWER({product_like_literal})"
+        ") "
+        "OR LOWER(i.sku) IN ("
+        "SELECT LOWER(p.sku) FROM bc_products p "
+        f"WHERE p.sku IS NOT NULL AND (LOWER(p.name) = LOWER({product_literal}) "
+        f"OR LOWER(p.name) LIKE LOWER({product_like_literal}))"
+        ")"
+        ")"
+    )
+    where_clause = (
+        f"o.date_created >= '{start_date}' "
+        f"AND o.date_created < '{end_date}' "
+        "AND o.status NOT IN ('Cancelled', 'Declined', 'Refunded') "
+        f"AND {product_filter}"
+    )
+
+    if monthly:
+        sql = (
+            "SELECT DATE_FORMAT(o.date_created, '%Y-%m') AS month, "
+            "COALESCE(SUM(i.quantity), 0) AS quantity_sold, "
+            "COALESCE(SUM(i.total_inc_tax), 0) AS revenue_inc_tax, "
+            "COUNT(DISTINCT o.id) AS order_count "
+            "FROM bc_order_items i "
+            "JOIN bc_orders o ON o.id = i.order_id "
+            f"WHERE {where_clause} "
+            "GROUP BY DATE_FORMAT(o.date_created, '%Y-%m') "
+            "ORDER BY month"
+        )
+    else:
+        sql = (
+            "SELECT COALESCE(SUM(i.quantity), 0) AS quantity_sold, "
+            "COALESCE(SUM(i.total_inc_tax), 0) AS revenue_inc_tax, "
+            "COUNT(DISTINCT o.id) AS order_count "
+            "FROM bc_order_items i "
+            "JOIN bc_orders o ON o.id = i.order_id "
+            f"WHERE {where_clause}"
+        )
+
+    return {
+        "product_name": product_name,
+        "year": year,
+        "label": label,
+        "monthly": monthly,
+        "sql": sql,
+    }
+
+
+def _answer_from_named_product_sales_request(request: dict[str, Any]) -> str:
+    try:
+        result = run_bigcommerce_readonly_query(request["sql"], limit=50)
+    except Exception as exc:
+        return f"I could not calculate sales for {request['product_name']}: {exc}"
+    rows = result.get("rows") or []
+    if result.get("error"):
+        return f"I could not calculate sales for {request['product_name']}: {result['error']}"
+
+    if request.get("monthly"):
+        lines = [
+            f"Sales for {request['product_name']} in {request['label']}:",
+            "",
+            "| Month | Qty sold | Dollars | Orders |",
+            "|---|---:|---:|---:|",
+        ]
+        total_quantity = 0
+        total_revenue = 0.0
+        total_orders = 0
+        for row in rows:
+            quantity = int(row.get("quantity_sold") or 0)
+            revenue = float(row.get("revenue_inc_tax") or 0)
+            orders = int(row.get("order_count") or 0)
+            total_quantity += quantity
+            total_revenue += revenue
+            total_orders += orders
+            lines.append(
+                f"| {row.get('month') or 'unknown'} | "
+                f"{_format_number(quantity)} | "
+                f"{_format_money(revenue)} | "
+                f"{_format_number(orders)} |"
+            )
+        lines.extend(
+            [
+                "",
+                (
+                    f"Total: {_format_number(total_quantity)} units, "
+                    f"{_format_money(total_revenue)}, across {_format_number(total_orders)} orders."
+                ),
+            ]
+        )
+        if not rows:
+            return f"I did not find sales for {request['product_name']} in {request['label']}."
+        return "\n".join(lines)
+
+    row = rows[0] if rows else {}
+    quantity = int(row.get("quantity_sold") or 0)
+    revenue = float(row.get("revenue_inc_tax") or 0)
+    orders = int(row.get("order_count") or 0)
+    return (
+        f"{request['product_name']} sales for {request['label']}: "
+        f"{_format_number(quantity)} units, {_format_money(revenue)}, "
+        f"across {_format_number(orders)} orders."
+    )
+
+
 def _try_deterministic_analytics_answer(
     question: str,
     history: list[dict[str, Any]] | None = None,
 ) -> str | None:
+    named_product_sales_request = _extract_named_product_sales_request(question)
+    if named_product_sales_request:
+        return _answer_from_named_product_sales_request(named_product_sales_request)
+
     ytd_comparison_request = _extract_ytd_comparison_request(question, history)
     if ytd_comparison_request:
         return _answer_from_ytd_comparison_request(ytd_comparison_request)

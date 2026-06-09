@@ -3,6 +3,7 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 import asyncio
 from app.database import get_db_session
 from app.services.inflow_service import InflowService
@@ -26,6 +27,7 @@ _BIGCOMMERCE_ANALYTICS_SYNC_INTERVAL_MINUTES = 15
 _BIGCOMMERCE_ANALYTICS_NIGHTLY_BACKFILL_HOUR = 0
 _BIGCOMMERCE_ANALYTICS_NIGHTLY_BACKFILL_MINUTE = 0
 _PRODUCT_INTELLIGENCE_SYNC_INTERVAL_MINUTES = 5
+_SCHEDULER_TIMEZONE = ZoneInfo(os.getenv("SCHEDULER_TIMEZONE", "America/Chicago"))
 _INFLOW_EVENT_MAPPING = {
     "orderCreated": "salesOrder.created",
     "orderUpdated": "salesOrder.updated",
@@ -429,16 +431,23 @@ def start_scheduler():
         name="Sync BigCommerce analytics cache",
         replace_existing=True,
         next_run_time=datetime.now() + timedelta(minutes=1),
+        coalesce=True,
+        max_instances=1,
+        misfire_grace_time=600,
     )
     scheduler.add_job(
         backfill_bigcommerce_analytics_cache_job,
         trigger=CronTrigger(
             hour=_BIGCOMMERCE_ANALYTICS_NIGHTLY_BACKFILL_HOUR,
             minute=_BIGCOMMERCE_ANALYTICS_NIGHTLY_BACKFILL_MINUTE,
+            timezone=_SCHEDULER_TIMEZONE,
         ),
         id="bigcommerce_analytics_nightly_backfill",
         name="Nightly BigCommerce analytics cache backfill",
         replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+        misfire_grace_time=3600,
     )
     scheduler.add_job(
         sync_product_intelligence_cache_job,
@@ -447,6 +456,9 @@ def start_scheduler():
         name="Sync Store Intelligence product feed",
         replace_existing=True,
         next_run_time=datetime.now() + timedelta(minutes=1),
+        coalesce=True,
+        max_instances=1,
+        misfire_grace_time=600,
     )
 
     scheduler.start()
