@@ -1,33 +1,21 @@
 from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
 import asyncio
 from app.database import get_db_session
 from app.services.inflow_service import InflowService
-from app.services.bigcommerce_analytics_cache import (
-    sync_bigcommerce_analytics_cache,
-    sync_product_intelligence_cache,
-)
 from app.models.inflow_webhook import InflowWebhook, WebhookStatus
 from app.config import settings
 from app.api.routes.inflow import _run_inflow_sync
 import logging
 import threading
-import os
 
 logger = logging.getLogger(__name__)
 
 _WEBHOOK_HEALTH_STALE_THRESHOLD = timedelta(hours=2)
 _WEBHOOK_RECONCILE_INTERVAL_MINUTES = 30
 _WEBHOOK_HEALTH_CHECK_INTERVAL_MINUTES = 60
-_BIGCOMMERCE_ANALYTICS_SYNC_INTERVAL_MINUTES = 15
-_BIGCOMMERCE_ANALYTICS_NIGHTLY_BACKFILL_HOUR = 0
-_BIGCOMMERCE_ANALYTICS_NIGHTLY_BACKFILL_MINUTE = 0
-_PRODUCT_INTELLIGENCE_SYNC_INTERVAL_MINUTES = 5
-_SCHEDULER_TIMEZONE = ZoneInfo(os.getenv("SCHEDULER_TIMEZONE", "America/Chicago"))
 _INFLOW_EVENT_MAPPING = {
     "orderCreated": "salesOrder.created",
     "orderUpdated": "salesOrder.updated",
@@ -182,48 +170,6 @@ def webhook_health_check():
         logger.error(f"Webhook health check failed: {e}", exc_info=True)
     finally:
         db.close()
-
-
-def sync_bigcommerce_analytics_cache_job() -> None:
-    """Background task to keep local BigCommerce analytics tables fresh."""
-
-    if not os.getenv("BC_STORE_HASH") or not os.getenv("BC_ACCESS_TOKEN"):
-        logger.info("BigCommerce analytics sync skipped: credentials are not configured")
-        return
-
-    try:
-        result = sync_bigcommerce_analytics_cache(full_backfill=False)
-        logger.info("BigCommerce analytics sync finished: %s", result)
-    except Exception as exc:
-        logger.error("BigCommerce analytics sync failed: %s", exc, exc_info=True)
-
-
-def backfill_bigcommerce_analytics_cache_job() -> None:
-    """Nightly broad refresh for local BigCommerce analytics tables."""
-
-    if not os.getenv("BC_STORE_HASH") or not os.getenv("BC_ACCESS_TOKEN"):
-        logger.info("BigCommerce analytics backfill skipped: credentials are not configured")
-        return
-
-    try:
-        result = sync_bigcommerce_analytics_cache(full_backfill=True)
-        logger.info("BigCommerce analytics nightly backfill finished: %s", result)
-    except Exception as exc:
-        logger.error(
-            "BigCommerce analytics nightly backfill failed: %s",
-            exc,
-            exc_info=True,
-        )
-
-
-def sync_product_intelligence_cache_job() -> None:
-    """Background task to refresh the lightweight Store Intelligence product feed."""
-
-    try:
-        result = sync_product_intelligence_cache()
-        logger.info("Store Intelligence product feed sync finished: %s", result)
-    except Exception as exc:
-        logger.error("Store Intelligence product feed sync failed: %s", exc, exc_info=True)
 
 
 def reconcile_inflow_webhook_state() -> None:
@@ -423,43 +369,6 @@ def start_scheduler():
             replace_existing=True,
             next_run_time=datetime.now() + timedelta(minutes=_WEBHOOK_HEALTH_CHECK_INTERVAL_MINUTES),
         )
-
-    scheduler.add_job(
-        sync_bigcommerce_analytics_cache_job,
-        trigger=IntervalTrigger(minutes=_BIGCOMMERCE_ANALYTICS_SYNC_INTERVAL_MINUTES),
-        id="bigcommerce_analytics_sync",
-        name="Sync BigCommerce analytics cache",
-        replace_existing=True,
-        next_run_time=datetime.now() + timedelta(minutes=1),
-        coalesce=True,
-        max_instances=1,
-        misfire_grace_time=600,
-    )
-    scheduler.add_job(
-        backfill_bigcommerce_analytics_cache_job,
-        trigger=CronTrigger(
-            hour=_BIGCOMMERCE_ANALYTICS_NIGHTLY_BACKFILL_HOUR,
-            minute=_BIGCOMMERCE_ANALYTICS_NIGHTLY_BACKFILL_MINUTE,
-            timezone=_SCHEDULER_TIMEZONE,
-        ),
-        id="bigcommerce_analytics_nightly_backfill",
-        name="Nightly BigCommerce analytics cache backfill",
-        replace_existing=True,
-        coalesce=True,
-        max_instances=1,
-        misfire_grace_time=3600,
-    )
-    scheduler.add_job(
-        sync_product_intelligence_cache_job,
-        trigger=IntervalTrigger(minutes=_PRODUCT_INTELLIGENCE_SYNC_INTERVAL_MINUTES),
-        id="product_intelligence_sync",
-        name="Sync Store Intelligence product feed",
-        replace_existing=True,
-        next_run_time=datetime.now() + timedelta(minutes=1),
-        coalesce=True,
-        max_instances=1,
-        misfire_grace_time=600,
-    )
 
     scheduler.start()
     if settings.inflow_polling_sync_enabled and poll_interval:
