@@ -629,6 +629,30 @@ def _latest_sync(db: Session) -> BigCommerceSyncRun | None:
     return db.query(BigCommerceSyncRun).order_by(BigCommerceSyncRun.started_at.desc()).first()
 
 
+ORDER_SYNC_MODES = ("incremental", "full_backfill")
+
+
+def _last_successful_order_sync(db: Session) -> BigCommerceSyncRun | None:
+    return (
+        db.query(BigCommerceSyncRun)
+        .filter(
+            BigCommerceSyncRun.status == "completed",
+            BigCommerceSyncRun.mode.in_(ORDER_SYNC_MODES),
+        )
+        .order_by(BigCommerceSyncRun.completed_at.desc())
+        .first()
+    )
+
+
+def _latest_order_sync(db: Session) -> BigCommerceSyncRun | None:
+    return (
+        db.query(BigCommerceSyncRun)
+        .filter(BigCommerceSyncRun.mode.in_(ORDER_SYNC_MODES))
+        .order_by(BigCommerceSyncRun.started_at.desc())
+        .first()
+    )
+
+
 def _last_successful_sync_for_mode(db: Session, mode: str) -> BigCommerceSyncRun | None:
     return (
         db.query(BigCommerceSyncRun)
@@ -948,6 +972,8 @@ def get_bigcommerce_cache_status() -> dict[str, Any]:
     try:
         last_sync = _last_successful_sync(db)
         latest_sync = _latest_sync(db)
+        last_order_sync = _last_successful_order_sync(db)
+        latest_order_sync = _latest_order_sync(db)
         last_product_intelligence_sync = _last_successful_sync_for_mode(db, "product_intelligence")
         latest_order = db.query(BigCommerceOrder.date_modified).order_by(BigCommerceOrder.date_modified.desc()).first()
         order_count = db.query(BigCommerceOrder).count()
@@ -967,11 +993,13 @@ def get_bigcommerce_cache_status() -> dict[str, Any]:
         )
         now = datetime.utcnow()
         is_stale = True
-        if last_sync and last_sync.completed_at:
-            is_stale = now - last_sync.completed_at > timedelta(minutes=SYNC_STALE_AFTER_MINUTES)
+        if last_order_sync and last_order_sync.completed_at:
+            is_stale = now - last_order_sync.completed_at > timedelta(minutes=SYNC_STALE_AFTER_MINUTES)
         return {
             "last_successful_sync": _sync_run_summary(last_sync),
             "latest_sync": _sync_run_summary(latest_sync),
+            "last_order_sync": _sync_run_summary(last_order_sync),
+            "latest_order_sync": _sync_run_summary(latest_order_sync),
             "order_count": order_count,
             "line_item_count": item_count,
             "product_count": product_count,
@@ -1068,13 +1096,32 @@ ORDER_GRAIN_AGGREGATE_COLUMNS = frozenset(
 )
 
 
+def _order_table_aliases(sql: str) -> set[str]:
+    aliases = {"bc_orders"}
+    normalized = re.sub(r"\s+", " ", sql.lower())
+    for match in re.finditer(
+        r"\b(?:from|join)\s+bc_orders(?:\s+(?:as\s+)?([a-zA-Z_][\w]*))?",
+        normalized,
+        re.IGNORECASE,
+    ):
+        alias = match.group(1)
+        if alias and alias not in {"where", "join", "on", "group", "order", "limit"}:
+            aliases.add(alias.lower())
+    return aliases
+
+
 def _sql_aggregates_order_grain_columns(sql: str) -> bool:
     normalized = re.sub(r"\s+", " ", sql.lower())
+    order_aliases = _order_table_aliases(sql)
     for column in ORDER_GRAIN_AGGREGATE_COLUMNS:
-        if re.search(
-            rf"\b(?:sum|avg|max|min)\s*\(\s*(?:[\w]+\.)?{re.escape(column)}\s*\)",
-            normalized,
-        ):
+        aggregate_pattern = re.compile(
+            rf"\b(?:sum|avg|max|min)\s*\(\s*(?:(?P<alias>[a-zA-Z_][\w]*)\.)?{re.escape(column)}\s*\)",
+            re.IGNORECASE,
+        )
+        for match in aggregate_pattern.finditer(normalized):
+            alias = match.group("alias")
+            if alias and alias.lower() not in order_aliases:
+                continue
             return True
     return False
 

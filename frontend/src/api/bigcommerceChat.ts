@@ -42,6 +42,16 @@ export interface BigCommerceCacheStatus {
     status: string;
     error?: string | null;
   } | null;
+  last_order_sync?: {
+    completed_at: string | null;
+    status: string;
+    orders_upserted: number;
+  } | null;
+  latest_order_sync?: {
+    completed_at: string | null;
+    status: string;
+    error?: string | null;
+  } | null;
   order_count: number;
   line_item_count: number;
   product_count?: number;

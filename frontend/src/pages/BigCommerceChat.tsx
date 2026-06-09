@@ -406,8 +406,8 @@ export default function BigCommerceChat() {
     }
 
     const notes: string[] = [];
-    if (cacheStatus.latest_sync?.status === "failed") {
-      notes.push(`latest sync failed${cacheStatus.latest_sync.error ? `: ${cacheStatus.latest_sync.error}` : ""}`);
+    if (cacheStatus.latest_order_sync?.status === "failed") {
+      notes.push(`latest order sync failed${cacheStatus.latest_order_sync.error ? `: ${cacheStatus.latest_order_sync.error}` : ""}`);
     }
     if (cacheStatus.catalog_tables_available === false) {
       notes.push("catalog tables are missing");
@@ -510,7 +510,7 @@ export default function BigCommerceChat() {
                 cacheStatus.is_stale ? "text-amber-600" : "text-muted-foreground"
               )}
             >
-              Data last synced {formatCacheTimestamp(cacheStatus.last_successful_sync?.completed_at ?? null)}
+              Orders last synced {formatCacheTimestamp(cacheStatus.last_order_sync?.completed_at ?? cacheStatus.last_successful_sync?.completed_at ?? null)}
               {" | "}
               {cacheStatus.order_count.toLocaleString()} orders
               {" | "}
