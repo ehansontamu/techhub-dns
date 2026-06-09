@@ -66,15 +66,5 @@ def upgrade():
 
 
 def downgrade():
-    op.drop_index("ix_product_intelligence_price_rows_scheme", table_name="product_intelligence_price_rows")
-    op.drop_index("ix_product_intelligence_price_rows_product", table_name="product_intelligence_price_rows")
     op.drop_table("product_intelligence_price_rows")
-
-    op.drop_index("ix_product_intelligence_items_sku", table_name="product_intelligence_items")
-    op.drop_index("ix_product_intelligence_items_name", table_name="product_intelligence_items")
-    op.drop_index("ix_product_intelligence_items_gpu_type", table_name="product_intelligence_items")
-    op.drop_index("ix_product_intelligence_items_closeout", table_name="product_intelligence_items")
-    op.drop_index("ix_product_intelligence_items_category", table_name="product_intelligence_items")
-    op.drop_index("ix_product_intelligence_items_architecture", table_name="product_intelligence_items")
     op.drop_table("product_intelligence_items")
-

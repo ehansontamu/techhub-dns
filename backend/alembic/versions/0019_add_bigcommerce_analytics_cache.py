@@ -174,46 +174,14 @@ def upgrade():
 
 
 def downgrade():
-    op.drop_index("ix_bc_order_custom_fields_value", table_name="bc_order_custom_fields")
-    op.drop_index("ix_bc_order_custom_fields_order_id", table_name="bc_order_custom_fields")
-    op.drop_index("ix_bc_order_custom_fields_name", table_name="bc_order_custom_fields")
     op.drop_table("bc_order_custom_fields")
 
-    op.drop_index("ix_bc_order_addresses_shipping_method", table_name="bc_order_addresses")
-    op.drop_index("ix_bc_order_addresses_order_type", table_name="bc_order_addresses")
-    op.drop_index("ix_bc_order_addresses_full_name", table_name="bc_order_addresses")
-    op.drop_index("ix_bc_order_addresses_email", table_name="bc_order_addresses")
-    op.drop_index("ix_bc_order_addresses_company", table_name="bc_order_addresses")
     op.drop_table("bc_order_addresses")
 
-    op.drop_index("ix_bc_order_items_sku", table_name="bc_order_items")
-    op.drop_index("ix_bc_order_items_product_id", table_name="bc_order_items")
-    op.drop_index("ix_bc_order_items_order_id", table_name="bc_order_items")
-    op.drop_index("ix_bc_order_items_name", table_name="bc_order_items")
     op.drop_table("bc_order_items")
 
-    op.drop_index("ix_bc_orders_status_date_created", table_name="bc_orders")
-    op.drop_index("ix_bc_orders_status", table_name="bc_orders")
-    op.drop_index("ix_bc_orders_placed_by_name", table_name="bc_orders")
-    op.drop_index("ix_bc_orders_placed_by_email", table_name="bc_orders")
-    op.drop_index("ix_bc_orders_placed_by_company", table_name="bc_orders")
-    op.drop_index("ix_bc_orders_department_code", table_name="bc_orders")
-    op.drop_index("ix_bc_orders_date_modified", table_name="bc_orders")
-    op.drop_index("ix_bc_orders_date_created", table_name="bc_orders")
-    op.drop_index("ix_bc_orders_customer_id", table_name="bc_orders")
-    op.drop_index("ix_bc_orders_customer_date_created", table_name="bc_orders")
-    op.drop_index("ix_bc_orders_college_unit", table_name="bc_orders")
-    op.drop_index("ix_bc_orders_college_date_created", table_name="bc_orders")
-    op.drop_index("ix_bc_orders_billing_email", table_name="bc_orders")
-    op.drop_index("ix_bc_orders_billing_company", table_name="bc_orders")
-    op.drop_index("ix_bc_orders_account_numbers", table_name="bc_orders")
     op.drop_table("bc_orders")
 
-    op.drop_index("ix_bc_customers_full_name", table_name="bc_customers")
-    op.drop_index("ix_bc_customers_email", table_name="bc_customers")
-    op.drop_index("ix_bc_customers_company", table_name="bc_customers")
     op.drop_table("bc_customers")
 
-    op.drop_index("ix_bc_sync_runs_status", table_name="bc_sync_runs")
-    op.drop_index("ix_bc_sync_runs_started_at", table_name="bc_sync_runs")
     op.drop_table("bc_sync_runs")

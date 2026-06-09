@@ -104,22 +104,10 @@ def upgrade():
 
 
 def downgrade():
-    op.drop_index("ix_bc_product_variants_sku", table_name="bc_product_variants")
-    op.drop_index("ix_bc_product_variants_product_id", table_name="bc_product_variants")
     op.drop_table("bc_product_variants")
 
-    op.drop_index("ix_bc_products_sku", table_name="bc_products")
-    op.drop_index("ix_bc_products_product_kind", table_name="bc_products")
-    op.drop_index("ix_bc_products_name", table_name="bc_products")
-    op.drop_index("ix_bc_products_manufacturer", table_name="bc_products")
-    op.drop_index("ix_bc_products_is_visible", table_name="bc_products")
-    op.drop_index("ix_bc_products_cpu_family", table_name="bc_products")
-    op.drop_index("ix_bc_products_brand_id", table_name="bc_products")
     op.drop_table("bc_products")
 
-    op.drop_index("ix_bc_categories_parent_id", table_name="bc_categories")
-    op.drop_index("ix_bc_categories_name", table_name="bc_categories")
     op.drop_table("bc_categories")
 
-    op.drop_index("ix_bc_brands_name", table_name="bc_brands")
     op.drop_table("bc_brands")
