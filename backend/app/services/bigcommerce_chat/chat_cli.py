@@ -1298,7 +1298,26 @@ def _format_sql_query_result(result: dict[str, Any], _question: str) -> str | No
     return None
 
 
-def _format_direct_tool_answer(name: str, result: dict[str, Any]) -> str | None:
+def _is_sales_history_question(question: str) -> bool:
+    normalized = question.lower()
+    return any(
+        term in normalized
+        for term in [
+            "sold",
+            "sales",
+            "revenue",
+            "quantity",
+            "qty",
+            "purchased",
+            "bought",
+            "ordered",
+            "month over month",
+            "per month",
+        ]
+    )
+
+
+def _format_direct_tool_answer(name: str, result: dict[str, Any], question: str = "") -> str | None:
     if result.get("error"):
         return None
     if name == "run_bigcommerce_readonly_query":
@@ -1341,8 +1360,12 @@ def _format_direct_tool_answer(name: str, result: dict[str, Any]) -> str | None:
         "get_low_stock_products",
         "find_products_missing_images",
     }:
+        if _is_sales_history_question(question):
+            return None
         return _format_catalog_products(result)
     if name == "get_catalog_product_profile":
+        if _is_sales_history_question(question):
+            return None
         return _format_catalog_product_profile(result)
     if name == "get_catalog_filtered_product_sales":
         return _format_catalog_filtered_product_sales(result)
@@ -1381,7 +1404,15 @@ def _run_tool_calls(
         result = _call_tool(name, arguments)
         parsed = json.loads(result)
         cache_failed = cache_failed or _cache_tool_result_failed(name, parsed)
-        formatted_direct_answer = _format_direct_tool_answer(name, parsed) or formatted_direct_answer
+        user_question = next(
+            (
+                str(message.get("content") or "")
+                for message in reversed(history)
+                if message.get("role") == "user"
+            ),
+            "",
+        )
+        formatted_direct_answer = _format_direct_tool_answer(name, parsed, user_question) or formatted_direct_answer
         history.append(
             {
                 "role": "tool",
