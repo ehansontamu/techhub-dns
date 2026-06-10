@@ -13,6 +13,11 @@ export default function Login() {
     const { isAuthenticated, isLoading, login } = useAuth();
     const navigate = useNavigate();
     const location = useLocation();
+    const errorCode = new URLSearchParams(location.search).get("error");
+    const errorMessage =
+        errorCode === "not_authorized"
+            ? "Your TAMU account signed in successfully, but it is not approved for TechHub access. Please contact a TechHub administrator."
+            : null;
 
     // Redirect if already authenticated
     useEffect(() => {
@@ -63,6 +68,12 @@ export default function Login() {
                     alt="Texas A&M University"
                     className="mx-auto h-24 w-auto mb-8"
                 />
+
+                {errorMessage ? (
+                    <div className="mb-6 max-w-md rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+                        {errorMessage}
+                    </div>
+                ) : null}
 
                 <button
                     onClick={login}

@@ -20,6 +20,7 @@ from app.services.saml_auth_service import saml_auth_service
 from app.services.system_setting_service import (
     SystemSettingService,
     SETTING_ADMIN_EMAILS,
+    SETTING_ALLOWED_USER_EMAILS,
 )
 from app.services.maintenance_tick_service import schedule_maintenance_tick_if_needed
 
@@ -108,6 +109,63 @@ def _consume_rate_limit(
 def is_dev_auth_bypass_enabled() -> bool:
     """Return True when local development auth bypass is explicitly enabled."""
     return settings.is_dev() and bool(getattr(settings, "dev_auth_bypass", False))
+
+
+def _normalize_email_list(values: list[str]) -> list[str]:
+    normalized: list[str] = []
+    for value in values:
+        email = (value or "").strip().lower()
+        if not email:
+            continue
+        normalized.append(email)
+    return sorted(set(normalized))
+
+
+def _parse_email_allowlist(raw_value: str | None) -> list[str]:
+    return _normalize_email_list(settings._parse_string_list(raw_value))
+
+
+def get_effective_admin_email_allowlist(db=None) -> list[str]:
+    env_allowlist = _normalize_email_list(settings.get_admin_emails())
+    if db is None:
+        with get_db() as scoped_db:
+            raw = SystemSettingService.get_setting(scoped_db, SETTING_ADMIN_EMAILS)
+            db_allowlist = _parse_email_allowlist(raw)
+    else:
+        raw = SystemSettingService.get_setting(db, SETTING_ADMIN_EMAILS)
+        db_allowlist = _parse_email_allowlist(raw)
+
+    return sorted(set(env_allowlist) | set(db_allowlist))
+
+
+def get_effective_allowed_user_email_allowlist(db=None) -> list[str]:
+    env_allowlist = _normalize_email_list(settings.get_allowed_user_emails())
+    if db is None:
+        with get_db() as scoped_db:
+            raw = SystemSettingService.get_setting(scoped_db, SETTING_ALLOWED_USER_EMAILS)
+            db_allowlist = _parse_email_allowlist(raw)
+    else:
+        raw = SystemSettingService.get_setting(db, SETTING_ALLOWED_USER_EMAILS)
+        db_allowlist = _parse_email_allowlist(raw)
+
+    return sorted(set(env_allowlist) | set(db_allowlist))
+
+
+def is_email_allowed_for_app_access(email: str | None, db=None) -> bool:
+    normalized_email = (email or "").strip().lower()
+    if not normalized_email:
+        return False
+
+    admin_allowlist = get_effective_admin_email_allowlist(db)
+    if normalized_email in admin_allowlist:
+        return True
+
+    allowed_user_allowlist = get_effective_allowed_user_email_allowlist(db)
+    if not allowed_user_allowlist:
+        # Safe rollout: keep current behavior until an operator allowlist is configured.
+        return True
+
+    return normalized_email in allowed_user_allowlist
 
 
 def _set_dev_auth_context() -> None:
@@ -225,11 +283,18 @@ def init_auth_middleware(app):
                 result = saml_auth_service.validate_session(db, session_id_cookie)
                 if result:
                     user, session = result
-                    g.user_id = str(user.id)
-                    g.session_id = str(session.id)
-                    g.user_email = str(user.email) if user.email else None
-                    g.user_data = user.to_dict()
-                    g.session_data = session.to_dict()
+                    user_email = str(user.email).strip().lower() if user.email else None
+                    if is_email_allowed_for_app_access(user_email, db):
+                        g.user_id = str(user.id)
+                        g.session_id = str(session.id)
+                        g.user_email = user_email
+                        g.user_data = user.to_dict()
+                        g.session_data = session.to_dict()
+                    else:
+                        logger.info(
+                            "Blocked session for user no longer allowed to access the app: %s",
+                            user_email or "<missing-email>",
+                        )
                 else:
                     logger.debug(f"Invalid session: {session_id_cookie[:8]}...")
 
@@ -333,14 +398,7 @@ def is_current_user_admin() -> bool:
     if not email:
         return False
 
-    env_allowlist = settings.get_admin_emails()
-
-    with get_db() as db:
-        raw = SystemSettingService.get_setting(db, SETTING_ADMIN_EMAILS)
-        db_allowlist = settings._parse_admin_emails(raw)
-
-    # Merge env + DB (env entries are immutable; DB entries are app-managed).
-    merged = set(env_allowlist or []) | set(db_allowlist or [])
+    merged = set(get_effective_admin_email_allowlist())
     if merged:
         return email in merged
 

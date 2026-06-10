@@ -17,6 +17,7 @@ SETTING_DOCUMENT_SIGNING_ENABLED = "document_signing_enabled"
 
 # Admin allowlist
 SETTING_ADMIN_EMAILS = "admin_emails"
+SETTING_ALLOWED_USER_EMAILS = "allowed_user_emails"
 
 # Picklist / tagging workflow controls
 SETTING_PICKLIST_AUTO_PRINT_ENABLED = "picklist_auto_print_enabled"
@@ -48,6 +49,11 @@ DEFAULT_SETTINGS = {
         "value": "[]",
         "type": SETTING_TYPE_JSON,
         "description": "Admin email allowlist (JSON array string preferred; CSV accepted)",
+    },
+    SETTING_ALLOWED_USER_EMAILS: {
+        "value": "[]",
+        "type": SETTING_TYPE_JSON,
+        "description": "Operator app-access email allowlist (JSON array string preferred; CSV accepted)",
     },
     SETTING_PICKLIST_AUTO_PRINT_ENABLED: {
         "value": "false",

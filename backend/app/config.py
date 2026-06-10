@@ -59,6 +59,7 @@ class Settings(BaseSettings):
     # IMPORTANT: this is intentionally a raw string to avoid pydantic-settings
     # "complex" env parsing (json.loads) which can crash on empty strings.
     admin_emails: Optional[str] = None
+    allowed_user_emails: Optional[str] = None
     picklist_print_agent_token: Optional[str] = None
 
     # TAMU SMTP Email Configuration
@@ -162,6 +163,10 @@ class Settings(BaseSettings):
         - otherwise -> comma-separated list
         """
         return self._parse_admin_emails(self.admin_emails)
+
+    def get_allowed_user_emails(self) -> list[str]:
+        """Return normalized app-access allowlist."""
+        return self._parse_string_list(self.allowed_user_emails)
 
     def get_cors_allowed_origins(self) -> list[str]:
         origins = self._parse_string_list(self.cors_allowed_origins)
