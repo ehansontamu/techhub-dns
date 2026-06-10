@@ -47,6 +47,7 @@ from app.services.system_setting_service import (
     SETTING_EMAIL_ENABLED,
     SETTING_TEAMS_RECIPIENT_ENABLED,
     SETTING_ADMIN_EMAILS,
+    SETTING_ALLOWED_USER_EMAILS,
     SETTING_REQUIRE_DIFFERENT_USER_FOR_PICK_AND_QA,
     SETTING_PICKLIST_PRINT_CLAIM_TIMEOUT_SECONDS,
 )
@@ -853,8 +854,21 @@ def _get_db_admin_allowlist() -> list[str]:
         db.close()
 
 
+def _get_db_allowed_user_allowlist() -> list[str]:
+    db = get_db_session()
+    try:
+        raw = SystemSettingService.get_setting(db, SETTING_ALLOWED_USER_EMAILS)
+        return _parse_allowlist_string(raw)
+    finally:
+        db.close()
+
+
 def _is_env_admin_override_active() -> bool:
     return bool(settings.get_admin_emails())
+
+
+def _is_env_allowed_user_override_active() -> bool:
+    return bool(settings.get_allowed_user_emails())
 
 
 # ============ Settings Endpoints ============
@@ -926,6 +940,10 @@ def update_system_setting(key: str):
     if key == SETTING_ADMIN_EMAILS:
         return jsonify(
             {"error": "Admin allowlist must be updated via /api/system/admins"}
+        ), 400
+    if key == SETTING_ALLOWED_USER_EMAILS:
+        return jsonify(
+            {"error": "Allowed-user list must be updated via /api/system/allowed-users"}
         ), 400
 
     data = request.get_json()
@@ -1086,6 +1104,138 @@ def update_admins():
                 "db_admins": normalized,
                 "env_admins": env_admins,
                 "source": source,
+                "updated_by": updated_by,
+            }
+        )
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+@bp.route("/allowed-users", methods=["GET"])
+@require_admin
+def get_allowed_users():
+    """Get the effective app-access allowlist + its source."""
+    env_allowed_users = _normalize_admin_emails(settings.get_allowed_user_emails())
+    db_allowed_users = _get_db_allowed_user_allowlist()
+
+    merged = sorted(set(env_allowed_users) | set(db_allowed_users))
+
+    if env_allowed_users and db_allowed_users:
+        source = "mixed"
+    elif env_allowed_users:
+        source = "env"
+    elif db_allowed_users:
+        source = "db"
+    else:
+        source = "default"
+
+    response: dict[str, Any] = {
+        "allowed_users": merged,
+        "source": source,
+        "env_allowed_users": env_allowed_users,
+        "db_allowed_users": db_allowed_users,
+        "restriction_enabled": bool(merged),
+        "admins_are_always_allowed": True,
+    }
+    return jsonify(response)
+
+
+@bp.route("/allowed-users", methods=["PUT"])
+@require_admin
+def update_allowed_users():
+    """Update the DB-backed app-access allowlist. Env entries are pinned and auto-merged on reads."""
+    data = request.get_json(silent=True) or {}
+    allowed_users_payload = data.get("allowed_users")
+    if not isinstance(allowed_users_payload, list):
+        return jsonify({"error": "Missing 'allowed_users' list in request body"}), 400
+
+    raw_emails: list[str] = []
+    for item in allowed_users_payload:
+        if not isinstance(item, str):
+            return jsonify({"error": "Each allowed-user email must be a string"}), 400
+        raw_emails.append(item)
+
+    normalized = _normalize_admin_emails(raw_emails)
+
+    invalid = [email for email in normalized if not EMAIL_RE.match(email)]
+    if invalid:
+        return (
+            jsonify(
+                {
+                    "error": "One or more allowed-user emails are invalid.",
+                    "invalid": invalid,
+                }
+            ),
+            400,
+        )
+
+    if not settings.is_dev() and not normalized and not _is_env_allowed_user_override_active():
+        return (
+            jsonify(
+                {
+                    "error": "Refusing to set an empty allowed-user list in non-development environments.",
+                }
+            ),
+            400,
+        )
+
+    caller_email = _get_request_user_email_normalized()
+    updated_by = caller_email or get_current_user_email()
+
+    db = get_db_session()
+    try:
+        setting = (
+            db.query(SystemSetting)
+            .filter(SystemSetting.key == SETTING_ALLOWED_USER_EMAILS)
+            .first()
+        )
+        old_raw = setting.value if setting else None
+        old_list = _parse_allowlist_string(old_raw)
+        new_raw = json.dumps(normalized)
+
+        if not setting:
+            setting = SystemSetting(
+                key=SETTING_ALLOWED_USER_EMAILS,
+                value=new_raw,
+                description=DEFAULT_SETTINGS.get(SETTING_ALLOWED_USER_EMAILS, {}).get(
+                    "description"
+                ),
+                updated_by=updated_by,
+            )
+            db.add(setting)
+        else:
+            setting.value = new_raw
+            setting.updated_by = updated_by
+
+        audit = AuditService(db)
+        audit.log_system_action(
+            action="allowed_users.update",
+            entity_id="allowed_user_allowlist",
+            user_id=updated_by,
+            old_value={"allowed_users": old_list},
+            new_value={"allowed_users": normalized},
+            description=f"Updated app-access allowlist ({len(old_list)} -> {len(normalized)})",
+            ip_address=request.remote_addr,
+            user_agent=request.headers.get("User-Agent"),
+        )
+
+        db.commit()
+
+        env_allowed_users = _normalize_admin_emails(settings.get_allowed_user_emails())
+        merged = sorted(set(env_allowed_users) | set(normalized))
+        source = "mixed" if env_allowed_users else "db"
+
+        return jsonify(
+            {
+                "allowed_users": merged,
+                "db_allowed_users": normalized,
+                "env_allowed_users": env_allowed_users,
+                "source": source,
+                "restriction_enabled": bool(merged),
+                "admins_are_always_allowed": True,
                 "updated_by": updated_by,
             }
         )

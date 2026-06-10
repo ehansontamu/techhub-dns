@@ -15,7 +15,11 @@ import msal
 from app.config import settings
 from app.database import get_db
 from app.services.saml_auth_service import saml_auth_service
-from app.api.auth_middleware import is_current_user_admin, is_dev_auth_bypass_enabled
+from app.api.auth_middleware import (
+    is_current_user_admin,
+    is_dev_auth_bypass_enabled,
+    is_email_allowed_for_app_access,
+)
 from app.utils.exceptions import DNSApiError
 from app.utils.csrf import csrf_protect
 
@@ -163,6 +167,10 @@ def _clear_oidc_login_state() -> None:
     flask_session.pop(OIDC_SESSION_FLOW_KEY, None)
 
 
+def _build_login_error_redirect(error_code: str) -> str:
+    return f"{_get_browser_origin()}/login?error={error_code}"
+
+
 def _complete_oidc_login() -> tuple[str, dict]:
     if request.args.get("error"):
         error = request.args.get("error")
@@ -223,6 +231,9 @@ def _complete_oidc_login() -> tuple[str, dict]:
 def _finalize_oidc_login(relay_state: str, oidc_claims: dict):
     with get_db() as db:
         user = saml_auth_service.get_or_create_user_from_oidc_claims(db, oidc_claims)
+        if not is_email_allowed_for_app_access(user.email, db):
+            logger.info("Denied app access for Microsoft Entra user: %s", user.email)
+            return redirect(_build_login_error_redirect("not_authorized"))
         session = saml_auth_service.create_session(
             db,
             user,
@@ -369,6 +380,9 @@ def saml_callback():
         # Create/update user and session
         with get_db() as db:
             user = saml_auth_service.get_or_create_user(db, saml_attributes)
+            if not is_email_allowed_for_app_access(user.email, db):
+                logger.info("Denied app access for SAML user: %s", user.email)
+                return redirect(_build_login_error_redirect("not_authorized"))
             session = saml_auth_service.create_session(
                 db,
                 user,

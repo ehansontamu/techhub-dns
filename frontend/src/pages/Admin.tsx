@@ -13,6 +13,7 @@ import { Input } from "../components/ui/input";
 import { extractApiErrorMessage } from "../utils/apiErrors";
 
 const AdminsTab = lazy(() => import("../components/admin/AdminsTab"));
+const AllowedUsersTab = lazy(() => import("../components/admin/AllowedUsersTab"));
 
 type RuleKey =
     | "email_notifications_enabled"
@@ -222,6 +223,31 @@ export default function Admin() {
                                 </div>
                             );
                         })}
+                    </CardContent>
+                </Card>
+
+                <Card className="border-border/70 bg-card/80 shadow-none">
+                    <CardHeader>
+                        <CardTitle className="text-base">App access allowlist</CardTitle>
+                        <CardDescription>Users who are allowed to enter TechHub after TAMU sign-in.</CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                        <SectionErrorBoundary title="App access allowlist failed" message="Try reloading the panel.">
+                            <Suspense
+                                fallback={
+                                    <Card>
+                                        <CardContent className="p-6">
+                                            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                                                <Loader2 className="h-4 w-4 animate-spin" />
+                                                Loading...
+                                            </div>
+                                        </CardContent>
+                                    </Card>
+                                }
+                            >
+                                <AllowedUsersTab />
+                            </Suspense>
+                        </SectionErrorBoundary>
                     </CardContent>
                 </Card>
 
