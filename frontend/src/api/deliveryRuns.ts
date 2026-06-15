@@ -7,7 +7,7 @@ function safeArray<T>(value: unknown): T[] {
 
 export interface CreateDeliveryRunRequest {
   order_ids: string[];
-  vehicle: "van" | "golf_cart";
+  vehicle: "van" | "golf_cart" | "pickup";
 }
 
 export interface RecallOrderRequest {
@@ -101,7 +101,7 @@ export const deliveryRunsApi = {
     return response.data;
   },
 
-  getRuns: async (query?: { status?: string[]; vehicle?: "van" | "golf_cart" }): Promise<DeliveryRunResponse[]> => {
+  getRuns: async (query?: { status?: string[]; vehicle?: "van" | "golf_cart" | "pickup" }): Promise<DeliveryRunResponse[]> => {
     const params = new URLSearchParams();
     if (query?.status) {
       query.status.forEach((s) => params.append("status", s));

@@ -23,6 +23,10 @@ from app.utils.timezone import get_date_in_cst, is_morning_in_cst, to_utc_iso_z
 
 logger = logging.getLogger(__name__)
 
+DELIVERY_RUN_VEHICLES = {v.value for v in VehicleEnum}
+PICKUP_DISPATCH_MODE = "pickup"
+ALLOWED_DISPATCH_TARGETS = DELIVERY_RUN_VEHICLES | {PICKUP_DISPATCH_MODE}
+
 class DeliveryRunService:
     INFLOW_FULFILLMENT_CONCURRENCY = 3
 
@@ -360,15 +364,18 @@ class DeliveryRunService:
         return active is None
 
     def _validate_vehicle(self, vehicle: str) -> str:
-        allowed = {v.value for v in VehicleEnum}
         vehicle_norm = (vehicle or "").strip()
-        if vehicle_norm not in allowed:
+        if vehicle_norm not in ALLOWED_DISPATCH_TARGETS:
             raise ValidationError(
-                f"Vehicle must be one of: {sorted(allowed)}",
+                f"Vehicle must be one of: {sorted(ALLOWED_DISPATCH_TARGETS)}",
                 field="vehicle",
-                details={"allowed": sorted(allowed), "provided": vehicle},
+                details={"allowed": sorted(ALLOWED_DISPATCH_TARGETS), "provided": vehicle},
             )
         return vehicle_norm
+
+    @staticmethod
+    def _is_pickup_dispatch(vehicle: str) -> bool:
+        return (vehicle or "").strip() == PICKUP_DISPATCH_MODE
 
     def _get_authenticated_actor(self) -> tuple[str, str, str]:
         user_id = (getattr(g, "user_id", None) or "").strip()
@@ -424,6 +431,11 @@ class DeliveryRunService:
         actor_user_id, actor_display_name, actor_email = self._get_authenticated_actor()
         runner_display = self._format_actor_display(actor_display_name)
 
+        if self._is_pickup_dispatch(vehicle_norm):
+            return self.create_run(
+                runner=runner_display, order_ids=order_ids, vehicle=vehicle_norm
+            )
+
         active_checkout = self._get_active_checkout(vehicle_norm)
         if not active_checkout:
             raise ValidationError(
@@ -478,21 +490,22 @@ class DeliveryRunService:
         """
         vehicle_norm = self._validate_vehicle(vehicle)
 
-        # Vehicle availability — lock existing active runs for this vehicle to prevent races
-        existing_run = (
-            self.db.query(DeliveryRun)
-            .filter(
-                DeliveryRun.vehicle == vehicle_norm,
-                DeliveryRun.status == DeliveryRunStatus.ACTIVE.value,
+        if not self._is_pickup_dispatch(vehicle_norm):
+            # Vehicle availability — lock existing active runs for this vehicle to prevent races
+            existing_run = (
+                self.db.query(DeliveryRun)
+                .filter(
+                    DeliveryRun.vehicle == vehicle_norm,
+                    DeliveryRun.status == DeliveryRunStatus.ACTIVE.value,
+                )
+                .with_for_update()
+                .first()
             )
-            .with_for_update()
-            .first()
-        )
-        if existing_run is not None:
-            raise ValidationError(
-                f"Vehicle {vehicle} is currently in use",
-                details={"vehicle": vehicle, "active_run_id": str(existing_run.id)},
-            )
+            if existing_run is not None:
+                raise ValidationError(
+                    f"Vehicle {vehicle} is currently in use",
+                    details={"vehicle": vehicle, "active_run_id": str(existing_run.id)},
+                )
 
         # Convert order IDs to strings for MySQL compatibility
         order_ids_str = [str(oid) for oid in order_ids]
