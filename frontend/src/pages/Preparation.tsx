@@ -85,6 +85,13 @@ type BatchStatusState = {
     failedOrders?: Array<{ order: string; reason: string }>;
 };
 
+type PickerOverrideStatusState = {
+    type: "success" | "error";
+    message: string;
+    updatedOrders?: string[];
+    pickerLabel?: string;
+};
+
 function getBlockedReason(order: OrderDetail): string {
     if (order.picklist_generated_at) {
         return "picklist already generated";
@@ -111,6 +118,9 @@ export default function Preparation() {
 
     const [selectedTagCandidates, setSelectedTagCandidates] = useState<string[]>([]);
     const [selectedPrepOrders, setSelectedPrepOrders] = useState<string[]>([]);
+    const [selectedOverrideOrders, setSelectedOverrideOrders] = useState<string[]>([]);
+    const [selectedPickerEmail, setSelectedPickerEmail] = useState("");
+    const [pickerOverrideStatus, setPickerOverrideStatus] = useState<PickerOverrideStatusState | null>(null);
     const queryClient = useQueryClient();
 
     const tagCandidatesQuery = useQuery({
@@ -125,6 +135,16 @@ export default function Preparation() {
         select: (result) => result.items.filter((order) => canGeneratePicklist(order)),
     });
 
+    const pickerOverrideOrdersQuery = useQuery({
+        ...getOrdersListQueryOptions({ status: OrderStatus.QA, search: "", limit: 1000 }),
+        select: (result) => result.items.filter((order) => Boolean(order.picklist_generated_at)),
+    });
+
+    const pickerOptionsQuery = useQuery({
+        queryKey: ["picker-options"],
+        queryFn: () => ordersApi.getPickerOptions(),
+    });
+
     const tagCandidates = tagCandidatesQuery.data ?? [];
     const tagCandidatesLoading = tagCandidatesQuery.isPending || tagCandidatesQuery.isFetching;
     const tagCandidatesError = tagCandidatesQuery.isError ? "Failed to load picked orders. Please refresh." : null;
@@ -132,6 +152,12 @@ export default function Preparation() {
     const prepOrders = prepOrdersQuery.data ?? [];
     const prepOrdersLoading = prepOrdersQuery.isPending || prepOrdersQuery.isFetching;
     const prepOrdersError = prepOrdersQuery.isError ? "Failed to load preparation queue. Please refresh." : null;
+    const pickerOverrideOrders = pickerOverrideOrdersQuery.data ?? [];
+    const pickerOverrideOrdersLoading = pickerOverrideOrdersQuery.isPending || pickerOverrideOrdersQuery.isFetching;
+    const pickerOverrideOrdersError = pickerOverrideOrdersQuery.isError ? "Failed to load QA orders. Please refresh." : null;
+    const pickerOptions = pickerOptionsQuery.data ?? [];
+    const pickerOptionsLoading = pickerOptionsQuery.isPending || pickerOptionsQuery.isFetching;
+    const pickerOptionsError = pickerOptionsQuery.isError ? "Failed to load allowed picker options. Please refresh." : null;
 
     const uploadMutation = useMutation({
         mutationFn: (orders: string[]) => settingsApi.uploadCanopyOrders(orders),
@@ -236,6 +262,26 @@ export default function Preparation() {
         },
     });
 
+    const pickerOverrideMutation = useMutation({
+        mutationFn: (payload: { order_ids: string[]; picker_email: string }) => ordersApi.bulkOverridePicker(payload),
+        onSuccess: async (response) => {
+            setPickerOverrideStatus({
+                type: "success",
+                message: `Updated picker for ${response.updated_orders.length} order${response.updated_orders.length === 1 ? "" : "s"}.`,
+                updatedOrders: response.updated_orders.map((order) => order.inflow_order_id),
+                pickerLabel: response.picker_display_name,
+            });
+            setSelectedOverrideOrders([]);
+            await queryClient.invalidateQueries({ queryKey: ordersQueryKeys.all });
+        },
+        onError: (error: unknown) => {
+            setPickerOverrideStatus({
+                type: "error",
+                message: extractApiErrorMessage(error, "Failed to override picker."),
+            });
+        },
+    });
+
     const selectedTagOrderIds = useMemo(
         () => Array.from(new Set(selectedTagCandidates)).filter(Boolean).sort(),
         [selectedTagCandidates]
@@ -247,6 +293,7 @@ export default function Preparation() {
     );
 
     const selectedPrepOrderSet = useMemo(() => new Set(selectedPrepOrders), [selectedPrepOrders]);
+    const selectedOverrideOrderSet = useMemo(() => new Set(selectedOverrideOrders), [selectedOverrideOrders]);
 
     const selectedPrepOrderDisplayIds = useMemo(
         () =>
@@ -258,6 +305,14 @@ export default function Preparation() {
     );
 
     const selectedTagCandidateSet = useMemo(() => new Set(selectedTagCandidates), [selectedTagCandidates]);
+    const selectedOverrideOrderDisplayIds = useMemo(
+        () =>
+            pickerOverrideOrders
+                .filter((order) => selectedOverrideOrderSet.has(order.id))
+                .map((order) => order.inflow_order_id || order.id)
+                .filter(Boolean),
+        [pickerOverrideOrders, selectedOverrideOrderSet],
+    );
 
     const selectableTagCount = useMemo(() => {
         let count = 0;
@@ -275,6 +330,14 @@ export default function Preparation() {
         return count;
     }, [prepOrders]);
 
+    const selectableOverrideCount = useMemo(() => {
+        let count = 0;
+        for (const order of pickerOverrideOrders) {
+            if (order.id) count += 1;
+        }
+        return count;
+    }, [pickerOverrideOrders]);
+
     const uploadStatusStyles = useMemo(() => {
         if (!uploadStatus) return null;
         return uploadStatus.type === "success"
@@ -289,6 +352,13 @@ export default function Preparation() {
             : "border-destructive/20 bg-destructive/5 text-destructive";
     }, [batchStatus]);
 
+    const pickerOverrideStatusStyles = useMemo(() => {
+        if (!pickerOverrideStatus) return null;
+        return pickerOverrideStatus.type === "success"
+            ? "border-emerald-200 bg-emerald-50 text-emerald-900"
+            : "border-destructive/20 bg-destructive/5 text-destructive";
+    }, [pickerOverrideStatus]);
+
     const handleClearTagSelection = () => {
         setSelectedTagCandidates([]);
         setUploadStatus(null);
@@ -299,12 +369,22 @@ export default function Preparation() {
         setBatchStatus(null);
     };
 
+    const handleClearOverrideSelection = () => {
+        setSelectedOverrideOrders([]);
+        setPickerOverrideStatus(null);
+    };
+
     const loadTagCandidates = async () => {
         await tagCandidatesQuery.refetch();
     };
 
     const loadPrepOrders = async () => {
         await prepOrdersQuery.refetch();
+    };
+
+    const loadPickerOverrideOrders = async () => {
+        await pickerOverrideOrdersQuery.refetch();
+        await pickerOptionsQuery.refetch();
     };
 
     useEffect(() => {
@@ -325,6 +405,15 @@ export default function Preparation() {
         });
     }, [prepOrders]);
 
+    useEffect(() => {
+        setSelectedOverrideOrders((prev) => {
+            if (prev.length === 0) return prev;
+            const present = new Set(pickerOverrideOrders.map((order) => order.id).filter(Boolean));
+            const next = prev.filter((id) => present.has(id));
+            return next.length === prev.length ? prev : next;
+        });
+    }, [pickerOverrideOrders]);
+
     const toggleTagCandidate = useCallback((inflowOrderId: string, checked: boolean) => {
         setSelectedTagCandidates((prev) => {
             if (checked) {
@@ -336,6 +425,15 @@ export default function Preparation() {
 
     const togglePrepOrder = useCallback((orderId: string, checked: boolean) => {
         setSelectedPrepOrders((prev) => {
+            if (checked) {
+                return prev.includes(orderId) ? prev : [...prev, orderId];
+            }
+            return prev.filter((id) => id !== orderId);
+        });
+    }, []);
+
+    const toggleOverrideOrder = useCallback((orderId: string, checked: boolean) => {
+        setSelectedOverrideOrders((prev) => {
             if (checked) {
                 return prev.includes(orderId) ? prev : [...prev, orderId];
             }
@@ -360,6 +458,20 @@ export default function Preparation() {
         setBatchStatus(null);
         try {
             await batchMutation.mutateAsync(selectedPrepOrderIds);
+        } catch {
+            // Handled by mutation callbacks.
+        }
+    };
+
+    const handlePickerOverride = async () => {
+        if (selectedOverrideOrders.length === 0 || !selectedPickerEmail) return;
+
+        setPickerOverrideStatus(null);
+        try {
+            await pickerOverrideMutation.mutateAsync({
+                order_ids: selectedOverrideOrders,
+                picker_email: selectedPickerEmail,
+            });
         } catch {
             // Handled by mutation callbacks.
         }
@@ -885,6 +997,215 @@ export default function Preparation() {
                     </DialogFooter>
                 </DialogContent>
             </Dialog>
+
+            <section className="overflow-hidden rounded-2xl border border-border/70 bg-card/80 shadow-none">
+                <div className="p-5 pb-4 sm:p-6 sm:pb-4">
+                    <div className="flex items-start justify-between gap-3">
+                        <div>
+                            <h2 className="text-base font-semibold tracking-tight">Override Recorded Picker</h2>
+                            <p className="mt-1 text-sm text-muted-foreground">
+                                Use this for QA-stage orders when someone else printed the picklist and became the recorded picker.
+                            </p>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                            <Button type="button" variant="outline" size="sm" onClick={() => void loadPickerOverrideOrders()}>
+                                <RefreshCw className="mr-2 h-4 w-4" />
+                                Refresh
+                            </Button>
+                            <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={() => {
+                                    setSelectedOverrideOrders((prev) => {
+                                        const next = new Set(prev);
+                                        for (const order of pickerOverrideOrders) {
+                                            if (order.id) next.add(order.id);
+                                        }
+                                        return Array.from(next);
+                                    });
+                                }}
+                                disabled={selectableOverrideCount === 0}
+                            >
+                                Select all visible
+                            </Button>
+                            <Button type="button" variant="outline" size="sm" onClick={handleClearOverrideSelection} disabled={selectedOverrideOrders.length === 0}>
+                                Clear selection
+                            </Button>
+                        </div>
+                    </div>
+                </div>
+
+                <div className="px-5 pb-5 sm:px-6 sm:pb-6">
+                    <div className="grid gap-4 xl:grid-cols-[3fr_2fr]">
+                        <div className="space-y-4">
+                            {pickerOverrideOrdersLoading && pickerOverrideOrders.length === 0 ? (
+                                <div className="rounded-lg border bg-muted/30 p-4 text-center text-sm text-muted-foreground">
+                                    Loading QA orders...
+                                </div>
+                            ) : pickerOverrideOrdersError ? (
+                                <div className="rounded-lg border border-destructive/20 bg-destructive/5 p-4 text-sm text-destructive">
+                                    {pickerOverrideOrdersError}
+                                </div>
+                            ) : pickerOverrideOrders.length === 0 ? (
+                                <div className="rounded-lg border border-dashed bg-muted/30 p-4 text-center text-sm text-muted-foreground">
+                                    No QA orders are waiting for picker overrides.
+                                </div>
+                            ) : (
+                                <div className="rounded-lg border bg-card overflow-hidden">
+                                    <div className="max-h-[26rem] overflow-auto">
+                                        <Table className="w-full">
+                                            <TableHeader className="sticky top-0 z-10 bg-card">
+                                                <TableRow>
+                                                    <TableHead className="w-10" />
+                                                    <TableHead className="whitespace-nowrap">Order</TableHead>
+                                                    <TableHead>Recorded picker</TableHead>
+                                                </TableRow>
+                                            </TableHeader>
+                                            <TableBody>
+                                                {pickerOverrideOrders.map((order) => {
+                                                    const checked = selectedOverrideOrderSet.has(order.id);
+
+                                                    return (
+                                                        <TableRow
+                                                            key={order.id}
+                                                            data-state={checked ? "selected" : undefined}
+                                                            className="cursor-pointer hover:bg-muted/30"
+                                                            tabIndex={0}
+                                                            onClick={() => toggleOverrideOrder(order.id, !checked)}
+                                                            onKeyDown={(event) => {
+                                                                if (event.key !== "Enter" && event.key !== " ") return;
+                                                                event.preventDefault();
+                                                                toggleOverrideOrder(order.id, !checked);
+                                                            }}
+                                                        >
+                                                            <TableCell className="w-10">
+                                                                <Checkbox
+                                                                    checked={checked}
+                                                                    aria-label={`Select ${order.inflow_order_id || order.id}`}
+                                                                    onClick={(event) => event.stopPropagation()}
+                                                                    onChange={(event) => toggleOverrideOrder(order.id, event.target.checked)}
+                                                                />
+                                                            </TableCell>
+                                                            <TableCell>
+                                                                <div className="flex items-center gap-2">
+                                                                    <span className="font-medium text-foreground whitespace-nowrap">
+                                                                        {order.inflow_order_id || order.id}
+                                                                    </span>
+                                                                    {checked ? (
+                                                                        <Badge variant="secondary" className="whitespace-nowrap">
+                                                                            Selected
+                                                                        </Badge>
+                                                                    ) : null}
+                                                                </div>
+                                                                <div className="min-w-0 max-w-[12rem] sm:max-w-none">
+                                                                    <p className="truncate text-xs text-muted-foreground">
+                                                                        {order.recipient_name || "Unknown recipient"}
+                                                                    </p>
+                                                                </div>
+                                                            </TableCell>
+                                                            <TableCell>
+                                                                <span className="text-sm text-foreground">
+                                                                    {order.picklist_generated_by || "Not recorded"}
+                                                                </span>
+                                                            </TableCell>
+                                                        </TableRow>
+                                                    );
+                                                })}
+                                            </TableBody>
+                                        </Table>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+
+                        <aside className="self-start rounded-2xl border border-border/70 bg-muted/20 p-4 shadow-none lg:sticky lg:top-6">
+                            <div className="space-y-4">
+                                <div className="rounded-lg border bg-muted/30 p-4 text-sm text-muted-foreground">
+                                    <p className="text-foreground font-medium">{selectedOverrideOrders.length} selected</p>
+                                    {selectedOverrideOrderDisplayIds.length > 0 ? (
+                                        <p className="mt-1 text-xs text-muted-foreground break-words">
+                                            {selectedOverrideOrderDisplayIds.join(", ")}
+                                        </p>
+                                    ) : null}
+                                </div>
+
+                                <div className="space-y-2">
+                                    <label htmlFor="picker-override-select" className="text-sm font-medium text-foreground">
+                                        Set picker to
+                                    </label>
+                                    <select
+                                        id="picker-override-select"
+                                        value={selectedPickerEmail}
+                                        onChange={(event) => setSelectedPickerEmail(event.target.value)}
+                                        className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background"
+                                        disabled={pickerOptionsLoading || pickerOverrideMutation.isPending}
+                                    >
+                                        <option value="">Select a student worker</option>
+                                        {pickerOptions.map((option) => (
+                                            <option key={option.email} value={option.email}>
+                                                {option.label}
+                                            </option>
+                                        ))}
+                                    </select>
+                                    {pickerOptionsError ? (
+                                        <p className="text-xs text-destructive">{pickerOptionsError}</p>
+                                    ) : (
+                                        <p className="text-xs text-muted-foreground">
+                                            Picker options come from the allowed student worker list.
+                                        </p>
+                                    )}
+                                </div>
+
+                                {pickerOverrideStatus ? (
+                                    <div className={`rounded-lg border p-4 text-sm ${pickerOverrideStatusStyles}`}>
+                                        <p className="font-medium">{pickerOverrideStatus.message}</p>
+                                        {pickerOverrideStatus.pickerLabel ? (
+                                            <p className="mt-1 text-xs">Recorded picker: {pickerOverrideStatus.pickerLabel}</p>
+                                        ) : null}
+                                        {pickerOverrideStatus.updatedOrders && pickerOverrideStatus.updatedOrders.length > 0 ? (
+                                            <div className="mt-2 space-y-1">
+                                                <p className="text-xs font-medium">Updated</p>
+                                                <ul className="flex flex-wrap gap-1">
+                                                    {pickerOverrideStatus.updatedOrders.map((order) => (
+                                                        <li key={order}>
+                                                            <Badge variant="secondary" className="whitespace-nowrap">
+                                                                {order}
+                                                            </Badge>
+                                                        </li>
+                                                    ))}
+                                                </ul>
+                                            </div>
+                                        ) : null}
+                                    </div>
+                                ) : null}
+
+                                <div className="flex flex-col gap-2">
+                                    <Button
+                                        type="button"
+                                        variant="outline"
+                                        onClick={handleClearOverrideSelection}
+                                        disabled={selectedOverrideOrders.length === 0}
+                                    >
+                                        Clear selection
+                                    </Button>
+                                    <Button
+                                        type="button"
+                                        onClick={() => void handlePickerOverride()}
+                                        disabled={selectedOverrideOrders.length === 0 || !selectedPickerEmail || pickerOverrideMutation.isPending}
+                                        className="btn-lift"
+                                    >
+                                        {pickerOverrideMutation.isPending ? (
+                                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                        ) : null}
+                                        {pickerOverrideMutation.isPending ? "Updating..." : "Override picker"}
+                                    </Button>
+                                </div>
+                            </div>
+                        </aside>
+                    </div>
+                </div>
+            </section>
 
         </div>
     );

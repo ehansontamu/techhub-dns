@@ -91,6 +91,17 @@ class QASubmission(BaseModel):
     expected_updated_at: Optional[datetime] = None
 
 
+class PickerOptionResponse(BaseModel):
+    email: str
+    display_name: Optional[str] = None
+    label: str
+
+
+class PickerOverrideRequest(BaseModel):
+    order_ids: List[UUID] = Field(default_factory=list)
+    picker_email: str = Field(min_length=1)
+
+
 class SignaturePlacement(BaseModel):
     page_number: int = 1
     x: float

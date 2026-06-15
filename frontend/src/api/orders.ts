@@ -6,6 +6,12 @@ function safeArray<T>(value: unknown): T[] {
   return Array.isArray(value) ? value : [];
 }
 
+export interface PickerOption {
+  email: string;
+  display_name?: string | null;
+  label: string;
+}
+
 export const ordersApi = {
   getOrders: async (params?: { status?: OrderStatus; search?: string; skip?: number; limit?: number }): Promise<{ items: Order[]; total: number }> => {
     const response = await apiClient.get<{ items?: Order[]; total?: number; skip?: number; limit?: number }>("/orders", { params });
@@ -19,6 +25,23 @@ export const ordersApi = {
 
   getTagRequestCandidates: async (params?: { limit?: number; search?: string }): Promise<Order[]> => {
     const response = await apiClient.get<Order[]>("/orders/tag-request/candidates", { params });
+    return response.data;
+  },
+
+  getPickerOptions: async (): Promise<PickerOption[]> => {
+    const response = await apiClient.get<PickerOption[]>("/orders/picker-options");
+    return safeArray<PickerOption>(response.data);
+  },
+
+  bulkOverridePicker: async (
+    payload: { order_ids: string[]; picker_email: string }
+  ): Promise<{
+    success: boolean;
+    picker_email: string;
+    picker_display_name: string;
+    updated_orders: Array<{ id: string; inflow_order_id: string }>;
+  }> => {
+    const response = await apiClient.post("/orders/picker-override", payload);
     return response.data;
   },
 
