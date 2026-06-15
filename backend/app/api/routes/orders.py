@@ -32,6 +32,7 @@ from app.schemas.order import (
 )
 from app.models.order import OrderStatus
 from app.models.order import Order
+from app.models.delivery_run import VehicleEnum
 from app.schemas.audit import AuditLogResponse
 from app.utils.exceptions import (
     ConflictError,
@@ -964,7 +965,7 @@ def sign_order(order_id):
         order.updated_at = datetime.utcnow()
 
         delivery_vehicle = order.delivery_run.vehicle if order.delivery_run else None
-        if delivery_vehicle:
+        if delivery_vehicle in {vehicle.value for vehicle in VehicleEnum}:
             from app.services.vehicle_checkout_service import VehicleCheckoutService
 
             try:

@@ -23,7 +23,7 @@ class CreateDeliveryRunRequest(BaseModel):
     @field_validator("vehicle")
     @classmethod
     def validate_vehicle(cls, v):
-        allowed_vehicles = ["van", "golf_cart"]
+        allowed_vehicles = ["van", "golf_cart", "pickup"]
         if v not in allowed_vehicles:
             raise ValueError(f"Vehicle must be one of: {allowed_vehicles}")
         return v

@@ -14,8 +14,8 @@ import {
 import DispatchOrderLane from "../../components/delivery/DispatchOrderLane";
 import {
   DELIVERY_RUN_PRIORITY_OPTIONS,
-  getPriorityActionSelection,
   formatTimeSince,
+  getPriorityActionSelection,
   type DeliveryRunPriorityPurpose,
 } from "../../components/delivery/vehiclePriority";
 import { Badge } from "../../components/ui/badge";
@@ -47,9 +47,22 @@ type VehicleDescriptor = {
   icon: string;
 };
 
+type DispatchTarget = Vehicle | "pickup";
+
+type DispatchTargetDescriptor = {
+  id: DispatchTarget;
+  label: string;
+};
+
 const VEHICLES: VehicleDescriptor[] = [
   { id: "van", label: "Van", icon: "" },
   { id: "golf_cart", label: "Golf Cart", icon: "" },
+];
+
+const DISPATCH_TARGETS: DispatchTargetDescriptor[] = [
+  { id: "van", label: "Van" },
+  { id: "golf_cart", label: "Golf Cart" },
+  { id: "pickup", label: "Pickup" },
 ];
 
 function getApiErrorMessage(error: unknown): string {
@@ -80,6 +93,13 @@ function formatRunLabel(deliveryRunId: string | undefined): string {
   if (!deliveryRunId) return "No run";
   if (deliveryRunId.length <= 8) return `Run ${deliveryRunId}`;
   return `Run ${deliveryRunId.slice(0, 8)}`;
+}
+
+function formatDispatchTargetLabel(target: string): string {
+  return target
+    .split("_")
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
 }
 
 function formatVehicleStatus(status: VehicleStatusItem): string {
@@ -126,13 +146,13 @@ export default function Dispatch() {
   const touchDragStateRef = useRef<
     { orderId: string; pointerId: number; startClientX: number; startClientY: number; hasMoved: boolean } | null
   >(null);
-  const [activeVehicleAction, setActiveVehicleAction] = useState<Vehicle | null>(null);
-  const [selectedVehicleId, setSelectedVehicleId] = useState<Vehicle | null>(null);
+  const [activeVehicleAction, setActiveVehicleAction] = useState<DispatchTarget | null>(null);
+  const [selectedDispatchTarget, setSelectedDispatchTarget] = useState<DispatchTarget | null>(null);
   const [selectedPurpose, setSelectedPurpose] = useState<DeliveryRunPriorityPurpose | null>(null);
 
   const [partialPickDialogOpen, setPartialPickDialogOpen] = useState(false);
   const [partialPickOrders, setPartialPickOrders] = useState<Order[]>([]);
-  const [pendingStartVehicle, setPendingStartVehicle] = useState<Vehicle | null>(null);
+  const [pendingStartTarget, setPendingStartTarget] = useState<DispatchTarget | null>(null);
   const [pendingStartPriority, setPendingStartPriority] = useState<DeliveryRunPriorityPurpose | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -164,12 +184,12 @@ export default function Dispatch() {
 
   // Auto-select available vehicle
   useEffect(() => {
-    if (selectedVehicleId) return;
+    if (selectedDispatchTarget) return;
     const available = VEHICLES.find(
       (v) => !statusByVehicle[v.id].checked_out && !statusByVehicle[v.id].delivery_run_active
     );
-    if (available) setSelectedVehicleId(available.id);
-  }, [selectedVehicleId, statusByVehicle]);
+    if (available) setSelectedDispatchTarget(available.id);
+  }, [selectedDispatchTarget, statusByVehicle]);
 
   const selectedOrdersById = useMemo(
     () => new Map(preDeliveryOrders.map((order) => [order.id, order])),
@@ -192,13 +212,12 @@ export default function Dispatch() {
     });
   }, [preDeliveryOrders]);
 
-  // Auto-select "Delivery" purpose when first order is selected
   useEffect(() => {
+    if (selectedDispatchTarget === "pickup") return;
     if (selectedOrderIds.length > 0 && !selectedPurpose) {
       setSelectedPurpose("Delivery");
     }
-  }, [selectedOrderIds.length, selectedPurpose]);
-
+  }, [selectedDispatchTarget, selectedOrderIds.length, selectedPurpose]);
 
   const preDeliveryFilteredOrders = useMemo(() => {
     const search = searchTerm.trim().toLowerCase();
@@ -267,7 +286,12 @@ export default function Dispatch() {
   // Determine vehicle availability for action bar
 
   const getStartDisabledReason = useCallback(
-    (vehicle: Vehicle): string | null => {
+    (target: DispatchTarget): string | null => {
+      if (target === "pickup") {
+        return null;
+      }
+
+      const vehicle = target;
       const status = statusByVehicle[vehicle];
       if (statusesLoading) return "Vehicle status is loading";
 
@@ -446,8 +470,8 @@ export default function Dispatch() {
   };
 
   const doStartRun = async (
-    vehicle: Vehicle,
-    checkoutPurpose: DeliveryRunPriorityPurpose,
+    target: DispatchTarget,
+    checkoutPurpose?: DeliveryRunPriorityPurpose,
     options?: {
       skipPartialPickConfirm?: boolean;
     }
@@ -463,59 +487,62 @@ export default function Dispatch() {
       );
       if (partialPicks.length > 0) {
         setPartialPickOrders(partialPicks);
-        setPendingStartVehicle(vehicle);
-        setPendingStartPriority(checkoutPurpose);
+        setPendingStartTarget(target);
+        setPendingStartPriority(checkoutPurpose ?? null);
         setPartialPickDialogOpen(true);
         return;
       }
     }
 
     try {
-      const status = statusByVehicle[vehicle];
-      if (status.delivery_run_active) {
-        toast.error("Vehicle already has an active run");
-        await refreshStatuses();
-        return;
-      }
-
-      if (status.checked_out) {
-        if (status.checkout_type === "other") {
-          const purpose = status.purpose?.trim();
-          const suffix = purpose ? ` (purpose: ${purpose})` : "";
-          toast.error(`Checked out for Other${suffix}. Check in, then check out again for a Delivery run.`);
+      if (target !== "pickup") {
+        const vehicle = target;
+        const status = statusByVehicle[vehicle];
+        if (status.delivery_run_active) {
+          toast.error("Vehicle already has an active run");
           await refreshStatuses();
           return;
         }
 
-        const checkedOutByUserId = status.checked_out_by_user_id;
-        const checkedOutByName = status.checked_out_by;
-        const currentUserId = user?.id ?? null;
-        const currentUserDisplayName = getUserDisplayName(user, "");
-        const currentUserCandidates = [currentUserDisplayName, user?.email].filter(
-          (value): value is string => typeof value === "string" && Boolean(value.trim())
-        );
-        const isCheckedOutByCurrentUser =
-          (checkedOutByUserId && currentUserId && checkedOutByUserId === currentUserId) ||
-          (checkedOutByName ? currentUserCandidates.includes(checkedOutByName) : false);
+        if (status.checked_out) {
+          if (status.checkout_type === "other") {
+            const purpose = status.purpose?.trim();
+            const suffix = purpose ? ` (purpose: ${purpose})` : "";
+            toast.error(`Checked out for Other${suffix}. Check in, then check out again for a Delivery run.`);
+            await refreshStatuses();
+            return;
+          }
 
-        if (!isCheckedOutByCurrentUser) {
-          toast.error(checkedOutByName ? `Checked out by ${checkedOutByName}` : "Checked out by another user");
-          await refreshStatuses();
-          return;
+          const checkedOutByUserId = status.checked_out_by_user_id;
+          const checkedOutByName = status.checked_out_by;
+          const currentUserId = user?.id ?? null;
+          const currentUserDisplayName = getUserDisplayName(user, "");
+          const currentUserCandidates = [currentUserDisplayName, user?.email].filter(
+            (value): value is string => typeof value === "string" && Boolean(value.trim())
+          );
+          const isCheckedOutByCurrentUser =
+            (checkedOutByUserId && currentUserId && checkedOutByUserId === currentUserId) ||
+            (checkedOutByName ? currentUserCandidates.includes(checkedOutByName) : false);
+
+          if (!isCheckedOutByCurrentUser) {
+            toast.error(checkedOutByName ? `Checked out by ${checkedOutByName}` : "Checked out by another user");
+            await refreshStatuses();
+            return;
+          }
+        } else {
+          await vehicleCheckoutsApi.checkout({
+            vehicle,
+            checkout_type: "delivery_run",
+            purpose: checkoutPurpose ?? "Delivery",
+          });
         }
-      } else {
-        await vehicleCheckoutsApi.checkout({
-          vehicle,
-          checkout_type: "delivery_run",
-          purpose: checkoutPurpose,
-        });
       }
 
       await deliveryRunsApi.createRun({
         order_ids: selectedOrderIds,
-        vehicle,
+        vehicle: target,
       });
-      toast.success("Delivery run started");
+      toast.success(target === "pickup" ? "Pickup started" : "Delivery run started");
       setSelectedOrderIds([]);
       await Promise.all([loadOrders(), refreshStatuses(), refreshDeliveryRuns()]);
     } catch (error) {
@@ -525,18 +552,38 @@ export default function Dispatch() {
   };
 
   const handleStartRun = useCallback(async (): Promise<void> => {
-    const vehicle = selectedVehicleId;
-    const purpose = selectedPurpose;
-    if (!vehicle || !purpose) {
-      toast.error("Select a vehicle and purpose");
+    const target = selectedDispatchTarget;
+    if (!target) {
+      toast.error("Select van, golf cart, or pickup");
       return;
     }
 
-    if (!getPriorityActionSelection(purpose).createsRun) {
-      // Non-delivery checkout
-      setActiveVehicleAction(vehicle);
+    if (target !== "pickup" && !selectedPurpose) {
+      toast.error("Select a purpose");
+      return;
+    }
+
+    if (target === "pickup") {
+      const disabledReason = getStartDisabledReason(target);
+      if (disabledReason) return;
+
+      setActiveVehicleAction(target);
       try {
-        const status = statusByVehicle[vehicle];
+        await doStartRun(target);
+      } finally {
+        setActiveVehicleAction((current) => (current === target ? null : current));
+      }
+      return;
+    }
+
+    const purpose = selectedPurpose;
+    if (!purpose) return;
+    const action = getPriorityActionSelection(purpose);
+
+    if (!action.createsRun) {
+      setActiveVehicleAction(target);
+      try {
+        const status = statusByVehicle[target];
         if (status.delivery_run_active) {
           toast.error("Vehicle already has an active run");
           await refreshStatuses();
@@ -548,9 +595,8 @@ export default function Dispatch() {
           await refreshStatuses();
           return;
         }
-        const action = getPriorityActionSelection(purpose);
         await vehicleCheckoutsApi.checkout({
-          vehicle,
+          vehicle: target,
           checkout_type: action.checkoutType,
           purpose: action.purpose,
         });
@@ -561,21 +607,21 @@ export default function Dispatch() {
         toast.error(getApiErrorMessage(error));
         await refreshStatuses();
       } finally {
-        setActiveVehicleAction((current) => (current === vehicle ? null : current));
+        setActiveVehicleAction((current) => (current === target ? null : current));
       }
       return;
     }
 
-    const disabledReason = getStartDisabledReason(vehicle);
+    const disabledReason = getStartDisabledReason(target);
     if (disabledReason) return;
 
-    setActiveVehicleAction(vehicle);
+    setActiveVehicleAction(target);
     try {
-      await doStartRun(vehicle, purpose);
+      await doStartRun(target, purpose);
     } finally {
-      setActiveVehicleAction((current) => (current === vehicle ? null : current));
+      setActiveVehicleAction((current) => (current === target ? null : current));
     }
-  }, [selectedVehicleId, selectedPurpose, doStartRun, getStartDisabledReason, statusByVehicle, refreshStatuses]);
+  }, [selectedDispatchTarget, selectedPurpose, doStartRun, getStartDisabledReason, refreshStatuses, statusByVehicle]);
 
   const handleCheckin = useCallback(async (vehicle: Vehicle): Promise<void> => {
     setActiveVehicleAction(vehicle);
@@ -593,18 +639,18 @@ export default function Dispatch() {
 
   const handlePartialPickConfirm = async () => {
     setPartialPickDialogOpen(false);
-    const vehicle = pendingStartVehicle;
+    const target = pendingStartTarget;
     const checkoutPurpose = pendingStartPriority;
-    setPendingStartVehicle(null);
+    setPendingStartTarget(null);
     setPendingStartPriority(null);
-    if (!vehicle || !checkoutPurpose) return;
-    await doStartRun(vehicle, checkoutPurpose, { skipPartialPickConfirm: true });
+    if (!target) return;
+    await doStartRun(target, checkoutPurpose || undefined, { skipPartialPickConfirm: true });
   };
 
   const handlePartialPickDialogOpenChange = (open: boolean) => {
     setPartialPickDialogOpen(open);
     if (open) return;
-    setPendingStartVehicle(null);
+    setPendingStartTarget(null);
     setPendingStartPriority(null);
   };
 
@@ -625,19 +671,30 @@ export default function Dispatch() {
   // Sticky action bar validation
   const actionBarBlocker = useMemo(() => {
     if (userCheckedOutVehicle) return null; // check-in mode — always enabled
-    if (!selectedVehicleId) return "Pick a vehicle";
-    if (!selectedPurpose) return "Pick a purpose";
-    const action = getPriorityActionSelection(selectedPurpose);
-    if (action.createsRun && selectedOrderIds.length === 0) return "Select orders";
-    const reason = getStartDisabledReason(selectedVehicleId);
+    if (!selectedDispatchTarget) return "Pick van, golf cart, or pickup";
+    if (selectedDispatchTarget !== "pickup" && !selectedPurpose) return "Pick a purpose";
+    if (selectedDispatchTarget === "pickup") {
+      if (selectedOrderIds.length === 0) return "Select orders";
+      return null;
+    }
+    const action = selectedPurpose ? getPriorityActionSelection(selectedPurpose) : null;
+    if (action?.createsRun && selectedOrderIds.length === 0) return "Select orders";
+    const reason = getStartDisabledReason(selectedDispatchTarget);
     if (reason) return reason;
     return null;
-  }, [selectedOrderIds.length, selectedVehicleId, selectedPurpose, getStartDisabledReason, userCheckedOutVehicle]);
+  }, [selectedOrderIds.length, selectedDispatchTarget, selectedPurpose, getStartDisabledReason, userCheckedOutVehicle]);
 
 
   const canStartRun = actionBarBlocker === null;
   const isActionLoading = activeVehicleAction !== null;
-  const selectedAction = selectedPurpose ? getPriorityActionSelection(selectedPurpose) : null;
+  const selectedAction =
+    selectedDispatchTarget === "pickup" || !selectedPurpose
+      ? null
+      : getPriorityActionSelection(selectedPurpose);
+  const actionButtonLabel =
+    selectedDispatchTarget === "pickup"
+      ? "Start Pickup"
+      : selectedAction?.buttonLabel ?? "Start Run";
 
   if (loading) {
     return <div className="flex items-center justify-center py-8 text-sm text-muted-foreground">Loading...</div>;
@@ -687,7 +744,7 @@ export default function Dispatch() {
                       <div className="flex flex-wrap items-start justify-between gap-3">
                         <div className="min-w-0 space-y-1">
                           <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                            Delivery Run
+                            {run.vehicle === "pickup" ? "Pickup" : "Delivery Run"}
                           </div>
                           <div className="flex flex-wrap items-center gap-2">
                             <button
@@ -701,7 +758,7 @@ export default function Dispatch() {
                             <Badge variant="secondary">{orderCount} order{orderCount === 1 ? "" : "s"}</Badge>
                           </div>
                           <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                            <span>Vehicle: {run.vehicle.replace(/_/g, " ")}</span>
+                            <span>{run.vehicle === "pickup" ? "Mode: Pickup" : `Vehicle: ${formatDispatchTargetLabel(run.vehicle)}`}</span>
                             <span>Runner: {run.runner}</span>
                           </div>
                         </div>
@@ -832,7 +889,7 @@ export default function Dispatch() {
           />
           <DispatchOrderLane
             title="Ready to Dispatch"
-            description="Fully picked and ready for vehicle assignment."
+            description="Fully picked and ready for dispatch or pickup."
             orders={readyOrders}
             selectedOrderIds={selectedOrderIdSet}
             emptyText="No ready orders"
@@ -846,8 +903,8 @@ export default function Dispatch() {
         <section className="space-y-3 rounded-2xl border border-border/70 bg-card/80 p-5 shadow-none">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <h2 className="text-sm font-semibold">Delivery Order</h2>
-              <p className="text-xs text-muted-foreground">Drag selected orders to set the stop order before starting the run.</p>
+              <h2 className="text-sm font-semibold">Dispatch Order</h2>
+              <p className="text-xs text-muted-foreground">Drag selected orders to set the handoff order before starting the run or pickup.</p>
             </div>
             <Badge variant="secondary">{selectedOrderIds.length} stops</Badge>
           </div>
@@ -983,49 +1040,54 @@ export default function Dispatch() {
 
               {/* Vehicle selector */}
               <div className="flex items-center gap-1.5">
-                {VEHICLES.map((vehicle) => {
-                  const isActive = vehicle.id === selectedVehicleId;
-                  const status = statusByVehicle[vehicle.id];
-                  const canUse = !status.checked_out && !status.delivery_run_active;
+                {DISPATCH_TARGETS.map((target) => {
+                  const isActive = target.id === selectedDispatchTarget;
+                  const status = target.id === "pickup" ? null : statusByVehicle[target.id];
+                  const canUse = target.id === "pickup"
+                    ? true
+                    : Boolean(status && !status.checked_out && !status.delivery_run_active);
                   return (
                     <button
-                      key={vehicle.id}
+                      key={target.id}
                       type="button"
                       className={`inline-flex h-8 items-center gap-1 rounded-md border px-2 text-xs transition-colors ${
                         isActive
                           ? "border-accent bg-accent/10 text-foreground font-medium"
                           : "border-border text-muted-foreground hover:text-foreground"
                       } ${!canUse ? "opacity-50" : ""}`}
-                      onClick={() => setSelectedVehicleId(vehicle.id)}
+                      onClick={() => setSelectedDispatchTarget(target.id)}
                     >
-                      {vehicle.label}
+                      {target.label}
                     </button>
                   );
                 })}
               </div>
 
-              <div className="h-5 w-px bg-border" />
+              {selectedDispatchTarget !== "pickup" && (
+                <>
+                  <div className="h-5 w-px bg-border" />
 
-              {/* Purpose selector */}
-              <div className="flex items-center gap-1.5">
-                {DELIVERY_RUN_PRIORITY_OPTIONS.map((option) => {
-                  const isSelected = selectedPurpose === option.purpose;
-                  return (
-                    <button
-                      key={option.purpose}
-                      type="button"
-                      className={`inline-flex h-8 items-center rounded-md border px-2 text-xs transition-colors ${
-                        isSelected
-                          ? "border-accent bg-accent text-accent-foreground font-medium"
-                          : "border-border text-muted-foreground hover:text-foreground"
-                      }`}
-                      onClick={() => setSelectedPurpose(option.purpose)}
-                    >
-                      {option.label}
-                    </button>
-                  );
-                })}
-              </div>
+                  <div className="flex items-center gap-1.5">
+                    {DELIVERY_RUN_PRIORITY_OPTIONS.map((option) => {
+                      const isSelected = selectedPurpose === option.purpose;
+                      return (
+                        <button
+                          key={option.purpose}
+                          type="button"
+                          className={`inline-flex h-8 items-center rounded-md border px-2 text-xs transition-colors ${
+                            isSelected
+                              ? "border-accent bg-accent text-accent-foreground font-medium"
+                              : "border-border text-muted-foreground hover:text-foreground"
+                          }`}
+                          onClick={() => setSelectedPurpose(option.purpose)}
+                        >
+                          {option.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
 
               <div className="flex-1" />
 
@@ -1040,7 +1102,7 @@ export default function Dispatch() {
               >
                 {isActionLoading
                   ? "Starting..."
-                  : selectedAction?.buttonLabel ?? "Start Run"}
+                  : actionButtonLabel}
               </Button>
             </>
           )}
