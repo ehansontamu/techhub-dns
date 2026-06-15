@@ -12,6 +12,7 @@ from app.models.user import User
 from app.services.order_service import OrderService
 from app.services.order_splitting import OrderSplittingService
 from app.services.inflow_service import InflowService
+from app.services.audit_service import AuditService
 from app.utils.broadcast_dedup import broadcast_dedup
 
 from app.schemas.order import (
@@ -29,6 +30,8 @@ from app.schemas.order import (
     ShippingWorkflowUpdateRequest,
     ShippingWorkflowResponse,
     PickStatus,
+    PickerOptionResponse,
+    PickerOverrideRequest,
 )
 from app.models.order import OrderStatus
 from app.models.order import Order
@@ -45,6 +48,7 @@ from app.utils.timezone import to_utc_iso_z
 from app.api.auth_middleware import (
     get_current_user_display_name,
     get_current_user_email,
+    get_effective_allowed_user_email_allowlist,
     require_auth,
     require_admin,
 )
@@ -466,6 +470,142 @@ def get_tag_request_candidates():
                 break
 
         return jsonify(needing_request)
+
+
+@bp.route("/picker-options", methods=["GET"])
+@require_auth
+def get_picker_options():
+    """Return allowed picker options resolved against known users when possible."""
+    with get_db() as db:
+        allowed_emails = get_effective_allowed_user_email_allowlist(db)
+        normalized_allowed = [
+            email.strip().lower() for email in allowed_emails if isinstance(email, str) and email.strip()
+        ]
+
+        if not normalized_allowed:
+            return jsonify([])
+
+        users = (
+            db.query(User)
+            .filter(func.lower(User.email).in_(normalized_allowed))
+            .all()
+        )
+        users_by_email = {
+            (user.email or "").strip().lower(): user
+            for user in users
+            if (user.email or "").strip()
+        }
+
+        options = []
+        for email in sorted(set(normalized_allowed)):
+            user = users_by_email.get(email)
+            display_name = (user.display_name or "").strip() if user else ""
+            options.append(
+                PickerOptionResponse(
+                    email=email,
+                    display_name=display_name or None,
+                    label=display_name or email,
+                ).model_dump(mode="json")
+            )
+
+        return jsonify(options)
+
+
+@bp.route("/picker-override", methods=["POST"])
+@require_auth
+def bulk_override_picker():
+    """Bulk override the recorded picker for QA-stage orders."""
+    data = request.get_json(silent=True) or {}
+    payload = PickerOverrideRequest(**data)
+
+    normalized_email = payload.picker_email.strip().lower()
+    changed_by = get_current_user_display_name()
+    changed_by_email = get_current_user_email()
+
+    with get_db() as db:
+        allowed_emails = set(get_effective_allowed_user_email_allowlist(db))
+        if normalized_email not in allowed_emails:
+            raise ValidationError(
+                "Selected picker is not on the allowed student worker list.",
+                field="picker_email",
+                details={"picker_email": normalized_email},
+            )
+
+        picker_user = (
+            db.query(User)
+            .filter(func.lower(User.email) == normalized_email)
+            .first()
+        )
+        picker_label = (
+            (picker_user.display_name or "").strip()
+            if picker_user and (picker_user.display_name or "").strip()
+            else normalized_email
+        )
+
+        order_ids = [str(order_id) for order_id in payload.order_ids]
+        orders = (
+            db.query(Order)
+            .filter(Order.id.in_(order_ids))
+            .with_for_update()
+            .all()
+        )
+        if len(orders) != len(order_ids):
+            raise ValidationError(
+                "One or more orders could not be found.",
+                details={"expected_count": len(order_ids), "found_count": len(orders)},
+            )
+
+        invalid_orders = [
+            order.inflow_order_id or str(order.id)
+            for order in orders
+            if order.status != OrderStatus.QA.value or not order.picklist_generated_at
+        ]
+        if invalid_orders:
+            raise ValidationError(
+                "Picker overrides are only allowed for QA orders with generated picklists.",
+                details={"orders": invalid_orders},
+            )
+
+        audit_service = AuditService(db)
+        updated_orders: list[dict[str, str]] = []
+
+        for order in orders:
+            previous_picker = order.picklist_generated_by
+            order.picklist_generated_by = picker_label
+            order.updated_at = datetime.utcnow()
+            updated_orders.append(
+                {
+                    "id": str(order.id),
+                    "inflow_order_id": order.inflow_order_id or str(order.id),
+                }
+            )
+
+            audit_service.log_order_action(
+                order_id=str(order.id),
+                action="picker_overridden",
+                user_id=changed_by_email or changed_by,
+                old_value={"picklist_generated_by": previous_picker},
+                new_value={"picklist_generated_by": picker_label},
+                description=f"Picker overridden to {picker_label}",
+                audit_metadata={
+                    "picker_email": normalized_email,
+                    "picker_display_name": picker_label,
+                    "changed_by": changed_by,
+                },
+            )
+
+        db.commit()
+
+        broadcast_dedup.request_broadcast(_broadcast_orders_sync)
+
+        return jsonify(
+            {
+                "success": True,
+                "picker_email": normalized_email,
+                "picker_display_name": picker_label,
+                "updated_orders": updated_orders,
+            }
+        )
 
 
 @bp.route("/<order_id>", methods=["GET"])

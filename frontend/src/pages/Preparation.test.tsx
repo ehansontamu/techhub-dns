@@ -13,6 +13,8 @@ vi.mock("../api/orders", () => ({
     ordersApi: {
         getTagRequestCandidates: vi.fn(),
         getOrders: vi.fn(),
+        getPickerOptions: vi.fn(),
+        bulkOverridePicker: vi.fn(),
         getOrder: vi.fn(),
         generatePicklist: vi.fn(),
     },
@@ -51,45 +53,81 @@ describe("Preparation", () => {
             },
         ]);
 
-        mockedOrdersApi.getOrders.mockResolvedValue({
-            items: [
-                {
-                    id: "prep-1",
-                    inflow_order_id: "TH2001",
-                    recipient_name: "Grace Hopper",
-                    delivery_location: "Main Lab",
-                    status: OrderStatus.PICKED,
-                    created_at: "2026-05-20T12:00:00Z",
-                    updated_at: "2026-05-20T12:05:00Z",
-                    tagged_at: "2026-05-20T12:10:00Z",
-                    picklist_generated_at: null,
-                },
-                {
-                    id: "prep-2",
-                    inflow_order_id: "TH2002",
-                    recipient_name: "No Tag Required",
-                    delivery_location: "Annex",
-                    status: OrderStatus.PICKED,
-                    created_at: "2026-05-20T12:00:00Z",
-                    updated_at: "2026-05-20T12:05:00Z",
-                    tagged_at: null,
-                    asset_tag_required: false,
-                    picklist_generated_at: null,
-                },
-                {
-                    id: "prep-3",
-                    inflow_order_id: "TH2003",
-                    recipient_name: "Blocked User",
-                    delivery_location: "Main Lab",
-                    status: OrderStatus.PICKED,
-                    created_at: "2026-05-20T12:00:00Z",
-                    updated_at: "2026-05-20T12:05:00Z",
-                    tagged_at: null,
-                    asset_tag_required: true,
-                    picklist_generated_at: null,
-                },
-            ],
-            total: 3,
+        mockedOrdersApi.getOrders.mockImplementation(async (params) => {
+            if (params?.status === OrderStatus.QA) {
+                return {
+                    items: [
+                        {
+                            id: "qa-1",
+                            inflow_order_id: "TH3001",
+                            recipient_name: "Picker Override",
+                            delivery_location: "Main Lab",
+                            status: OrderStatus.QA,
+                            created_at: "2026-05-20T12:00:00Z",
+                            updated_at: "2026-05-20T12:05:00Z",
+                            picklist_generated_at: "2026-05-20T12:15:00Z",
+                            picklist_generated_by: "Printer Person",
+                        },
+                    ],
+                    total: 1,
+                };
+            }
+
+            return {
+                items: [
+                    {
+                        id: "prep-1",
+                        inflow_order_id: "TH2001",
+                        recipient_name: "Grace Hopper",
+                        delivery_location: "Main Lab",
+                        status: OrderStatus.PICKED,
+                        created_at: "2026-05-20T12:00:00Z",
+                        updated_at: "2026-05-20T12:05:00Z",
+                        tagged_at: "2026-05-20T12:10:00Z",
+                        picklist_generated_at: null,
+                    },
+                    {
+                        id: "prep-2",
+                        inflow_order_id: "TH2002",
+                        recipient_name: "No Tag Required",
+                        delivery_location: "Annex",
+                        status: OrderStatus.PICKED,
+                        created_at: "2026-05-20T12:00:00Z",
+                        updated_at: "2026-05-20T12:05:00Z",
+                        tagged_at: null,
+                        asset_tag_required: false,
+                        picklist_generated_at: null,
+                    },
+                    {
+                        id: "prep-3",
+                        inflow_order_id: "TH2003",
+                        recipient_name: "Blocked User",
+                        delivery_location: "Main Lab",
+                        status: OrderStatus.PICKED,
+                        created_at: "2026-05-20T12:00:00Z",
+                        updated_at: "2026-05-20T12:05:00Z",
+                        tagged_at: null,
+                        asset_tag_required: true,
+                        picklist_generated_at: null,
+                    },
+                ],
+                total: 3,
+            };
+        });
+
+        mockedOrdersApi.getPickerOptions.mockResolvedValue([
+            {
+                email: "picker@example.com",
+                display_name: "Picker Person",
+                label: "Picker Person",
+            },
+        ]);
+
+        mockedOrdersApi.bulkOverridePicker.mockResolvedValue({
+            success: true,
+            picker_email: "picker@example.com",
+            picker_display_name: "Picker Person",
+            updated_orders: [{ id: "qa-1", inflow_order_id: "TH3001" }],
         });
 
         mockedOrdersApi.getOrder.mockResolvedValue({
@@ -129,6 +167,7 @@ describe("Preparation", () => {
         expect(await screen.findByText("TH2002")).toBeInTheDocument();
         expect(screen.getByText("Tag Request Actions")).toBeInTheDocument();
         expect(screen.getByText("Generate Picklist & Order Details")).toBeInTheDocument();
+        expect(screen.getByText("Override Recorded Picker")).toBeInTheDocument();
         expect(screen.queryByText("TH2003")).not.toBeInTheDocument();
 
         fireEvent.click(screen.getByLabelText("Select TH2001"));
@@ -159,5 +198,26 @@ describe("Preparation", () => {
         );
 
         expect(await screen.findByText("Preparation Route")).toBeInTheDocument();
+    });
+
+    it("supports overriding the recorded picker for QA orders", async () => {
+        renderWithQueryClient(<Preparation />);
+
+        expect(await screen.findByText("TH3001")).toBeInTheDocument();
+
+        fireEvent.click(screen.getByLabelText("Select TH3001"));
+        fireEvent.change(screen.getByLabelText("Set picker to"), {
+            target: { value: "picker@example.com" },
+        });
+        fireEvent.click(screen.getByRole("button", { name: /override picker/i }));
+
+        await waitFor(() => {
+            expect(mockedOrdersApi.bulkOverridePicker).toHaveBeenCalledWith({
+                order_ids: ["qa-1"],
+                picker_email: "picker@example.com",
+            });
+        });
+
+        expect(await screen.findByText(/Updated picker for 1 order/)).toBeInTheDocument();
     });
 });
