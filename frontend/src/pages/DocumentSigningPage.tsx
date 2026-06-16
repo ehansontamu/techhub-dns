@@ -71,16 +71,6 @@ function DocumentSigningPage() {
         refreshCachedSignature();
     }, [refreshCachedSignature]);
 
-    const orderRecipientNormalized = useMemo(
-        () => normalizeText(order?.recipient_name),
-        [order?.recipient_name]
-    );
-
-    const orderLocationNormalized = useMemo(
-        () => normalizeText(order?.delivery_location),
-        [order?.delivery_location]
-    );
-
     const reusableSignature = useMemo<ReusableSignatureState>(() => {
         if (!cachedSignature) {
             return { canUse: false, reason: "No saved signature available." };
@@ -91,22 +81,8 @@ function DocumentSigningPage() {
             return { canUse: false, reason: "Saved signature expired. Capture a new one." };
         }
 
-        if (!cachedSignature.recipientNameNormalized || !cachedSignature.deliveryLocationNormalized) {
-            return { canUse: false, reason: "Saved signature is missing recipient/location context." };
-        }
-
-        if (
-            cachedSignature.recipientNameNormalized !== orderRecipientNormalized ||
-            cachedSignature.deliveryLocationNormalized !== orderLocationNormalized
-        ) {
-            return {
-                canUse: false,
-                reason: "Saved signature belongs to a different recipient or location.",
-            };
-        }
-
         return { canUse: true, entry: cachedSignature };
-    }, [cachedSignature, orderLocationNormalized, orderRecipientNormalized]);
+    }, [cachedSignature]);
 
     // Load order when component mounts
     useEffect(() => {
@@ -437,7 +413,7 @@ function DocumentSigningPage() {
                         </p>
                         {reusableSignature.canUse && (
                             <p className="text-xs text-muted-foreground">
-                                Last signature from order {reusableSignature.entry.sourceOrderId?.slice(0, 8) || "unknown"} is available for this recipient/location.
+                                Last signature from order {reusableSignature.entry.sourceOrderId?.slice(0, 8) || "unknown"} is available to reuse.
                             </p>
                         )}
                     </div>
