@@ -32,6 +32,28 @@ describe("getPartialOrderInfo", () => {
     expect(info.totalOrdered).toBe(4);
     expect(info.totalPicked).toBe(2);
   });
+
+  it("does not mark computer imaging as a partial shortfall", () => {
+    const info = getPartialOrderInfo({
+      inflow_data: {
+        lines: [
+          { productId: "1", product: { name: "Laptop" }, quantity: { standardQuantity: 1 } },
+          {
+            productId: "computer-imaging",
+            description: "Computer Imaging",
+            product: { itemType: "service", name: "Computer Imaging" },
+            quantity: { standardQuantity: 1 },
+          },
+        ],
+        pickLines: [{ productId: "1", product: { name: "Laptop" }, quantity: { standardQuantity: 1 } }],
+      },
+    } as any);
+
+    expect(info.isPartial).toBe(false);
+    expect(info.missingItems).toEqual([]);
+    expect(info.totalOrdered).toBe(2);
+    expect(info.totalPicked).toBe(2);
+  });
 });
 
 describe("getOrderProductTableView", () => {

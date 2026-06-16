@@ -118,7 +118,7 @@ def test_picklist_view_includes_service_lines_as_picked_items():
     assert picklist_view["pickLines"][1]["product"]["sku"] == "SERVICE"
 
 
-def test_incomplete_service_line_stays_missing_but_not_physical_partial():
+def test_computer_imaging_counts_as_picked_even_without_service_completed():
     service = InflowService()
     order = {
         "lines": [
@@ -149,19 +149,19 @@ def test_incomplete_service_line_stays_missing_but_not_physical_partial():
     physical_status = service.get_pick_status(order, include_services=False)
     picklist_view = service.build_picklist_view(order)
 
-    assert service_aware_status["is_fully_picked"] is False
-    assert service_aware_status["missing_items"] == [
-        {
-            "product_id": "computer-imaging",
-            "product_name": "Computer Imaging",
-            "ordered": 1,
-            "picked": 0,
-        }
-    ]
+    assert service_aware_status == {
+        "is_fully_picked": True,
+        "total_ordered": 2,
+        "total_picked": 2,
+        "missing_items": [],
+    }
     assert physical_status == {
         "is_fully_picked": True,
         "total_ordered": 1,
         "total_picked": 1,
         "missing_items": [],
     }
-    assert [line["productId"] for line in picklist_view["pickLines"]] == ["laptop-1"]
+    assert [line["productId"] for line in picklist_view["pickLines"]] == [
+        "laptop-1",
+        "computer-imaging",
+    ]
