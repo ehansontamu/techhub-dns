@@ -64,7 +64,7 @@ class InflowService:
                 pass
             if pid and qty > 0:
                 required[pid] = required.get(pid, 0) + qty
-                if self._is_service_completed_line(line):
+                if self._counts_as_picked_service_line(line):
                     picked[pid] = picked.get(pid, 0) + qty
 
         # Build map of picked quantities
@@ -164,6 +164,30 @@ class InflowService:
         )
 
     @classmethod
+    def _is_known_non_pickable_service_line(cls, line: Dict[str, Any]) -> bool:
+        if not isinstance(line, dict):
+            return False
+        product = line.get("product")
+        product_dict = product if isinstance(product, dict) else {}
+        names = [
+            line.get("description"),
+            line.get("productName"),
+            product_dict.get("name"),
+        ]
+        return any(
+            cls._normalized_text(name) in cls._KNOWN_NON_PICKABLE_PRODUCT_NAMES
+            for name in names
+        )
+
+    @classmethod
+    def _counts_as_picked_service_line(cls, line: Dict[str, Any]) -> bool:
+        # Known non-pickable service rows should never force a partial workflow.
+        return cls._is_service_line(line) and (
+            cls._is_service_completed_line(line)
+            or cls._is_known_non_pickable_service_line(line)
+        )
+
+    @classmethod
     def _line_name(cls, line: Dict[str, Any]) -> str:
         product = line.get("product")
         product_dict = product if isinstance(product, dict) else {}
@@ -203,7 +227,7 @@ class InflowService:
         for line in lines:
             if not isinstance(line, dict) or not self._is_service_line(line):
                 continue
-            if not self._is_service_completed_line(line):
+            if not self._counts_as_picked_service_line(line):
                 continue
             if self._parse_standard_quantity(line.get("quantity")) <= 0:
                 continue
@@ -284,7 +308,7 @@ class InflowService:
             if original_qty <= 0:
                 continue
             if self._is_service_line(line):
-                if self._is_service_completed_line(line):
+                if self._counts_as_picked_service_line(line):
                     continue
                 remaining_line = self._copy_line_with_quantity(line, original_qty)
                 remaining_lines.append(remaining_line)
@@ -383,7 +407,7 @@ class InflowService:
                 pass
             if pid and qty > 0:
                 required[pid] = required.get(pid, 0) + qty
-                if self._is_service_completed_line(line):
+                if self._counts_as_picked_service_line(line):
                     picked[pid] = picked.get(pid, 0) + qty
                 # Try to get product name from line description or product data
                 if pid not in product_names:

@@ -43,6 +43,8 @@ export interface OrderProductTableView {
   emptyState: string;
 }
 
+const KNOWN_NON_PICKABLE_SERVICE_NAMES = new Set(["computer imaging"]);
+
 const isTruthyFlag = (value: unknown): boolean => {
   if (typeof value === "boolean") return value;
   if (typeof value === "number") return value !== 0;
@@ -101,6 +103,26 @@ const getLineProductName = (line: unknown, fallback: string): string => {
   return fallback;
 };
 
+const normalizedText = (value: unknown): string =>
+  String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/-/g, " ")
+    .split(/\s+/)
+    .filter(Boolean)
+    .join(" ");
+
+const isKnownNonPickableServiceLine = (line: unknown): boolean => {
+  if (!line || typeof line !== "object") return false;
+
+  const record = line as Record<string, unknown>;
+  const product = record.product;
+  const productRecord = product && typeof product === "object" ? (product as Record<string, unknown>) : null;
+  const names = [record.description, record.productName, productRecord?.name];
+
+  return names.some((name) => KNOWN_NON_PICKABLE_SERVICE_NAMES.has(normalizedText(name)));
+};
+
 const normalizePickStatus = (value: unknown): PickStatus | null => {
   if (!value || typeof value !== "object") return null;
 
@@ -137,6 +159,9 @@ const derivePickStatusFromInflow = (inflowData: unknown): PickStatus | null => {
     if (!productId || quantity <= 0) continue;
 
     required.set(productId, (required.get(productId) ?? 0) + quantity);
+    if (isKnownNonPickableServiceLine(rawLine)) {
+      picked.set(productId, (picked.get(productId) ?? 0) + quantity);
+    }
     if (!productNames.has(productId)) {
       productNames.set(productId, getLineProductName(rawLine, productId));
     }
