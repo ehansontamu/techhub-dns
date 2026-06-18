@@ -265,6 +265,38 @@ export default function OrderDetailPage() {
         },
     });
 
+    const archiveOrderMutation = useMutation({
+        mutationFn: ({ reason }: { reason: string }) => {
+            if (!orderId || !order) {
+                throw new Error("Order is unavailable");
+            }
+
+            return ordersApi.archiveOrderFromList(orderId, {
+                reason,
+                expected_updated_at: order.updated_at,
+            });
+        },
+        onSuccess: async () => {
+            await queryClient.invalidateQueries({ queryKey: ["orders"] });
+            navigate("/orders", {
+                state: locationState ?? undefined,
+                replace: true,
+            });
+            toast.success("Order archived from the orders page");
+        },
+        onError: async (error: unknown) => {
+            console.error("Failed to archive order:", error);
+            if (isAxiosError(error) && error.response?.status === 409) {
+                toast.error("Order changed by another user. Reloaded the latest details.");
+                await refreshOrder();
+                return;
+            }
+
+            const message = extractApiErrorMessage(error, "Failed to archive order");
+            toast.error(message);
+        },
+    });
+
     const handleRequestTags = async () => {
         if (!order) return;
         const inflowOrderId = order.inflow_order_id;
@@ -376,6 +408,11 @@ export default function OrderDetailPage() {
         await dismissOrderMutation.mutateAsync({ reason, removeSharePointFiles });
     };
 
+    const handleArchiveOrder = async (reason: string) => {
+        if (!order) return;
+        await archiveOrderMutation.mutateAsync({ reason });
+    };
+
     const handleSelectOrder = (nextOrderId: string) => {
         navigate(`/orders/${nextOrderId}`, {
             state: locationState ?? undefined,
@@ -453,6 +490,7 @@ export default function OrderDetailPage() {
                             notifications={notifications}
                             canDismissOrder={isAdmin}
                             onDismissOrder={handleDismissOrder}
+                            onArchiveOrder={handleArchiveOrder}
                             onStatusChange={handleStatusChange}
                             onRollbackStatus={handleRollbackStatus}
                             onTagOrder={handleTagOrder}

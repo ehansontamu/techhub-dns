@@ -60,6 +60,11 @@ class OrderDismissRequest(BaseModel):
     expected_updated_at: Optional[datetime] = None
 
 
+class OrderArchiveRequest(BaseModel):
+    reason: str = Field(min_length=1)
+    expected_updated_at: Optional[datetime] = None
+
+
 class OrderStatusUpdate(BaseModel):
     status: OrderStatus
     reason: Optional[str] = None
