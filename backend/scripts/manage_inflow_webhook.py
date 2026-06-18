@@ -238,11 +238,12 @@ async def handle_register(args: argparse.Namespace) -> None:
     if not webhook_id:
         raise RuntimeError(f"Webhook registration did not return an ID: {result}")
 
+    secret = result.get("secret") or settings.inflow_webhook_secret
     upsert_local_webhook(
         webhook_id=webhook_id,
         url=args.url,
         events=events,
-        secret=result.get("secret"),
+        secret=secret,
         keep_existing=args.keep_existing
     )
 
@@ -250,8 +251,8 @@ async def handle_register(args: argparse.Namespace) -> None:
     print(f"  Webhook ID: {webhook_id}")
     print(f"  URL: {args.url}")
     print(f"  Events: {', '.join(events)}")
-    if result.get("secret"):
-        print(f"  Secret: {result.get('secret')}")
+    if secret:
+        print(f"  Secret: {secret}")
     else:
         print("  Secret: (not returned by Inflow)")
 
@@ -277,11 +278,12 @@ async def handle_reset(args: argparse.Namespace) -> None:
     if not webhook_id:
         raise RuntimeError(f"Webhook registration did not return an ID: {result}")
 
+    secret = result.get("secret") or settings.inflow_webhook_secret
     upsert_local_webhook(
         webhook_id=webhook_id,
         url=args.url,
         events=events,
-        secret=result.get("secret"),
+        secret=secret,
         keep_existing=False
     )
 
@@ -289,8 +291,8 @@ async def handle_reset(args: argparse.Namespace) -> None:
     print(f"  Webhook ID: {webhook_id}")
     print(f"  URL: {args.url}")
     print(f"  Events: {', '.join(events)}")
-    if result.get("secret"):
-        print(f"  Secret: {result.get('secret')}")
+    if secret:
+        print(f"  Secret: {secret}")
     else:
         print("  Secret: (not returned by Inflow)")
 
