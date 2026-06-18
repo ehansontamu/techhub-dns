@@ -2224,6 +2224,7 @@ class OrderService:
         if existing:
             # Update existing order - only update timestamp if data actually changed
             data_changed = False
+            restored_from_hidden = False
 
             if existing.inflow_sales_order_id != inflow_data.get("salesOrderId"):
                 existing.inflow_sales_order_id = inflow_data.get("salesOrderId")
@@ -2267,10 +2268,34 @@ class OrderService:
                 existing.inflow_data = merged_inflow_data
                 data_changed = True
 
+            if existing.hidden_from_ops:
+                existing.hidden_from_ops = False
+                existing.hidden_reason = None
+                existing.hidden_at = None
+                existing.hidden_by = None
+                restored_from_hidden = True
+                data_changed = True
+
             # Don't overwrite manual status changes - keep existing status
 
             self.db.commit()
             self.db.refresh(existing)
+
+            if restored_from_hidden:
+                audit_service = AuditService(self.db)
+                audit_service.log_order_action(
+                    order_id=str(existing.id),
+                    action="restored_to_ops_from_inflow",
+                    user_id="system",
+                    description="Hidden order automatically restored after reappearing in inFlow",
+                    old_value={"hidden_from_ops": True},
+                    new_value={"hidden_from_ops": False},
+                    audit_metadata={
+                        "inflow_order_id": order_number,
+                        "inflow_sales_order_id": inflow_data.get("salesOrderId"),
+                        "source": "inflow_repick",
+                    },
+                )
             return existing
         else:
             # Create new order with IntegrityError handling for duplicate webhooks (Issue #40)
