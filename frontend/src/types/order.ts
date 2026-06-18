@@ -160,6 +160,11 @@ export interface OrderDismissUpdate {
   expected_updated_at?: string;
 }
 
+export interface OrderArchiveUpdate {
+  reason: string;
+  expected_updated_at?: string;
+}
+
 export interface BulkStatusUpdate {
   order_ids: string[];
   status: OrderStatus;

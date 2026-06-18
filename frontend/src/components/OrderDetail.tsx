@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { AlertTriangle, ChevronDown, Eye } from "lucide-react";
+import { AlertTriangle, Archive, ChevronDown, Eye } from "lucide-react";
 import { toast } from "sonner";
 
 import StatusBadge from "./StatusBadge";
@@ -59,6 +59,7 @@ interface OrderDetailProps {
   canDismissOrder: boolean;
   onStatusChange: (newStatus: OrderStatus, reason?: string) => void;
   onDismissOrder: (reason: string, removeSharePointFiles: boolean) => Promise<void>;
+  onArchiveOrder: (reason: string) => Promise<void>;
   onRollbackStatus: (newStatus: OrderStatus) => void;
   onTagOrder: (tagIds: string[]) => Promise<void>;
   onRequestTags: () => Promise<void>;
@@ -72,6 +73,7 @@ export default function OrderDetail({
   notifications,
   canDismissOrder,
   onDismissOrder,
+  onArchiveOrder,
   onTagOrder,
   onRequestTags,
   onGeneratePicklist,
@@ -92,6 +94,9 @@ export default function OrderDetail({
   const [dismissReason, setDismissReason] = useState("");
   const [removeSharePointFiles, setRemoveSharePointFiles] = useState(true);
   const [dismissingOrder, setDismissingOrder] = useState(false);
+  const [archiveDialogOpen, setArchiveDialogOpen] = useState(false);
+  const [archiveReason, setArchiveReason] = useState("");
+  const [archivingOrder, setArchivingOrder] = useState(false);
   const [partialConfirmOpen, setPartialConfirmOpen] = useState(false);
   const [partialConfirmSubmitting, setPartialConfirmSubmitting] = useState(false);
 
@@ -197,6 +202,25 @@ export default function OrderDetail({
     }
   };
 
+  const handleArchiveOrder = async () => {
+    const trimmedReason = archiveReason.trim();
+    if (!trimmedReason) {
+      toast.error("Archive reason is required");
+      return;
+    }
+
+    setArchivingOrder(true);
+    try {
+      await onArchiveOrder(trimmedReason);
+      setArchiveDialogOpen(false);
+      setArchiveReason("");
+    } catch (_error) {
+      // Error toast is handled by the parent mutation callback.
+    } finally {
+      setArchivingOrder(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <section className="rounded-2xl border border-transparent bg-card p-6 shadow-none">
@@ -245,7 +269,20 @@ export default function OrderDetail({
                           className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-maroon-700 hover:text-white focus-visible:bg-maroon-700 focus-visible:text-white"
                         >
                           <AlertTriangle className="h-4 w-4 text-current" />
-                          <span>Dismiss Test Order</span>
+                          <span>Dismiss Order/Unpick</span>
+                        </button>
+                      )}
+                      {canDismissOrder && (
+                        <button
+                          onClick={() => {
+                            setArchiveDialogOpen(true);
+                            setArchiveReason("");
+                            setStatusDropdownOpen(false);
+                          }}
+                          className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-maroon-700 hover:text-white focus-visible:bg-maroon-700 focus-visible:text-white"
+                        >
+                          <Archive className="h-4 w-4 text-current" />
+                          <span>Archive Completed Order</span>
                         </button>
                       )}
                       {/* For ISSUE orders: recovery targets */}
@@ -315,9 +352,9 @@ export default function OrderDetail({
                 >
                   <DialogContent>
                     <DialogHeader>
-                      <DialogTitle>Dismiss Test Order</DialogTitle>
+                      <DialogTitle>Dismiss Order/Unpick</DialogTitle>
                       <DialogDescription>
-                        Hide this order from operational views and reporting. This is intended for test or junk orders that should stop affecting the app.
+                        Hide this order from operational views and reporting. Use this when the order should be treated like a bad pick or junk/test order.
                       </DialogDescription>
                     </DialogHeader>
                     <div className="space-y-4 py-4">
@@ -327,7 +364,7 @@ export default function OrderDetail({
                         </label>
                         <textarea
                           id="dismiss-reason"
-                          placeholder="Example: Test order - exclude from operations"
+                          placeholder="Example: Picked by mistake - remove from operations"
                           value={dismissReason}
                           onChange={(event) => setDismissReason(event.target.value)}
                           className="mt-2 w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary"
@@ -358,6 +395,52 @@ export default function OrderDetail({
                         disabled={dismissingOrder}
                       >
                         {dismissingOrder ? "Dismissing..." : "Dismiss Order"}
+                      </Button>
+                    </DialogFooter>
+                  </DialogContent>
+                </Dialog>
+
+                <Dialog
+                  open={archiveDialogOpen}
+                  onOpenChange={(open) => {
+                    if (archivingOrder) return;
+                    setArchiveDialogOpen(open);
+                  }}
+                >
+                  <DialogContent>
+                    <DialogHeader>
+                      <DialogTitle>Archive Completed Order</DialogTitle>
+                      <DialogDescription>
+                        Remove this order from the orders page only. Historical data, analytics, and audit trail stay intact.
+                      </DialogDescription>
+                    </DialogHeader>
+                    <div className="py-4">
+                      <label htmlFor="archive-reason" className="text-sm font-medium text-foreground">
+                        Reason
+                      </label>
+                      <textarea
+                        id="archive-reason"
+                        placeholder="Example: Already completed historically - clear from page"
+                        value={archiveReason}
+                        onChange={(event) => setArchiveReason(event.target.value)}
+                        className="mt-2 w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary"
+                        rows={3}
+                      />
+                    </div>
+                    <DialogFooter>
+                      <Button
+                        variant="outline"
+                        onClick={() => setArchiveDialogOpen(false)}
+                        disabled={archivingOrder}
+                      >
+                        Cancel
+                      </Button>
+                      <Button
+                        variant="destructive"
+                        onClick={() => void handleArchiveOrder()}
+                        disabled={archivingOrder}
+                      >
+                        {archivingOrder ? "Archiving..." : "Archive Completed Order"}
                       </Button>
                     </DialogFooter>
                   </DialogContent>

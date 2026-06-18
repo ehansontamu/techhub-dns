@@ -68,6 +68,7 @@ class Order(Base):
         Index("ix_orders_updated_at", "updated_at"),
         Index("ix_orders_signature_captured_at", "signature_captured_at"),
         Index("ix_orders_hidden_from_ops", "hidden_from_ops"),
+        Index("ix_orders_archived_from_order_list", "archived_from_order_list"),
         Index("ix_orders_status_updated_at", "status", "updated_at"),
         Index(
             "ix_orders_status_tagged_at_updated_at", "status", "tagged_at", "updated_at"
@@ -107,6 +108,10 @@ class Order(Base):
     hidden_reason = Column(Text, nullable=True)
     hidden_at = Column(DateTime, nullable=True)
     hidden_by = Column(String(255), nullable=True)
+    archived_from_order_list = Column(Boolean, nullable=False, default=False)
+    archived_from_order_list_reason = Column(Text, nullable=True)
+    archived_from_order_list_at = Column(DateTime, nullable=True)
+    archived_from_order_list_by = Column(String(255), nullable=True)
     tagged_at = Column(DateTime, nullable=True)
     tagged_by = Column(String(255), nullable=True)
     tag_data = Column(JSON, nullable=True)

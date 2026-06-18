@@ -18,6 +18,7 @@ from app.utils.broadcast_dedup import broadcast_dedup
 from app.schemas.order import (
     OrderResponse,
     OrderDetailResponse,
+    OrderArchiveRequest,
     OrderDismissRequest,
     OrderStatusUpdate,
     OrderRollbackUpdate,
@@ -784,6 +785,28 @@ def dismiss_order(order_id):
             reason=dismiss_request.reason,
             remove_sharepoint_files=dismiss_request.remove_sharepoint_files,
             expected_updated_at=dismiss_request.expected_updated_at,
+        )
+
+        broadcast_dedup.request_broadcast(_broadcast_orders_sync)
+
+        return jsonify(_order_response_json(order, db))
+
+
+@bp.route("/<order_id>/archive-order-list", methods=["POST"])
+@require_admin
+def archive_order_from_list(order_id):
+    """Hide an order from the orders page without removing historical reporting."""
+    data = request.get_json() or {}
+    changed_by = get_current_user_display_name()
+
+    with get_db() as db:
+        service = OrderService(db)
+        archive_request = OrderArchiveRequest(**data)
+        order = service.archive_order_from_list(
+            order_id=order_id,
+            changed_by=changed_by,
+            reason=archive_request.reason,
+            expected_updated_at=archive_request.expected_updated_at,
         )
 
         broadcast_dedup.request_broadcast(_broadcast_orders_sync)

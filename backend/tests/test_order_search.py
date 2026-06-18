@@ -39,6 +39,7 @@ def _make_order(
     po_number: str | None = None,
     inflow_sales_order_id: str | None = None,
     assigned_deliverer: str | None = None,
+    archived_from_order_list: bool = False,
 ):
     now = datetime(2026, 5, 20, 12, 0, 0)
     return Order(
@@ -49,6 +50,7 @@ def _make_order(
         po_number=po_number,
         assigned_deliverer=assigned_deliverer,
         status=OrderStatus.PICKED.value,
+        archived_from_order_list=archived_from_order_list,
         created_at=now,
         updated_at=now,
     )
@@ -96,6 +98,30 @@ def test_get_orders_search_matches_listed_order_fields():
 
         assert sales_total == 1
         assert [order.inflow_order_id for order in sales_results] == ["TH1002"]
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_get_orders_excludes_orders_archived_from_orders_page():
+    session, engine = _make_session()
+    try:
+        session.add_all(
+            [
+                _make_order(inflow_order_id="TH2001"),
+                _make_order(
+                    inflow_order_id="TH2002",
+                    archived_from_order_list=True,
+                ),
+            ]
+        )
+        session.commit()
+
+        service = OrderService(session)
+        results, total = service.get_orders()
+
+        assert total == 1
+        assert [order.inflow_order_id for order in results] == ["TH2001"]
     finally:
         session.close()
         engine.dispose()

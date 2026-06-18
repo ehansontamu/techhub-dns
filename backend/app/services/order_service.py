@@ -368,6 +368,13 @@ class OrderService:
     def _visible_order_filter(query):
         return query.filter(Order.hidden_from_ops.is_(False))
 
+    @staticmethod
+    def _orders_list_visible_filter(query):
+        return query.filter(
+            Order.hidden_from_ops.is_(False),
+            Order.archived_from_order_list.is_(False),
+        )
+
     def _cleanup_order_documents(self, order: Order) -> None:
         """Delete local document files for an order after delivery completion."""
         paths = [
@@ -1028,7 +1035,7 @@ class OrderService:
         limit: int = 100,
     ) -> tuple[List[Order], int]:
         """Get orders with filters and pagination"""
-        query = self._visible_order_filter(self.db.query(Order))
+        query = self._orders_list_visible_filter(self.db.query(Order))
 
         if status:
             query = query.filter(Order.status == status.value)
@@ -1363,6 +1370,73 @@ class OrderService:
                     "reason": reason,
                 },
             )
+
+        self.db.commit()
+        self.db.refresh(order)
+        return order
+
+    def archive_order_from_list(
+        self,
+        order_id: Union[UUID, str],
+        *,
+        changed_by: Optional[str],
+        reason: str,
+        expected_updated_at: Optional[datetime] = None,
+    ) -> Order:
+        order = self._resolve_order(str(order_id), lock=True)
+        if not order:
+            raise NotFoundError("Order", str(order_id))
+
+        if order.archived_from_order_list:
+            raise ValidationError("Order is already archived from the orders page")
+
+        reason = reason.strip()
+        if not reason:
+            raise ValidationError("Reason is required when archiving an order")
+
+        self.assert_not_stale(order, expected_updated_at)
+
+        prior_state = {
+            "status": order.status,
+            "archived_from_order_list": order.archived_from_order_list,
+            "archived_from_order_list_reason": order.archived_from_order_list_reason,
+        }
+
+        order.archived_from_order_list = True
+        order.archived_from_order_list_reason = reason
+        order.archived_from_order_list_at = datetime.utcnow()
+        order.archived_from_order_list_by = changed_by
+        order.updated_at = datetime.utcnow()
+
+        audit_log = AuditLog(
+            order_id=order.id,
+            changed_by=changed_by,
+            from_status=order.status,
+            to_status=order.status,
+            reason=f"Order archived from orders page: {reason}",
+            timestamp=datetime.utcnow(),
+            extra_metadata={
+                "action": "archived_from_order_list",
+            },
+        )
+        self.db.add(audit_log)
+
+        audit_service = AuditService(self.db)
+        audit_service.log_order_action(
+            order_id=str(order.id),
+            action="archived_from_order_list",
+            user_id=changed_by or "system",
+            description="Order archived from orders page only",
+            old_value=prior_state,
+            new_value={
+                "archived_from_order_list": True,
+                "archived_from_order_list_reason": reason,
+                "archived_from_order_list_at": to_utc_iso_z(
+                    order.archived_from_order_list_at
+                ),
+                "archived_from_order_list_by": changed_by,
+            },
+        )
 
         self.db.commit()
         self.db.refresh(order)
