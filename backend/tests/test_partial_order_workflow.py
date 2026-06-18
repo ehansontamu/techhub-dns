@@ -892,6 +892,83 @@ def test_create_order_from_inflow_refreshes_pick_lines_for_split_orders():
     engine.dispose()
 
 
+def test_create_order_from_inflow_restores_hidden_order_when_repicked():
+    """Hidden orders should automatically return to ops when InFlow picks them again."""
+
+    session, engine = _make_sqlite_session()
+
+    existing_order = Order(
+        id="order-hidden-restore-1",
+        inflow_order_id="TH3010",
+        inflow_sales_order_id="sales-order-3010",
+        recipient_name="Hidden Recipient",
+        recipient_contact="hidden@example.com",
+        delivery_location="Old Building",
+        po_number="PO-3010",
+        status=OrderStatus.PICKED.value,
+        hidden_from_ops=True,
+        hidden_reason="Picked by mistake",
+        hidden_at=datetime.utcnow(),
+        hidden_by="admin@example.com",
+        inflow_data={
+            "orderNumber": "TH3010",
+            "salesOrderId": "sales-order-3010",
+            "contactName": "Hidden Recipient",
+            "email": "hidden@example.com",
+            "shippingAddress": {"address1": "Old Building"},
+            "lines": [
+                {
+                    "productId": "prod-a",
+                    "description": "Laptop",
+                    "quantity": {"standardQuantity": "1"},
+                }
+            ],
+            "pickLines": [],
+        },
+    )
+    session.add(existing_order)
+    session.commit()
+
+    service = OrderService(session)
+    incoming_payload = {
+        "orderNumber": "TH3010",
+        "salesOrderId": "sales-order-3010",
+        "contactName": "Restored Recipient",
+        "email": "restored@example.com",
+        "shippingAddress": {"address1": "Updated Building"},
+        "poNumber": "PO-3010-NEW",
+        "lines": [
+            {
+                "productId": "prod-a",
+                "description": "Laptop",
+                "quantity": {"standardQuantity": "1"},
+            }
+        ],
+        "pickLines": [
+            {
+                "productId": "prod-a",
+                "description": "Laptop",
+                "quantity": {"standardQuantity": "1"},
+            }
+        ],
+        "packLines": [],
+        "shipLines": [],
+    }
+
+    updated = service.create_order_from_inflow(incoming_payload)
+    session.refresh(updated)
+
+    assert updated.hidden_from_ops is False
+    assert updated.hidden_reason is None
+    assert updated.hidden_at is None
+    assert updated.hidden_by is None
+    assert updated.recipient_name == "Restored Recipient"
+    assert updated.delivery_location == "Updated Building"
+
+    session.close()
+    engine.dispose()
+
+
 def test_create_order_from_inflow_prefers_exact_order_number_for_split_orders():
     """A split parent should be refreshed by its exact order number, not the shared sales order id."""
 
