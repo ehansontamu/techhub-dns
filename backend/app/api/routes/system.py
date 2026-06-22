@@ -100,6 +100,22 @@ def _get_print_agent_claim_timeout_seconds() -> int:
     return timeout if timeout > 0 else PRINT_AGENT_CLAIM_TIMEOUT_SECONDS
 
 
+def _find_order_for_picklist_reprint(db, order_identifier: str) -> Optional[Order]:
+    normalized_identifier = str(order_identifier or "").strip()
+    if not normalized_identifier:
+        return None
+
+    order = (
+        db.query(Order)
+        .filter(Order.inflow_order_id_lower == normalized_identifier.lower())
+        .first()
+    )
+    if order:
+        return order
+
+    return db.query(Order).filter(Order.id == normalized_identifier).first()
+
+
 def _require_print_agent() -> None:
     configured_token = (settings.picklist_print_agent_token or "").strip()
     if not configured_token:
@@ -1280,7 +1296,7 @@ def list_order_print_jobs(order_id: str):
 def reprint_picklist(order_id: str):
     db = get_db_session()
     try:
-        order = db.query(Order).filter(Order.id == order_id).first()
+        order = _find_order_for_picklist_reprint(db, order_id)
         if not order:
             return jsonify({"error": "Order not found"}), 404
         if not order.picklist_path:
