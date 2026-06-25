@@ -141,4 +141,19 @@ describe("canGeneratePicklist", () => {
       } as any),
     ).toBe(true);
   });
+
+  it("allows a partially picked remainder leg to generate the next split before tagging", () => {
+    expect(
+      canGeneratePicklist({
+        inflow_data: {
+          lines: [{ productId: "1", quantity: { standardQuantity: 66 } }],
+          pickLines: [{ productId: "1", quantity: { standardQuantity: 61 } }],
+        },
+        has_remainder: "Y",
+        remainder_order_id: "remainder-uuid",
+        asset_tag_required: true,
+        tagged_at: null,
+      } as any),
+    ).toBe(true);
+  });
 });

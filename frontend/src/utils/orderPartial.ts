@@ -305,12 +305,16 @@ export const canGeneratePicklist = (order: PartialOrderSource): boolean => {
     return false;
   }
 
+  const partialInfo = getPartialOrderInfo(order);
+  if (partialInfo.hasRemainder && partialInfo.totalPicked > 0 && partialInfo.missingItems.length > 0) {
+    return true;
+  }
+
   const assetTagRequired = order.asset_tag_required !== false;
   if (assetTagRequired && !order.tagged_at) {
     return false;
   }
 
-  const partialInfo = getPartialOrderInfo(order);
   if (partialInfo.hasRemainder && partialInfo.totalPicked === 0 && partialInfo.missingItems.length > 0) {
     return false;
   }
