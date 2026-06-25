@@ -317,7 +317,12 @@ class OrderSplittingService:
         child_pick_quantities = _quantity_by_product(child_pick_lines)
         current_line_quantities = _quantity_by_product(current_lines)
         has_cumulative_same_product_picks = any(
-            current_pick_quantities.get(product_id, 0.0)
+            abs(
+                current_pick_quantities.get(product_id, 0.0)
+                - current_line_quantities.get(product_id, 0.0)
+            )
+            > 0.0001
+            and current_pick_quantities.get(product_id, 0.0)
             + child_pick_quantities.get(product_id, 0.0)
             > current_line_quantities.get(product_id, 0.0) + 0.0001
             for product_id in current_pick_product_ids.intersection(child_product_ids)
