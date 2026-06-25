@@ -54,6 +54,9 @@ from app.services.system_setting_service import (
 
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", re.IGNORECASE)
+CANOPY_ORDERS_ORDER_RE = re.compile(
+    r"^TH(?P<digits>\d+)(?:-(?:P(?:\d+)?|R))?$", re.IGNORECASE
+)
 
 WORKFLOW_READABLE_SETTINGS = (
     SETTING_REQUIRE_DIFFERENT_USER_FOR_PICK_AND_QA,
@@ -128,6 +131,30 @@ def _require_print_agent() -> None:
     provided_token = auth_header.removeprefix("Bearer ").strip()
     if not hmac.compare_digest(provided_token, configured_token):
         raise PermissionError("Invalid bearer token")
+
+
+def _normalize_canopyorders_order_value(raw_value: str) -> Optional[str]:
+    trimmed = raw_value.strip()
+    compact = "".join(trimmed.upper().split())
+    if not compact:
+        return None
+    if compact.isdigit():
+        return f"TH{compact}"
+    if CANOPY_ORDERS_ORDER_RE.fullmatch(compact):
+        return compact
+    return None
+
+
+def _base_canopyorders_order(value: str) -> str:
+    normalized = _normalize_canopyorders_order_value(value)
+    if not normalized:
+        raise ValueError(f"Invalid Canopy order value: {value!r}")
+
+    match = CANOPY_ORDERS_ORDER_RE.fullmatch(normalized)
+    if not match:
+        raise ValueError(f"Invalid Canopy order value: {value!r}")
+
+    return f"TH{match.group('digits')}"
 
 
 def _send_picklist_pdf(file_path: str, download_name: str):
@@ -1913,13 +1940,13 @@ def upload_canopy_orders():
         if not compact:
             return jsonify({"error": "Order number cannot be empty"}), 400
 
-        digits = compact[2:] if compact.startswith("TH") else compact
-        if len(digits) < 1 or not digits.isdigit():
+        normalized = _normalize_canopyorders_order_value(raw_order)
+        if normalized is None:
             return jsonify(
-                {"error": "Order number must be at least 1 digit after TH (e.g., TH1, TH123, TH12345)"}
+                {
+                    "error": "Order number must be TH + digits and may include partial suffixes like -P, -P2, or -R"
+                }
             ), 400
-
-        normalized = f"TH{digits}"
         if normalized in seen_orders:
             continue
 
@@ -1984,8 +2011,14 @@ def upload_canopy_orders():
     finally:
         db.close()
 
+    canopy_orders = list(
+        dict.fromkeys(
+            _base_canopyorders_order(order_id) for order_id in eligible_orders
+        )
+    )
+
     uploader = CanopyOrdersUploaderService()
-    result = uploader.upload_orders(eligible_orders)
+    result = uploader.upload_orders(canopy_orders)
 
     if not result.get("success"):
         response_body = {
@@ -2003,7 +2036,9 @@ def upload_canopy_orders():
     uploaded_url = result.get("uploaded_url")
     teams_notified = False
     if uploaded_url:
-        teams_notified = uploader.send_teams_notification(eligible_orders, uploaded_url)
+        teams_notified = uploader.send_teams_notification(
+            canopy_orders, uploaded_url
+        )
 
     updated_orders = 0
     db = get_db_session()
@@ -2054,21 +2089,14 @@ def upload_canopy_orders():
 
 
 def _normalize_canopyorders_bypass_value(raw_value: str) -> str:
-    trimmed = raw_value.strip()
-    compact = "".join(trimmed.upper().split())
-    if len(compact) >= 1 and compact.isdigit():
-        return f"TH{compact}"
-    if compact.startswith("TH") and len(compact) >= 3 and compact[2:].isdigit():
-        return f"TH{compact[2:]}"
-    return trimmed
+    normalized = _normalize_canopyorders_order_value(raw_value)
+    return normalized if normalized is not None else raw_value.strip()
 
 
 def _is_exact_th_order(value: str) -> bool:
     # Accept TH followed by any number of digits (e.g., TH1, TH123, TH12345)
-    if not value.startswith("TH"):
-        return False
-    stripped = value[2:]
-    return len(stripped) >= 1 and stripped.isdigit()
+    normalized = _normalize_canopyorders_order_value(value)
+    return bool(normalized) and normalized == _base_canopyorders_order(normalized)
 
 
 @bp.route("/canopyorders/upload-bypass", methods=["POST"])
@@ -2100,8 +2128,19 @@ def upload_canopy_orders_bypass():
     if not normalized_orders:
         return jsonify({"error": "No orders provided"}), 400
 
+    canopy_orders = list(
+        dict.fromkeys(
+            (
+                _base_canopyorders_order(order_id)
+                if _normalize_canopyorders_order_value(order_id)
+                else order_id
+            )
+            for order_id in normalized_orders
+        )
+    )
+
     uploader = CanopyOrdersUploaderService()
-    result = uploader.upload_orders(normalized_orders)
+    result = uploader.upload_orders(canopy_orders)
 
     if not result.get("success"):
         response_body = {
@@ -2122,14 +2161,14 @@ def upload_canopy_orders_bypass():
     teams_notified = False
     if uploaded_url:
         teams_notified = uploader.send_teams_notification(
-            normalized_orders, uploaded_url
+            canopy_orders, uploaded_url
         )
 
     updated_orders = 0
     missing_orders: list[str] = []
-    th_orders = [order for order in normalized_orders if _is_exact_th_order(order)]
+    tracked_orders = normalized_orders
 
-    if th_orders:
+    if tracked_orders:
         db = get_db_session()
         try:
             sent_by = get_current_user_email() or "system"
@@ -2141,10 +2180,12 @@ def upload_canopy_orders_bypass():
                 "canopyorders_request_sent_by": sent_by,
             }
 
-            for th in th_orders:
-                order = db.query(Order).filter(Order.inflow_order_id == th).first()
+            for order_id in tracked_orders:
+                order = (
+                    db.query(Order).filter(Order.inflow_order_id == order_id).first()
+                )
                 if not order:
-                    missing_orders.append(th)
+                    missing_orders.append(order_id)
                     continue
 
                 tag_data = dict(
