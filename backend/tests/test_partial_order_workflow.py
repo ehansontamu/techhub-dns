@@ -2272,6 +2272,194 @@ def test_parent_remainder_pick_status_source_excludes_child_leg_picks():
     engine.dispose()
 
 
+def test_parent_remainder_snapshot_rebuilds_lines_after_full_order_sync():
+    """A full-order InFlow refresh should not repopulate a remainder parent with child-leg items."""
+
+    session, engine = _make_sqlite_session()
+    parent_order = Order(
+        id="order-parent-8",
+        inflow_order_id="TH3006",
+        inflow_sales_order_id="sales-order-3006",
+        recipient_name="User Eight",
+        recipient_contact="user.eight@example.com",
+        delivery_location="Building 808",
+        po_number="PO-3006",
+        status=OrderStatus.PICKED.value,
+        inflow_data={
+            "orderNumber": "TH3006",
+            "contactName": "User Eight",
+            "email": "user.eight@example.com",
+            "shippingAddress": {"address1": "808 Example St"},
+            "lines": [
+                {
+                    "productId": "prod-1",
+                    "product": {"name": "Dock", "sku": "DOCK-1"},
+                    "unitPrice": "120",
+                    "quantity": {"standardQuantity": "1"},
+                },
+                {
+                    "productId": "prod-2",
+                    "product": {"name": "Laptop", "sku": "LAP-1"},
+                    "unitPrice": "1500",
+                    "quantity": {"standardQuantity": "1"},
+                },
+                {
+                    "productId": "prod-3",
+                    "product": {"name": "Monitor", "sku": "MON-1"},
+                    "unitPrice": "400",
+                    "quantity": {"standardQuantity": "1"},
+                },
+                {
+                    "productId": "prod-4",
+                    "product": {"name": "Keyboard", "sku": "KEY-1"},
+                    "unitPrice": "90",
+                    "quantity": {"standardQuantity": "1"},
+                },
+            ],
+            "pickLines": [
+                {
+                    "productId": "prod-1",
+                    "product": {"name": "Dock", "sku": "DOCK-1"},
+                    "quantity": {"standardQuantity": "1"},
+                },
+                {
+                    "productId": "prod-2",
+                    "product": {"name": "Laptop", "sku": "LAP-1"},
+                    "quantity": {"standardQuantity": "1"},
+                },
+                {
+                    "productId": "prod-4",
+                    "product": {"name": "Keyboard", "sku": "KEY-1"},
+                    "quantity": {"standardQuantity": "1"},
+                },
+            ],
+        },
+    )
+    session.add(parent_order)
+    session.commit()
+
+    service = OrderSplittingService(session)
+    child_order = service.create_partial_picklist_leg(parent_order, user_id="tech@example.com")
+    session.refresh(parent_order)
+
+    assert child_order is not None
+
+    # Simulate a later InFlow refresh for the original sales order once the
+    # remainder item has also been picked upstream. The parent remainder leg
+    # should still own only that final monitor item locally.
+    parent_order.inflow_data = {
+        "orderNumber": "TH3006",
+        "contactName": "User Eight",
+        "email": "user.eight@example.com",
+        "shippingAddress": {"address1": "808 Example St"},
+        "lines": [
+            {
+                "productId": "prod-1",
+                "product": {"name": "Dock", "sku": "DOCK-1"},
+                "unitPrice": "120",
+                "quantity": {"standardQuantity": "1"},
+            },
+            {
+                "productId": "prod-2",
+                "product": {"name": "Laptop", "sku": "LAP-1"},
+                "unitPrice": "1500",
+                "quantity": {"standardQuantity": "1"},
+            },
+            {
+                "productId": "prod-3",
+                "product": {"name": "Monitor", "sku": "MON-1"},
+                "unitPrice": "400",
+                "quantity": {"standardQuantity": "1"},
+            },
+            {
+                "productId": "prod-4",
+                "product": {"name": "Keyboard", "sku": "KEY-1"},
+                "unitPrice": "90",
+                "quantity": {"standardQuantity": "1"},
+            },
+        ],
+        "pickLines": [
+            {
+                "productId": "prod-1",
+                "product": {"name": "Dock", "sku": "DOCK-1"},
+                "quantity": {"standardQuantity": "1"},
+            },
+            {
+                "productId": "prod-2",
+                "product": {"name": "Laptop", "sku": "LAP-1"},
+                "quantity": {"standardQuantity": "1"},
+            },
+            {
+                "productId": "prod-3",
+                "product": {"name": "Monitor", "sku": "MON-1"},
+                "quantity": {"standardQuantity": "1"},
+            },
+            {
+                "productId": "prod-4",
+                "product": {"name": "Keyboard", "sku": "KEY-1"},
+                "quantity": {"standardQuantity": "1"},
+            },
+        ],
+        "packLines": [
+            {
+                "productId": "prod-1",
+                "quantity": {"standardQuantity": "1"},
+            },
+            {
+                "productId": "prod-2",
+                "quantity": {"standardQuantity": "1"},
+            },
+            {
+                "productId": "prod-4",
+                "quantity": {"standardQuantity": "1"},
+            },
+        ],
+        "shipLines": [
+            {
+                "carrier": "TechHub",
+                "containers": ["DELIVERY-TH3006-1"],
+            }
+        ],
+    }
+    session.commit()
+
+    normalized = service.normalize_partial_remainder_snapshot(
+        parent_order,
+        parent_order.inflow_data,
+    )
+    document_view = service.build_parent_remainder_document_view(parent_order)
+    pick_status_source = service.build_parent_remainder_pick_status_source(parent_order)
+
+    assert normalized["lines"] == [
+        {
+            "productId": "prod-3",
+            "product": {"name": "Monitor", "sku": "MON-1"},
+            "unitPrice": "400",
+            "quantity": {"standardQuantity": 1.0},
+        },
+    ]
+    assert normalized["pickLines"] == [
+        {
+            "productId": "prod-3",
+            "product": {"name": "Monitor", "sku": "MON-1"},
+            "quantity": {"standardQuantity": 1.0},
+        },
+    ]
+    assert normalized["subtotal"] == 400.0
+    assert normalized["total"] == 400.0
+
+    assert document_view is not None
+    assert document_view["lines"] == normalized["lines"]
+    assert document_view["pickLines"] == normalized["pickLines"]
+
+    assert pick_status_source is not None
+    assert pick_status_source["lines"] == normalized["lines"]
+    assert pick_status_source["pickLines"] == normalized["pickLines"]
+
+    session.close()
+    engine.dispose()
+
+
 def test_parent_remainder_blocks_prep_actions_until_remaining_items_are_picked():
     """Remainder parent legs should not allow prep actions before their items are picked."""
 
