@@ -2376,6 +2376,7 @@ class OrderService:
                 merged_inflow_data = OrderSplittingService(self.db).normalize_partial_remainder_snapshot(
                     existing,
                     merged_inflow_data,
+                    rebuild_lines=False,
                 )
 
             if existing.inflow_data != merged_inflow_data:
@@ -2510,6 +2511,7 @@ class OrderService:
                         merged_inflow_data = OrderSplittingService(self.db).normalize_partial_remainder_snapshot(
                             existing,
                             merged_inflow_data,
+                            rebuild_lines=False,
                         )
                     existing.inflow_data = merged_inflow_data
                     existing.updated_at = datetime.utcnow()

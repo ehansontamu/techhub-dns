@@ -251,6 +251,8 @@ class OrderSplittingService:
         self,
         original_order: Order,
         inflow_data: Dict[str, Any],
+        *,
+        rebuild_lines: bool = True,
     ) -> Dict[str, Any]:
         """
         Remove quantities already assigned to earlier child legs from a remainder snapshot.
@@ -339,7 +341,11 @@ class OrderSplittingService:
             current_line_product_ids.intersection(child_product_ids)
             and current_line_product_ids.difference(child_product_ids)
         )
-        if has_child_and_remainder_products and has_child_and_remainder_pick_products:
+        if (
+            rebuild_lines
+            and has_child_and_remainder_products
+            and has_child_and_remainder_pick_products
+        ):
             normalized["lines"] = self._subtract_lines(
                 current_lines,
                 child_pick_lines,
@@ -661,9 +667,16 @@ class OrderSplittingService:
             return None
 
         leg_order_id = self._next_partial_child_order_id(original_order)
+        source_inflow_data = original_order.inflow_data
+        if original_order.remainder_order_id:
+            remainder_split_source = self.build_parent_remainder_pick_status_source(
+                original_order
+            )
+            if remainder_split_source is not None:
+                source_inflow_data = remainder_split_source
 
-        picked_leg_inflow_data = self._build_partial_leg_view(original_order.inflow_data)
-        remainder_leg_state = self._build_remainder_leg_state(original_order.inflow_data)
+        picked_leg_inflow_data = self._build_partial_leg_view(source_inflow_data)
+        remainder_leg_state = self._build_remainder_leg_state(source_inflow_data)
 
         child_order = Order(
             id=str(uuid.uuid4()),
