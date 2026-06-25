@@ -1682,7 +1682,11 @@ def test_recursive_partial_split_uses_delta_picks_for_next_child_leg():
                     "app.services.order_service.SystemSettingService.get_setting",
                     return_value="false",
                 ):
-                    with patch.object(order_service, "_send_order_details_email", return_value=True):
+                    with patch.object(order_service, "_send_order_details_email", return_value=True), patch.object(
+                        order_service,
+                        "_requires_asset_tags",
+                        return_value=True,
+                    ):
                         result = order_service.generate_picklist(
                             parent_order.id,
                             generated_by="tech@example.com",
@@ -1696,6 +1700,8 @@ def test_recursive_partial_split_uses_delta_picks_for_next_child_leg():
 
     assert result.inflow_order_id == "TH4770-P2"
     assert result.parent_order_id == parent_order.id
+    assert result.status == OrderStatus.PICKED.value
+    assert result.picklist_generated_at is not None
     assert result.inflow_data["lines"] == [
         {
             "productId": "prod-laptop",
@@ -1718,6 +1724,16 @@ def test_recursive_partial_split_uses_delta_picks_for_next_child_leg():
         }
     ]
     assert parent_order.inflow_data["pickLines"] == []
+
+    with patch.object(order_service, "_requires_asset_tags", return_value=False):
+        tagged_child = order_service.mark_asset_tagged(
+            result.id,
+            ["TAG-40"],
+            technician="tech@example.com",
+        )
+
+    assert tagged_child.status == OrderStatus.QA.value
+    assert tagged_child.tagged_at is not None
 
     full_order_refresh = {
         "orderNumber": "TH4770",
@@ -1795,6 +1811,192 @@ def test_recursive_partial_split_uses_delta_picks_for_next_child_leg():
         }
     ]
     assert repaired_document_view["pickLines"] == []
+
+    session.close()
+    engine.dispose()
+
+
+def test_recursive_partial_split_preserves_leftover_quantity_for_prior_product():
+    """Later recursive legs should not erase leftover quantities from products used in earlier child legs."""
+
+    session, engine = _make_sqlite_session()
+
+    parent_order = Order(
+        id="order-parent-mixed-1",
+        inflow_order_id="TH4888",
+        inflow_sales_order_id="sales-order-4888",
+        recipient_name="User Mixed",
+        recipient_contact="user.mixed@example.com",
+        delivery_location="Building 4888",
+        po_number="PO-4888",
+        status=OrderStatus.PICKED.value,
+        tagged_by="tech@example.com",
+        inflow_data={
+            "orderNumber": "TH4888",
+            "contactName": "User Mixed",
+            "email": "user.mixed@example.com",
+            "shippingAddress": {"address1": "4888 Example St"},
+            "lines": [
+                {
+                    "productId": "prod-accessory",
+                    "product": {"name": "Custom Accessory", "sku": "ACC-1"},
+                    "quantity": {"standardQuantity": "2"},
+                },
+                {
+                    "productId": "prod-computer",
+                    "product": {"name": "Custom Computer", "sku": "CPU-1"},
+                    "quantity": {"standardQuantity": "1"},
+                },
+            ],
+            "pickLines": [
+                {
+                    "productId": "prod-accessory",
+                    "product": {"name": "Custom Accessory", "sku": "ACC-1"},
+                    "quantity": {"standardQuantity": "1"},
+                }
+            ],
+        },
+    )
+    session.add(parent_order)
+    session.commit()
+
+    splitting_service = OrderSplittingService(session)
+    first_child = splitting_service.create_partial_picklist_leg(
+        parent_order, user_id="tech@example.com"
+    )
+    session.refresh(parent_order)
+    session.refresh(first_child)
+
+    assert first_child is not None
+    assert first_child.inflow_data["lines"] == [
+        {
+            "productId": "prod-accessory",
+            "product": {"name": "Custom Accessory", "sku": "ACC-1"},
+            "quantity": {"standardQuantity": "1.0"},
+        }
+    ]
+    assert parent_order.inflow_data["lines"] == [
+        {
+            "productId": "prod-accessory",
+            "product": {"name": "Custom Accessory", "sku": "ACC-1"},
+            "quantity": {"standardQuantity": 1.0},
+        },
+        {
+            "productId": "prod-computer",
+            "product": {"name": "Custom Computer", "sku": "CPU-1"},
+            "quantity": {"standardQuantity": 1.0},
+        },
+    ]
+
+    order_service = OrderService(session)
+    cumulative_refresh = {
+        "orderNumber": "TH4888",
+        "salesOrderId": "sales-order-4888",
+        "contactName": "User Mixed",
+        "email": "user.mixed@example.com",
+        "shippingAddress": {"address1": "4888 Example St"},
+        "lines": [
+            {
+                "productId": "prod-accessory",
+                "product": {"name": "Custom Accessory", "sku": "ACC-1"},
+                "quantity": {"standardQuantity": "2"},
+            },
+            {
+                "productId": "prod-computer",
+                "product": {"name": "Custom Computer", "sku": "CPU-1"},
+                "quantity": {"standardQuantity": "1"},
+            },
+        ],
+        "pickLines": [
+            {
+                "productId": "prod-accessory",
+                "product": {"name": "Custom Accessory", "sku": "ACC-1"},
+                "quantity": {"standardQuantity": "1"},
+            },
+            {
+                "productId": "prod-computer",
+                "product": {"name": "Custom Computer", "sku": "CPU-1"},
+                "quantity": {"standardQuantity": "1"},
+            },
+        ],
+        "packLines": [],
+        "shipLines": [],
+    }
+
+    updated = order_service.create_order_from_inflow(cumulative_refresh)
+    session.refresh(updated)
+
+    assert updated.inflow_data["lines"] == [
+        {
+            "productId": "prod-accessory",
+            "product": {"name": "Custom Accessory", "sku": "ACC-1"},
+            "quantity": {"standardQuantity": 1.0},
+        },
+        {
+            "productId": "prod-computer",
+            "product": {"name": "Custom Computer", "sku": "CPU-1"},
+            "quantity": {"standardQuantity": 1.0},
+        },
+    ]
+    assert updated.inflow_data["pickLines"] == [
+        {
+            "productId": "prod-computer",
+            "product": {"name": "Custom Computer", "sku": "CPU-1"},
+            "quantity": {"standardQuantity": 1.0},
+        }
+    ]
+
+    class FakeSharePointService:
+        is_enabled = True
+
+        def upload_pdf(self, pdf_path: str, subfolder: str, filename: str) -> str:
+            return f"sharepoint://{subfolder}/{filename}"
+
+    def fake_generate_picklist_pdf(self, inflow_data, output_path):
+        Path(output_path).write_bytes(b"%PDF-1.4 fake mixed recursive picklist\n")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        order_service._local_doc_path = lambda category, filename: Path(tmpdir) / category / filename  # type: ignore[method-assign]
+
+        with patch("app.services.sharepoint_service.get_sharepoint_service", return_value=FakeSharePointService()):
+            with patch(
+                "app.services.picklist_service.PicklistService.generate_picklist_pdf",
+                new=fake_generate_picklist_pdf,
+            ):
+                with patch(
+                    "app.services.order_service.SystemSettingService.is_setting_enabled",
+                    return_value=False,
+                ), patch(
+                    "app.services.order_service.SystemSettingService.get_setting",
+                    return_value="false",
+                ):
+                    with patch.object(order_service, "_send_order_details_email", return_value=True):
+                        result = order_service.generate_picklist(
+                            parent_order.id,
+                            generated_by="tech@example.com",
+                            generated_by_display="tech@example.com",
+                            create_partial_leg=False,
+                        )
+
+    session.refresh(parent_order)
+    session.refresh(result)
+
+    assert result.inflow_order_id == "TH4888-P2"
+    assert result.inflow_data["lines"] == [
+        {
+            "productId": "prod-computer",
+            "product": {"name": "Custom Computer", "sku": "CPU-1"},
+            "quantity": {"standardQuantity": "1.0"},
+        }
+    ]
+    assert parent_order.inflow_data["lines"] == [
+        {
+            "productId": "prod-accessory",
+            "product": {"name": "Custom Accessory", "sku": "ACC-1"},
+            "quantity": {"standardQuantity": 1.0},
+        }
+    ]
+    assert parent_order.inflow_data["pickLines"] == []
 
     session.close()
     engine.dispose()

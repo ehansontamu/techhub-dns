@@ -251,6 +251,8 @@ class OrderSplittingService:
         self,
         original_order: Order,
         inflow_data: Dict[str, Any],
+        *,
+        rebuild_lines: bool = True,
     ) -> Dict[str, Any]:
         """
         Remove quantities already assigned to earlier child legs from a remainder snapshot.
@@ -275,6 +277,11 @@ class OrderSplittingService:
             for line in normalized.get("pickLines", [])
             if isinstance(line, dict)
         ]
+        current_lines = [
+            line
+            for line in normalized.get("lines", [])
+            if isinstance(line, dict)
+        ]
         current_pick_product_ids = {
             str(line.get("productId"))
             for line in current_pick_lines
@@ -288,25 +295,48 @@ class OrderSplittingService:
         if not current_pick_product_ids.intersection(child_product_ids):
             return normalized
 
+        def _quantity_by_product(lines: List[Dict[str, Any]]) -> Dict[str, float]:
+            totals: Dict[str, float] = {}
+            for line in lines:
+                if not isinstance(line, dict):
+                    continue
+                product_id = line.get("productId")
+                if not product_id:
+                    continue
+                product_key = str(product_id)
+                totals[product_key] = totals.get(product_key, 0.0) + self._parse_standard_quantity(
+                    line.get("quantity")
+                )
+            return totals
+
         has_child_and_remainder_pick_products = bool(
             current_pick_product_ids.intersection(child_product_ids)
             and current_pick_product_ids.difference(child_product_ids)
+        )
+        current_pick_quantities = _quantity_by_product(current_pick_lines)
+        child_pick_quantities = _quantity_by_product(child_pick_lines)
+        current_line_quantities = _quantity_by_product(current_lines)
+        has_cumulative_same_product_picks = any(
+            abs(
+                current_pick_quantities.get(product_id, 0.0)
+                - current_line_quantities.get(product_id, 0.0)
+            )
+            > 0.0001
+            and current_pick_quantities.get(product_id, 0.0)
+            + child_pick_quantities.get(product_id, 0.0)
+            > current_line_quantities.get(product_id, 0.0) + 0.0001
+            for product_id in current_pick_product_ids.intersection(child_product_ids)
         )
         normalized_pick_lines = (
             self._subtract_lines(
                 current_pick_lines,
                 child_pick_lines,
             )
-            if has_child_and_remainder_pick_products
+            if has_child_and_remainder_pick_products or has_cumulative_same_product_picks
             else current_pick_lines
         )
         normalized["pickLines"] = normalized_pick_lines
 
-        current_lines = [
-            line
-            for line in normalized.get("lines", [])
-            if isinstance(line, dict)
-        ]
         current_line_product_ids = {
             str(line.get("productId"))
             for line in current_lines
@@ -316,7 +346,11 @@ class OrderSplittingService:
             current_line_product_ids.intersection(child_product_ids)
             and current_line_product_ids.difference(child_product_ids)
         )
-        if has_child_and_remainder_products and has_child_and_remainder_pick_products:
+        if (
+            rebuild_lines
+            and has_child_and_remainder_products
+            and has_child_and_remainder_pick_products
+        ):
             normalized["lines"] = self._subtract_lines(
                 current_lines,
                 child_pick_lines,
@@ -638,9 +672,16 @@ class OrderSplittingService:
             return None
 
         leg_order_id = self._next_partial_child_order_id(original_order)
+        source_inflow_data = original_order.inflow_data
+        if original_order.remainder_order_id:
+            remainder_split_source = self.build_parent_remainder_pick_status_source(
+                original_order
+            )
+            if remainder_split_source is not None:
+                source_inflow_data = remainder_split_source
 
-        picked_leg_inflow_data = self._build_partial_leg_view(original_order.inflow_data)
-        remainder_leg_state = self._build_remainder_leg_state(original_order.inflow_data)
+        picked_leg_inflow_data = self._build_partial_leg_view(source_inflow_data)
+        remainder_leg_state = self._build_remainder_leg_state(source_inflow_data)
 
         child_order = Order(
             id=str(uuid.uuid4()),
