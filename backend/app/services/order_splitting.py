@@ -275,6 +275,11 @@ class OrderSplittingService:
             for line in normalized.get("pickLines", [])
             if isinstance(line, dict)
         ]
+        current_lines = [
+            line
+            for line in normalized.get("lines", [])
+            if isinstance(line, dict)
+        ]
         current_pick_product_ids = {
             str(line.get("productId"))
             for line in current_pick_lines
@@ -288,25 +293,43 @@ class OrderSplittingService:
         if not current_pick_product_ids.intersection(child_product_ids):
             return normalized
 
+        def _quantity_by_product(lines: List[Dict[str, Any]]) -> Dict[str, float]:
+            totals: Dict[str, float] = {}
+            for line in lines:
+                if not isinstance(line, dict):
+                    continue
+                product_id = line.get("productId")
+                if not product_id:
+                    continue
+                product_key = str(product_id)
+                totals[product_key] = totals.get(product_key, 0.0) + self._parse_standard_quantity(
+                    line.get("quantity")
+                )
+            return totals
+
         has_child_and_remainder_pick_products = bool(
             current_pick_product_ids.intersection(child_product_ids)
             and current_pick_product_ids.difference(child_product_ids)
+        )
+        current_pick_quantities = _quantity_by_product(current_pick_lines)
+        child_pick_quantities = _quantity_by_product(child_pick_lines)
+        current_line_quantities = _quantity_by_product(current_lines)
+        has_cumulative_same_product_picks = any(
+            current_pick_quantities.get(product_id, 0.0)
+            + child_pick_quantities.get(product_id, 0.0)
+            > current_line_quantities.get(product_id, 0.0) + 0.0001
+            for product_id in current_pick_product_ids.intersection(child_product_ids)
         )
         normalized_pick_lines = (
             self._subtract_lines(
                 current_pick_lines,
                 child_pick_lines,
             )
-            if has_child_and_remainder_pick_products
+            if has_child_and_remainder_pick_products or has_cumulative_same_product_picks
             else current_pick_lines
         )
         normalized["pickLines"] = normalized_pick_lines
 
-        current_lines = [
-            line
-            for line in normalized.get("lines", [])
-            if isinstance(line, dict)
-        ]
         current_line_product_ids = {
             str(line.get("productId"))
             for line in current_lines

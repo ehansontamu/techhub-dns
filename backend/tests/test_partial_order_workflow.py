@@ -1682,7 +1682,11 @@ def test_recursive_partial_split_uses_delta_picks_for_next_child_leg():
                     "app.services.order_service.SystemSettingService.get_setting",
                     return_value="false",
                 ):
-                    with patch.object(order_service, "_send_order_details_email", return_value=True):
+                    with patch.object(order_service, "_send_order_details_email", return_value=True), patch.object(
+                        order_service,
+                        "_requires_asset_tags",
+                        return_value=True,
+                    ):
                         result = order_service.generate_picklist(
                             parent_order.id,
                             generated_by="tech@example.com",
@@ -1696,6 +1700,8 @@ def test_recursive_partial_split_uses_delta_picks_for_next_child_leg():
 
     assert result.inflow_order_id == "TH4770-P2"
     assert result.parent_order_id == parent_order.id
+    assert result.status == OrderStatus.PICKED.value
+    assert result.picklist_generated_at is not None
     assert result.inflow_data["lines"] == [
         {
             "productId": "prod-laptop",
@@ -1718,6 +1724,16 @@ def test_recursive_partial_split_uses_delta_picks_for_next_child_leg():
         }
     ]
     assert parent_order.inflow_data["pickLines"] == []
+
+    with patch.object(order_service, "_requires_asset_tags", return_value=False):
+        tagged_child = order_service.mark_asset_tagged(
+            result.id,
+            ["TAG-40"],
+            technician="tech@example.com",
+        )
+
+    assert tagged_child.status == OrderStatus.QA.value
+    assert tagged_child.tagged_at is not None
 
     full_order_refresh = {
         "orderNumber": "TH4770",

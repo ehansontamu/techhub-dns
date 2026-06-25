@@ -548,6 +548,30 @@ class OrderService:
         order.tag_data = tag_data
         order.updated_at = datetime.utcnow()
 
+        should_advance_to_qa = (
+            order.status == OrderStatus.PICKED.value and bool(order.picklist_generated_at)
+        )
+        if should_advance_to_qa:
+            old_status = order.status
+            order.status = OrderStatus.QA.value
+
+            audit_log = AuditLog(
+                order_id=order.id,
+                changed_by=technician or "system",
+                from_status=old_status,
+                to_status=OrderStatus.QA.value,
+                reason="Asset tagging completed after picklist generation",
+                timestamp=datetime.utcnow(),
+            )
+            self.db.add(audit_log)
+            self._record_status_history(
+                order=order,
+                from_status=old_status,
+                to_status=OrderStatus.QA.value,
+                actor_identifier=technician,
+                metadata={"reason": "Asset tagging completed after picklist generation"},
+            )
+
         self.db.commit()
         self.db.refresh(order)
 
@@ -560,6 +584,18 @@ class OrderService:
             description=f"Order tagged with {len(tag_ids)} asset tags",
             audit_metadata={"tag_ids": tag_ids, "tagged_by": technician},
         )
+
+        if should_advance_to_qa:
+            audit_service.log_order_action(
+                order_id=str(order_id),
+                action="status_changed",
+                user_id=technician or "system",
+                description="Order moved to QA queue after post-picklist asset tagging",
+                audit_metadata={
+                    "from_status": OrderStatus.PICKED.value,
+                    "to_status": OrderStatus.QA.value,
+                },
+            )
 
         # If this order requires asset tags and is a partial pick,
         # create the partial leg now so picklist generation can proceed
@@ -761,8 +797,12 @@ class OrderService:
         # Send Order Details email to recipient (after picklist, before QA)
         self._send_order_details_email(order, generated_by)
 
-        # Transition order to QA status (awaiting QA checklist)
-        if order.status == OrderStatus.PICKED.value:
+        # Transition order to QA status (awaiting QA checklist) unless this
+        # picked leg still needs asset tagging after the picklist is created.
+        should_move_to_qa = order.status == OrderStatus.PICKED.value and (
+            not self._requires_asset_tags(order) or bool(order.tagged_at)
+        )
+        if should_move_to_qa:
             old_status = order.status
             order.status = OrderStatus.QA.value
             order.updated_at = datetime.utcnow()

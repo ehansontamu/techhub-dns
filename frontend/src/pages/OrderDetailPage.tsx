@@ -216,7 +216,23 @@ export default function OrderDetailPage() {
                 confirm_create_partial_leg: createPartialLeg,
             });
         },
-        onSuccess: async () => {
+        onSuccess: async (updatedOrder) => {
+            if (!orderId) {
+                return;
+            }
+
+            await queryClient.invalidateQueries({ queryKey: ["orders"] });
+
+            const nextOrderId = updatedOrder?.id;
+            if (nextOrderId && nextOrderId !== orderId) {
+                await invalidateOrderQueries(queryClient, nextOrderId);
+                navigate(`/orders/${nextOrderId}`, {
+                    state: locationState ?? undefined,
+                    replace: true,
+                });
+                return;
+            }
+
             await refreshOrder();
         },
         onError: async (error: unknown) => {
