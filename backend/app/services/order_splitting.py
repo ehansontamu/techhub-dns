@@ -275,7 +275,7 @@ class OrderSplittingService:
             for line in normalized.get("pickLines", [])
             if isinstance(line, dict)
         ]
-        current_product_ids = {
+        current_pick_product_ids = {
             str(line.get("productId"))
             for line in current_pick_lines
             if line.get("productId")
@@ -285,25 +285,51 @@ class OrderSplittingService:
             for line in child_pick_lines
             if line.get("productId")
         }
-        if not current_product_ids.intersection(child_product_ids):
+        if not current_pick_product_ids.intersection(child_product_ids):
             return normalized
 
-        normalized_pick_lines = self._subtract_lines(
-            current_pick_lines,
-            child_pick_lines,
+        has_child_and_remainder_pick_products = bool(
+            current_pick_product_ids.intersection(child_product_ids)
+            and current_pick_product_ids.difference(child_product_ids)
+        )
+        normalized_pick_lines = (
+            self._subtract_lines(
+                current_pick_lines,
+                child_pick_lines,
+            )
+            if has_child_and_remainder_pick_products
+            else current_pick_lines
         )
         normalized["pickLines"] = normalized_pick_lines
 
-        # Older split parents can drift back to full-order lines when InFlow
-        # refreshes the cumulative sales order snapshot. If every picked line
-        # belongs to existing child legs, rebuild the parent line set as the
-        # unpicked remainder instead of leaving the full-order lines in place.
         current_lines = [
             line
             for line in normalized.get("lines", [])
             if isinstance(line, dict)
         ]
-        if (
+        current_line_product_ids = {
+            str(line.get("productId"))
+            for line in current_lines
+            if line.get("productId")
+        }
+        has_child_and_remainder_products = bool(
+            current_line_product_ids.intersection(child_product_ids)
+            and current_line_product_ids.difference(child_product_ids)
+        )
+        if has_child_and_remainder_products and has_child_and_remainder_pick_products:
+            normalized["lines"] = self._subtract_lines(
+                current_lines,
+                child_pick_lines,
+            )
+            subtotal = sum(
+                (float(line.get("unitPrice") or 0) if isinstance(line, dict) else 0.0)
+                * self._parse_standard_quantity(line.get("quantity") if isinstance(line, dict) else 0)
+                for line in normalized["lines"]
+                if isinstance(line, dict)
+            )
+            normalized["subtotal"] = subtotal
+            normalized["total"] = subtotal
+        elif (
             len(child_pick_lines) > 1
             and not normalized_pick_lines
             and self._line_quantity_total(current_lines)
@@ -532,11 +558,7 @@ class OrderSplittingService:
             original_order,
             remainder_source,
         )
-        assigned_view = (
-            normalized_source
-            if normalized_source.get("lines") != remainder_source.get("lines")
-            else deepcopy(remainder_source)
-        )
+        assigned_view = deepcopy(normalized_source)
         source_lines = [
             line
             for line in assigned_view.get("lines", [])
