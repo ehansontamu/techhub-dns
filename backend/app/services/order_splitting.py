@@ -5,6 +5,7 @@ The active workflow splits a partial order into separate picked and remainder
 legs when the picklist is generated, then keeps those local legs in sync with
 later InFlow refreshes.
 """
+import json
 import logging
 import re
 import uuid
@@ -25,6 +26,13 @@ logger = logging.getLogger(__name__)
 
 class OrderSplittingService:
     """Service for splitting partial pick orders into picked and remainder legs."""
+
+    REMAINDER_CYCLE_STARTED_AT_KEY = "_techhub_remainder_cycle_started_at"
+    REMAINDER_CYCLE_PICK_BASELINE_KEY = "_techhub_remainder_cycle_pick_baseline"
+    REMAINDER_CYCLE_PENDING_RESET_KEY = "_techhub_remainder_cycle_pending_pick_reset"
+    REMAINDER_CYCLE_LAST_SUPPRESSED_PICK_FINGERPRINT_KEY = (
+        "_techhub_remainder_cycle_last_suppressed_pick_fingerprint"
+    )
 
     def __init__(self, db: Session):
         self.db = db
@@ -147,6 +155,21 @@ class OrderSplittingService:
             return parsed.replace(tzinfo=timezone.utc)
         return parsed.astimezone(timezone.utc)
 
+    def _normalize_line_quantities(
+        self,
+        lines: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        normalized_lines: List[Dict[str, Any]] = []
+        for line in lines:
+            if not isinstance(line, dict):
+                continue
+            copied_line = deepcopy(line)
+            quantity_data = dict(copied_line.get("quantity") or {})
+            quantity_data["standardQuantity"] = self._parse_standard_quantity(quantity_data)
+            copied_line["quantity"] = quantity_data
+            normalized_lines.append(copied_line)
+        return normalized_lines
+
     def _build_partial_leg_view(self, inflow_data: Dict[str, Any]) -> Dict[str, Any]:
         """Build a local snapshot for the picked leg of a partial order."""
         order_view = deepcopy(inflow_data or {})
@@ -239,6 +262,16 @@ class OrderSplittingService:
             if isinstance(line, dict)
         )
         remainder_view["total"] = remainder_view["subtotal"]
+        remainder_view[self.REMAINDER_CYCLE_PICK_BASELINE_KEY] = [
+            deepcopy(line)
+            for line in inflow_data.get("pickLines", [])
+            if isinstance(line, dict)
+        ]
+        remainder_view[self.REMAINDER_CYCLE_PENDING_RESET_KEY] = True
+        remainder_view[self.REMAINDER_CYCLE_LAST_SUPPRESSED_PICK_FINGERPRINT_KEY] = None
+        remainder_view[self.REMAINDER_CYCLE_STARTED_AT_KEY] = (
+            datetime.utcnow().replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z")
+        )
         return remainder_view
 
     def _get_partial_remainder_source(self, original_order: Order) -> Optional[Dict[str, Any]]:
@@ -309,9 +342,9 @@ class OrderSplittingService:
     def _split_fresh_and_stale_pick_lines(
         self,
         pick_lines: List[Dict[str, Any]],
-        latest_child_shipped_at: Optional[datetime],
+        cycle_started_at: Optional[datetime],
     ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
-        if latest_child_shipped_at is None:
+        if cycle_started_at is None:
             return [], list(pick_lines)
 
         fresh_lines: List[Dict[str, Any]] = []
@@ -321,12 +354,86 @@ class OrderSplittingService:
             if not isinstance(line, dict):
                 continue
             pick_at = self._parse_inflow_datetime(line.get("pickDate"))
-            if pick_at is not None and pick_at > latest_child_shipped_at:
+            if pick_at is not None and pick_at > cycle_started_at:
                 fresh_lines.append(deepcopy(line))
             else:
                 stale_lines.append(deepcopy(line))
 
         return fresh_lines, stale_lines
+
+    def _pick_lines_fully_covered_by_source(
+        self,
+        candidate_lines: List[Dict[str, Any]],
+        source_lines: List[Dict[str, Any]],
+    ) -> bool:
+        """Return True when every candidate line can be explained by the source line set."""
+        source_quantities: Dict[str, float] = {}
+        source_serials: Dict[str, List[str]] = {}
+
+        for line in source_lines:
+            if not isinstance(line, dict):
+                continue
+            product_id = line.get("productId")
+            if not product_id:
+                continue
+            product_key = str(product_id)
+            source_quantities[product_key] = source_quantities.get(product_key, 0.0) + self._parse_standard_quantity(
+                line.get("quantity")
+            )
+            serial_numbers = line.get("quantity", {}).get("serialNumbers", []) or []
+            if serial_numbers:
+                source_serials.setdefault(product_key, []).extend(
+                    str(serial_number)
+                    for serial_number in serial_numbers
+                    if serial_number is not None
+                )
+
+        for line in candidate_lines:
+            if not isinstance(line, dict):
+                continue
+            product_id = line.get("productId")
+            if not product_id:
+                continue
+
+            product_key = str(product_id)
+            quantity_data = dict(line.get("quantity") or {})
+            serial_numbers = [
+                str(serial_number)
+                for serial_number in (quantity_data.get("serialNumbers", []) or [])
+                if serial_number is not None
+            ]
+
+            if serial_numbers and source_serials.get(product_key):
+                remaining_source_serials = source_serials[product_key]
+                for serial_number in serial_numbers:
+                    if serial_number not in remaining_source_serials:
+                        return False
+                    remaining_source_serials.remove(serial_number)
+                source_quantities[product_key] = max(
+                    source_quantities.get(product_key, 0.0) - float(len(serial_numbers)),
+                    0.0,
+                )
+                continue
+
+            candidate_quantity = self._parse_standard_quantity(quantity_data)
+            if candidate_quantity > source_quantities.get(product_key, 0.0) + 0.0001:
+                return False
+            source_quantities[product_key] = max(
+                source_quantities.get(product_key, 0.0) - candidate_quantity,
+                0.0,
+            )
+
+        return True
+
+    @staticmethod
+    def _remainder_cycle_pick_fingerprint(snapshot: Dict[str, Any]) -> str:
+        payload = {
+            "timestamp": snapshot.get("timestamp"),
+            "pickLines": snapshot.get("pickLines", []),
+            "packLines": snapshot.get("packLines", []),
+            "shipLines": snapshot.get("shipLines", []),
+        }
+        return json.dumps(payload, sort_keys=True, default=str)
 
     def normalize_partial_remainder_snapshot(
         self,
@@ -363,6 +470,8 @@ class OrderSplittingService:
             for line in normalized.get("lines", [])
             if isinstance(line, dict)
         ]
+        current_lines = self._normalize_line_quantities(current_lines)
+        normalized["lines"] = deepcopy(current_lines)
         current_pick_product_ids = {
             str(line.get("productId"))
             for line in current_pick_lines
@@ -376,21 +485,80 @@ class OrderSplittingService:
         if not current_pick_product_ids.intersection(child_product_ids):
             return normalized
 
-        latest_child_shipped_at = self._latest_recursive_child_shipped_at(original_order)
+        original_snapshot = (
+            original_order.inflow_data if isinstance(original_order.inflow_data, dict) else {}
+        )
+        cycle_started_at_raw = normalized.get(self.REMAINDER_CYCLE_STARTED_AT_KEY)
+        if cycle_started_at_raw is None:
+            cycle_started_at_raw = original_snapshot.get(self.REMAINDER_CYCLE_STARTED_AT_KEY)
+        cycle_started_at = self._parse_inflow_datetime(cycle_started_at_raw)
+        if cycle_started_at is None:
+            cycle_started_at = self._latest_recursive_child_shipped_at(original_order)
         fresh_pick_lines, stale_pick_lines = self._split_fresh_and_stale_pick_lines(
             current_pick_lines,
-            latest_child_shipped_at,
+            cycle_started_at,
         )
         has_pick_timestamps = any(
             self._parse_inflow_datetime(line.get("pickDate")) is not None
             for line in current_pick_lines
             if isinstance(line, dict)
         )
-        if latest_child_shipped_at is not None and has_pick_timestamps:
+        if cycle_started_at is not None and has_pick_timestamps:
             normalized["pickLines"] = self._restrict_lines_to_source(
                 fresh_pick_lines,
                 current_lines,
             )
+            normalized[self.REMAINDER_CYCLE_PENDING_RESET_KEY] = False
+            normalized[self.REMAINDER_CYCLE_LAST_SUPPRESSED_PICK_FINGERPRINT_KEY] = None
+            return normalized
+
+        cycle_pick_baseline = normalized.get(self.REMAINDER_CYCLE_PICK_BASELINE_KEY)
+        if cycle_pick_baseline is None:
+            cycle_pick_baseline = original_snapshot.get(self.REMAINDER_CYCLE_PICK_BASELINE_KEY)
+        if isinstance(cycle_pick_baseline, list):
+            baseline_pick_lines = [
+                deepcopy(line)
+                for line in cycle_pick_baseline
+                if isinstance(line, dict)
+            ]
+        else:
+            baseline_pick_lines = []
+
+        if baseline_pick_lines:
+            pending_reset_raw = normalized.get(self.REMAINDER_CYCLE_PENDING_RESET_KEY)
+            if pending_reset_raw is None:
+                pending_reset_raw = original_snapshot.get(self.REMAINDER_CYCLE_PENDING_RESET_KEY)
+            pending_reset = bool(pending_reset_raw)
+            fingerprint = self._remainder_cycle_pick_fingerprint(normalized)
+            last_suppressed_fingerprint = normalized.get(
+                self.REMAINDER_CYCLE_LAST_SUPPRESSED_PICK_FINGERPRINT_KEY
+            )
+            if last_suppressed_fingerprint is None:
+                last_suppressed_fingerprint = original_snapshot.get(
+                    self.REMAINDER_CYCLE_LAST_SUPPRESSED_PICK_FINGERPRINT_KEY
+                )
+
+            if pending_reset and self._pick_lines_fully_covered_by_source(
+                current_pick_lines,
+                baseline_pick_lines,
+            ):
+                if (
+                    last_suppressed_fingerprint is None
+                    or last_suppressed_fingerprint == fingerprint
+                ):
+                    normalized["pickLines"] = []
+                    normalized[self.REMAINDER_CYCLE_PENDING_RESET_KEY] = True
+                    normalized[
+                        self.REMAINDER_CYCLE_LAST_SUPPRESSED_PICK_FINGERPRINT_KEY
+                    ] = fingerprint
+                    return normalized
+
+            normalized["pickLines"] = self._restrict_lines_to_source(
+                current_pick_lines,
+                current_lines,
+            )
+            normalized[self.REMAINDER_CYCLE_PENDING_RESET_KEY] = False
+            normalized[self.REMAINDER_CYCLE_LAST_SUPPRESSED_PICK_FINGERPRINT_KEY] = None
             return normalized
 
         def _quantity_by_product(lines: List[Dict[str, Any]]) -> Dict[str, float]:
