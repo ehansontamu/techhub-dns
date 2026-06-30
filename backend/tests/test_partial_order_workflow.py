@@ -2947,6 +2947,272 @@ def test_parent_remainder_sync_excludes_delivered_child_packlines_from_pick_stat
     engine.dispose()
 
 
+def test_parent_remainder_sync_keeps_new_picks_after_child_delivery():
+    """New remainder picks after a delivered partial should remain visible on the parent."""
+
+    session, engine = _make_sqlite_session()
+    parent_order = Order(
+        id="order-parent-new-picks-1",
+        inflow_order_id="TH0600",
+        inflow_sales_order_id="sales-order-0600",
+        recipient_name="User Eleven",
+        recipient_contact="user.eleven@example.com",
+        delivery_location="Building 600",
+        po_number="PO-0600",
+        status=OrderStatus.PICKED.value,
+        has_remainder="Y",
+        inflow_data={
+            "orderNumber": "TH0600",
+            "contactName": "User Eleven",
+            "email": "user.eleven@example.com",
+            "shippingAddress": {"address1": "600 Example St"},
+            "lines": [
+                {
+                    "productId": "prod-tagged",
+                    "product": {"name": "Tagged Device", "sku": "TAG-1"},
+                    "quantity": {"standardQuantity": "16"},
+                }
+            ],
+            "pickLines": [],
+            "packLines": [],
+            "shipLines": [],
+        },
+    )
+    delivered_child = Order(
+        id="order-child-new-picks-1",
+        inflow_order_id="TH0600-P",
+        inflow_sales_order_id="sales-order-0600",
+        recipient_name="User Eleven",
+        recipient_contact="user.eleven@example.com",
+        delivery_location="Building 600",
+        po_number="PO-0600",
+        status=OrderStatus.DELIVERED.value,
+        parent_order_id=parent_order.id,
+        inflow_data={
+            "orderNumber": "TH0600-P",
+            "lines": [],
+            "pickLines": [],
+            "packLines": [
+                {
+                    "containerNumber": "DELIVERY-TH0600-1",
+                    "productId": "prod-tagged",
+                    "quantity": {"standardQuantity": "5"},
+                    "salesOrderPackLineId": "pack-line-600-1",
+                }
+            ],
+            "shipLines": [
+                {
+                    "carrier": "TechHub",
+                    "containers": ["DELIVERY-TH0600-1"],
+                    "salesOrderShipLineId": "ship-line-600-1",
+                    "shippedDate": "2026-06-30T19:47:03Z",
+                }
+            ],
+        },
+    )
+    session.add(parent_order)
+    session.add(delivered_child)
+    session.commit()
+    parent_order.remainder_order_id = delivered_child.id
+    session.commit()
+
+    incoming_payload = {
+        "orderNumber": "TH0600",
+        "salesOrderId": "sales-order-0600",
+        "contactName": "User Eleven",
+        "email": "user.eleven@example.com",
+        "shippingAddress": {"address1": "600 Example St"},
+        "lines": [
+            {
+                "productId": "prod-tagged",
+                "product": {"name": "Tagged Device", "sku": "TAG-1"},
+                "quantity": {"standardQuantity": 16},
+            }
+        ],
+        "pickLines": [
+            {
+                "productId": "prod-tagged",
+                "product": {"name": "Tagged Device", "sku": "TAG-1"},
+                "quantity": {"standardQuantity": 6},
+                "pickDate": "2026-06-30T20:10:00Z",
+            }
+        ],
+        "packLines": [],
+        "shipLines": [],
+    }
+
+    updated = OrderService(session).create_order_from_inflow(incoming_payload)
+    session.refresh(updated)
+
+    assert updated.inflow_data["lines"] == [
+        {
+            "productId": "prod-tagged",
+            "product": {"name": "Tagged Device", "sku": "TAG-1"},
+            "quantity": {"standardQuantity": 16.0},
+        }
+    ]
+    assert updated.inflow_data["pickLines"] == [
+        {
+            "productId": "prod-tagged",
+            "product": {"name": "Tagged Device", "sku": "TAG-1"},
+            "quantity": {"standardQuantity": 6},
+            "pickDate": "2026-06-30T20:10:00Z",
+        }
+    ]
+
+    pick_status = InflowService().get_pick_status(updated.inflow_data)
+    assert pick_status["total_ordered"] == 16
+    assert pick_status["total_picked"] == 6
+
+    session.close()
+    engine.dispose()
+
+
+def test_parent_remainder_sync_keeps_new_picks_after_second_partial_delivery():
+    """Fresh picks after a second delivered partial should remain visible on the parent."""
+
+    session, engine = _make_sqlite_session()
+    parent_order = Order(
+        id="order-parent-new-picks-2",
+        inflow_order_id="TH0601",
+        inflow_sales_order_id="sales-order-0601",
+        recipient_name="User Twelve",
+        recipient_contact="user.twelve@example.com",
+        delivery_location="Building 601",
+        po_number="PO-0601",
+        status=OrderStatus.PICKED.value,
+        has_remainder="Y",
+        inflow_data={
+            "orderNumber": "TH0601",
+            "contactName": "User Twelve",
+            "email": "user.twelve@example.com",
+            "shippingAddress": {"address1": "601 Example St"},
+            "lines": [
+                {
+                    "productId": "prod-tagged",
+                    "product": {"name": "Tagged Device", "sku": "TAG-1"},
+                    "quantity": {"standardQuantity": "4"},
+                }
+            ],
+            "pickLines": [],
+            "packLines": [],
+            "shipLines": [],
+        },
+    )
+    first_child = Order(
+        id="order-child-new-picks-2a",
+        inflow_order_id="TH0601-P",
+        inflow_sales_order_id="sales-order-0601",
+        recipient_name="User Twelve",
+        recipient_contact="user.twelve@example.com",
+        delivery_location="Building 601",
+        po_number="PO-0601",
+        status=OrderStatus.DELIVERED.value,
+        parent_order_id=parent_order.id,
+        inflow_data={
+            "orderNumber": "TH0601-P",
+            "lines": [],
+            "pickLines": [],
+            "packLines": [
+                {
+                    "containerNumber": "DELIVERY-TH0601-1",
+                    "productId": "prod-tagged",
+                    "quantity": {"standardQuantity": "2"},
+                }
+            ],
+            "shipLines": [
+                {
+                    "carrier": "TechHub",
+                    "containers": ["DELIVERY-TH0601-1"],
+                    "salesOrderShipLineId": "ship-line-601-1",
+                    "shippedDate": "2026-06-30T19:47:03Z",
+                }
+            ],
+        },
+    )
+    second_child = Order(
+        id="order-child-new-picks-2b",
+        inflow_order_id="TH0601-P2",
+        inflow_sales_order_id="sales-order-0601",
+        recipient_name="User Twelve",
+        recipient_contact="user.twelve@example.com",
+        delivery_location="Building 601",
+        po_number="PO-0601",
+        status=OrderStatus.DELIVERED.value,
+        parent_order_id=parent_order.id,
+        inflow_data={
+            "orderNumber": "TH0601-P2",
+            "lines": [],
+            "pickLines": [],
+            "packLines": [
+                {
+                    "containerNumber": "DELIVERY-TH0601-2",
+                    "productId": "prod-tagged",
+                    "quantity": {"standardQuantity": "1"},
+                }
+            ],
+            "shipLines": [
+                {
+                    "carrier": "TechHub",
+                    "containers": ["DELIVERY-TH0601-2"],
+                    "salesOrderShipLineId": "ship-line-601-2",
+                    "shippedDate": "2026-06-30T20:15:00Z",
+                }
+            ],
+        },
+    )
+    session.add(parent_order)
+    session.add(first_child)
+    session.add(second_child)
+    session.commit()
+    parent_order.remainder_order_id = second_child.id
+    session.commit()
+
+    incoming_payload = {
+        "orderNumber": "TH0601",
+        "salesOrderId": "sales-order-0601",
+        "contactName": "User Twelve",
+        "email": "user.twelve@example.com",
+        "shippingAddress": {"address1": "601 Example St"},
+        "lines": [
+            {
+                "productId": "prod-tagged",
+                "product": {"name": "Tagged Device", "sku": "TAG-1"},
+                "quantity": {"standardQuantity": 4},
+            }
+        ],
+        "pickLines": [
+            {
+                "productId": "prod-tagged",
+                "product": {"name": "Tagged Device", "sku": "TAG-1"},
+                "quantity": {"standardQuantity": 2},
+                "pickDate": "2026-06-30T20:45:00Z",
+            }
+        ],
+        "packLines": [],
+        "shipLines": [],
+    }
+
+    updated = OrderService(session).create_order_from_inflow(incoming_payload)
+    session.refresh(updated)
+
+    assert updated.inflow_data["pickLines"] == [
+        {
+            "productId": "prod-tagged",
+            "product": {"name": "Tagged Device", "sku": "TAG-1"},
+            "quantity": {"standardQuantity": 2},
+            "pickDate": "2026-06-30T20:45:00Z",
+        }
+    ]
+
+    pick_status = InflowService().get_pick_status(updated.inflow_data)
+    assert pick_status["total_ordered"] == 4
+    assert pick_status["total_picked"] == 2
+
+    session.close()
+    engine.dispose()
+
+
 def test_parent_remainder_blocks_prep_actions_until_remaining_items_are_picked():
     """Remainder parent legs should not allow prep actions before their items are picked."""
 

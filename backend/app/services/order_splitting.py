@@ -9,7 +9,7 @@ import logging
 import re
 import uuid
 from copy import deepcopy
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any, Tuple, List, Literal
 
 from sqlalchemy.orm import Session
@@ -130,6 +130,22 @@ class OrderSplittingService:
             quantity_data["serialNumbers"] = list(serial_numbers)
         copied_line["quantity"] = quantity_data
         return copied_line
+
+    @staticmethod
+    def _parse_inflow_datetime(value: Any) -> Optional[datetime]:
+        if not value or not isinstance(value, str):
+            return None
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            normalized = text.replace("Z", "+00:00")
+            parsed = datetime.fromisoformat(normalized)
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
 
     def _build_partial_leg_view(self, inflow_data: Dict[str, Any]) -> Dict[str, Any]:
         """Build a local snapshot for the picked leg of a partial order."""
@@ -264,6 +280,32 @@ class OrderSplittingService:
                     child_pick_lines.append(deepcopy(line))
         return child_pick_lines
 
+    def _latest_recursive_child_shipped_at(self, original_order: Order) -> Optional[datetime]:
+        if not original_order.id:
+            return None
+
+        child_orders = (
+            self.db.query(Order)
+            .filter(Order.parent_order_id == original_order.id)
+            .all()
+        )
+
+        latest: Optional[datetime] = None
+        for child_order in child_orders:
+            inflow_data = child_order.inflow_data if isinstance(child_order.inflow_data, dict) else {}
+            ship_lines = inflow_data.get("shipLines") or []
+            if not isinstance(ship_lines, list):
+                continue
+            for line in ship_lines:
+                if not isinstance(line, dict):
+                    continue
+                shipped_at = self._parse_inflow_datetime(line.get("shippedDate"))
+                if shipped_at is None:
+                    continue
+                if latest is None or shipped_at > latest:
+                    latest = shipped_at
+        return latest
+
     def normalize_partial_remainder_snapshot(
         self,
         original_order: Order,
@@ -311,6 +353,25 @@ class OrderSplittingService:
         }
         if not current_pick_product_ids.intersection(child_product_ids):
             return normalized
+
+        latest_child_shipped_at = self._latest_recursive_child_shipped_at(original_order)
+        if latest_child_shipped_at is not None:
+            latest_current_pick_at = max(
+                (
+                    parsed
+                    for parsed in (
+                        self._parse_inflow_datetime(line.get("pickDate"))
+                        for line in current_pick_lines
+                    )
+                    if parsed is not None
+                ),
+                default=None,
+            )
+            # If the current remainder picks happened after the most recent child
+            # shipment, treat them as fresh remainder-cycle picks instead of
+            # subtracting older delivered child quantities a second time.
+            if latest_current_pick_at is not None and latest_current_pick_at > latest_child_shipped_at:
+                return normalized
 
         def _quantity_by_product(lines: List[Dict[str, Any]]) -> Dict[str, float]:
             totals: Dict[str, float] = {}
