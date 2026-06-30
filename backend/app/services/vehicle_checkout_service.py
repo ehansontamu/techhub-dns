@@ -328,6 +328,8 @@ class VehicleCheckoutService:
         self,
         vehicle: Optional[str] = None,
         checkout_type: Optional[str] = None,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None,
         page: int = 1,
         page_size: int = 25,
     ) -> dict:
@@ -353,6 +355,12 @@ class VehicleCheckoutService:
                     details={"provided": checkout_type},
                 )
             query = query.filter(VehicleCheckout.checkout_type == checkout_type_norm)
+
+        if start_date is not None:
+            query = query.filter(VehicleCheckout.checked_out_at >= start_date)
+
+        if end_date is not None:
+            query = query.filter(VehicleCheckout.checked_out_at < end_date)
 
         total = query.count()
         items = (
