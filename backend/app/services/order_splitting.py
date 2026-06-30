@@ -30,6 +30,14 @@ class OrderSplittingService:
         self.db = db
         self.inflow_service = InflowService()
 
+    @staticmethod
+    def is_active_remainder_parent(order: Optional[Order]) -> bool:
+        return bool(
+            order
+            and getattr(order, "remainder_order_id", None)
+            and not getattr(order, "parent_order_id", None)
+        )
+
     def get_remainder_items(self, inflow_data: Dict[str, Any]) -> Tuple[list, list]:
         """
         Calculate remaining items that were not picked.
@@ -221,7 +229,7 @@ class OrderSplittingService:
         """Build the current inflow snapshot for the parent remainder leg."""
         if not original_order.inflow_data:
             return None
-        if original_order.parent_order_id or not original_order.remainder_order_id:
+        if not self.is_active_remainder_parent(original_order):
             return None
 
         return deepcopy(original_order.inflow_data)
@@ -265,7 +273,7 @@ class OrderSplittingService:
         normalized = deepcopy(inflow_data or {})
         if not normalized:
             return normalized
-        if original_order.parent_order_id or not original_order.remainder_order_id:
+        if not self.is_active_remainder_parent(original_order):
             return normalized
 
         child_pick_lines = self._get_recursive_child_pick_lines(original_order)

@@ -874,19 +874,8 @@ def test_create_order_from_inflow_refreshes_pick_lines_for_split_orders():
             "unitPrice": 15,
         }
     ]
-    assert updated.inflow_data["packLines"] == [
-        {
-            "productId": "prod-b",
-            "quantity": {"standardQuantity": "2"},
-            "containerNumber": "DELIVERY-TH3007-1",
-        }
-    ]
-    assert updated.inflow_data["shipLines"] == [
-        {
-            "carrier": "TechHub",
-            "containers": ["DELIVERY-TH3007-1"],
-        }
-    ]
+    assert updated.inflow_data["packLines"] == []
+    assert updated.inflow_data["shipLines"] == []
 
     session.close()
     engine.dispose()
@@ -2657,6 +2646,170 @@ def test_parent_remainder_snapshot_rebuilds_lines_after_full_order_sync():
     assert pick_status_source is not None
     assert pick_status_source["lines"] == normalized["lines"]
     assert pick_status_source["pickLines"] == normalized["pickLines"]
+
+    session.close()
+    engine.dispose()
+
+
+def test_parent_remainder_sync_keeps_child_shipments_out_of_parent_progress():
+    """A shipped partial leg should not change the parent remainder's own 0/x progress."""
+
+    session, engine = _make_sqlite_session()
+    parent_order = Order(
+        id="order-parent-8c",
+        inflow_order_id="TH3067",
+        inflow_sales_order_id="sales-order-3067",
+        recipient_name="User Nine",
+        recipient_contact="user.nine@example.com",
+        delivery_location="Building 3067",
+        po_number="PO-3067",
+        status=OrderStatus.PICKED.value,
+        has_remainder="Y",
+        inflow_data={
+            "orderNumber": "TH3067",
+            "contactName": "User Nine",
+            "email": "user.nine@example.com",
+            "shippingAddress": {"address1": "3067 Example St"},
+            "lines": [
+                {
+                    "productId": "prod-monitor",
+                    "product": {"name": "Monitor", "sku": "MON-1"},
+                    "quantity": {"standardQuantity": "5"},
+                }
+            ],
+            "pickLines": [],
+            "packLines": [],
+            "shipLines": [],
+        },
+    )
+    first_child = Order(
+        id="order-child-8c-1",
+        inflow_order_id="TH3067-P",
+        inflow_sales_order_id="sales-order-3067",
+        recipient_name="User Nine",
+        recipient_contact="user.nine@example.com",
+        delivery_location="Building 3067",
+        po_number="PO-3067",
+        status=OrderStatus.DELIVERED.value,
+        parent_order_id=parent_order.id,
+        inflow_data={
+            "orderNumber": "TH3067-P",
+            "lines": [
+                {
+                    "productId": "prod-monitor",
+                    "product": {"name": "Monitor", "sku": "MON-1"},
+                    "quantity": {"standardQuantity": "29"},
+                }
+            ],
+            "pickLines": [
+                {
+                    "productId": "prod-monitor",
+                    "product": {"name": "Monitor", "sku": "MON-1"},
+                    "quantity": {"standardQuantity": "29"},
+                }
+            ],
+            "packLines": [
+                {
+                    "productId": "prod-monitor",
+                    "quantity": {"standardQuantity": "29"},
+                }
+            ],
+            "shipLines": [{"carrier": "TechHub", "containers": ["DELIVERY-TH3067-1"]}],
+        },
+    )
+    second_child = Order(
+        id="order-child-8c-2",
+        inflow_order_id="TH3067-P2",
+        inflow_sales_order_id="sales-order-3067",
+        recipient_name="User Nine",
+        recipient_contact="user.nine@example.com",
+        delivery_location="Building 3067",
+        po_number="PO-3067",
+        status=OrderStatus.DELIVERED.value,
+        parent_order_id=parent_order.id,
+        inflow_data={
+            "orderNumber": "TH3067-P2",
+            "lines": [
+                {
+                    "productId": "prod-monitor",
+                    "product": {"name": "Monitor", "sku": "MON-1"},
+                    "quantity": {"standardQuantity": "33"},
+                }
+            ],
+            "pickLines": [
+                {
+                    "productId": "prod-monitor",
+                    "product": {"name": "Monitor", "sku": "MON-1"},
+                    "quantity": {"standardQuantity": "33"},
+                }
+            ],
+            "packLines": [
+                {
+                    "productId": "prod-monitor",
+                    "quantity": {"standardQuantity": "33"},
+                }
+            ],
+            "shipLines": [{"carrier": "TechHub", "containers": ["DELIVERY-TH3067-2"]}],
+        },
+    )
+    session.add(parent_order)
+    session.add(first_child)
+    session.add(second_child)
+    session.commit()
+    parent_order.remainder_order_id = second_child.id
+    session.commit()
+
+    incoming_payload = {
+        "orderNumber": "TH3067",
+        "salesOrderId": "sales-order-3067",
+        "contactName": "User Nine",
+        "email": "user.nine@example.com",
+        "shippingAddress": {"address1": "Updated 3067 Example St"},
+        "poNumber": "PO-3067",
+        "lines": [
+            {
+                "productId": "prod-monitor",
+                "product": {"name": "Monitor", "sku": "MON-1"},
+                "quantity": {"standardQuantity": "67"},
+            }
+        ],
+        "pickLines": [
+            {
+                "productId": "prod-monitor",
+                "product": {"name": "Monitor", "sku": "MON-1"},
+                "quantity": {"standardQuantity": "62"},
+            }
+        ],
+        "packLines": [
+            {
+                "productId": "prod-monitor",
+                "quantity": {"standardQuantity": "62"},
+                "containerNumber": "DELIVERY-TH3067-2",
+            }
+        ],
+        "shipLines": [
+            {"carrier": "TechHub", "containers": ["DELIVERY-TH3067-1"]},
+            {"carrier": "TechHub", "containers": ["DELIVERY-TH3067-2"]},
+        ],
+    }
+
+    updated = OrderService(session).create_order_from_inflow(incoming_payload)
+    session.refresh(updated)
+
+    assert updated.inflow_data["lines"] == [
+        {
+            "productId": "prod-monitor",
+            "product": {"name": "Monitor", "sku": "MON-1"},
+            "quantity": {"standardQuantity": 5.0},
+        }
+    ]
+    assert updated.inflow_data["pickLines"] == []
+    assert updated.inflow_data["packLines"] == []
+    assert updated.inflow_data["shipLines"] == []
+
+    pick_status = InflowService().get_pick_status(updated.inflow_data)
+    assert pick_status["total_ordered"] == 5
+    assert pick_status["total_picked"] == 0
 
     session.close()
     engine.dispose()
