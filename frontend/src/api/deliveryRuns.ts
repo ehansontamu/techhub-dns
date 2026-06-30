@@ -24,6 +24,7 @@ export interface DeliveryRunResponse {
   start_time: string | null;
   end_time?: string | null;
   updated_at?: string | null;
+  order_ids?: string[];
 }
 
 export interface OrderSummary {
@@ -101,13 +102,24 @@ export const deliveryRunsApi = {
     return response.data;
   },
 
-  getRuns: async (query?: { status?: string[]; vehicle?: "van" | "golf_cart" | "pickup" }): Promise<DeliveryRunResponse[]> => {
+  getRuns: async (query?: {
+    status?: string[];
+    vehicle?: "van" | "golf_cart" | "pickup";
+    start_date?: string;
+    end_date?: string;
+  }): Promise<DeliveryRunResponse[]> => {
     const params = new URLSearchParams();
     if (query?.status) {
       query.status.forEach((s) => params.append("status", s));
     }
     if (query?.vehicle) {
       params.append("vehicle", query.vehicle);
+    }
+    if (query?.start_date) {
+      params.append("start_date", query.start_date);
+    }
+    if (query?.end_date) {
+      params.append("end_date", query.end_date);
     }
 
     const response = await apiClient.get<DeliveryRunResponse[]>("/delivery-runs", { params });
