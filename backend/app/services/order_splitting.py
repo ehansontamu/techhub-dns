@@ -235,7 +235,7 @@ class OrderSplittingService:
         return deepcopy(original_order.inflow_data)
 
     def _get_recursive_child_pick_lines(self, original_order: Order) -> List[Dict[str, Any]]:
-        """Return the pick lines already consumed by earlier recursive child legs."""
+        """Return quantities already consumed by earlier recursive child legs."""
         if not original_order.id:
             return []
 
@@ -249,8 +249,17 @@ class OrderSplittingService:
         child_pick_lines: List[Dict[str, Any]] = []
         for child_order in child_orders:
             inflow_data = child_order.inflow_data if isinstance(child_order.inflow_data, dict) else {}
-            pick_lines = inflow_data.get("pickLines") or inflow_data.get("lines") or []
-            for line in pick_lines:
+            # Delivered child legs often clear their lines/pickLines and keep only
+            # fulfillment metadata in packLines. Use the most authoritative line
+            # set available so the parent remainder never reclaims already
+            # delivered quantity or serials.
+            consumed_lines = (
+                inflow_data.get("packLines")
+                or inflow_data.get("pickLines")
+                or inflow_data.get("lines")
+                or []
+            )
+            for line in consumed_lines:
                 if isinstance(line, dict):
                     child_pick_lines.append(deepcopy(line))
         return child_pick_lines

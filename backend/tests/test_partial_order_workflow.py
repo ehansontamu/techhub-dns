@@ -2833,6 +2833,120 @@ def test_parent_remainder_sync_keeps_child_shipments_out_of_parent_progress():
     engine.dispose()
 
 
+def test_parent_remainder_sync_excludes_delivered_child_packlines_from_pick_status():
+    """Delivered child-leg quantities should stay off the parent remainder progress."""
+
+    session, engine = _make_sqlite_session()
+    parent_order = Order(
+        id="order-parent-delivered-packlines",
+        inflow_order_id="TH0159",
+        inflow_sales_order_id="sales-order-0159",
+        recipient_name="User Ten",
+        recipient_contact="user.ten@example.com",
+        delivery_location="Building 159",
+        po_number="PO-0159",
+        status=OrderStatus.PICKED.value,
+        has_remainder="Y",
+        inflow_data={
+            "orderNumber": "TH0159",
+            "contactName": "User Ten",
+            "email": "user.ten@example.com",
+            "shippingAddress": {"address1": "159 Example St"},
+            "lines": [
+                {
+                    "productId": "prod-tagged",
+                    "product": {"name": "Custom Accessory", "sku": "ACC-1"},
+                    "quantity": {"standardQuantity": "20"},
+                }
+            ],
+            "pickLines": [],
+            "packLines": [],
+            "shipLines": [],
+        },
+    )
+    delivered_child = Order(
+        id="order-child-delivered-packlines",
+        inflow_order_id="TH0159-P",
+        inflow_sales_order_id="sales-order-0159",
+        recipient_name="User Ten",
+        recipient_contact="user.ten@example.com",
+        delivery_location="Building 159",
+        po_number="PO-0159",
+        status=OrderStatus.DELIVERED.value,
+        parent_order_id=parent_order.id,
+        inflow_data={
+            "orderNumber": "TH0159",
+            "lines": [],
+            "pickLines": [],
+            "packLines": [
+                {
+                    "containerNumber": "DELIVERY-TH0159-1",
+                    "productId": "prod-tagged",
+                    "quantity": {"standardQuantity": "5"},
+                    "salesOrderPackLineId": "pack-line-1",
+                }
+            ],
+            "shipLines": [
+                {
+                    "carrier": "TechHub",
+                    "containers": ["DELIVERY-TH0159-1"],
+                    "salesOrderShipLineId": "ship-line-1",
+                }
+            ],
+        },
+    )
+    session.add(parent_order)
+    session.add(delivered_child)
+    session.commit()
+    parent_order.remainder_order_id = delivered_child.id
+    session.commit()
+
+    incoming_payload = {
+        "orderNumber": "TH0159",
+        "salesOrderId": "sales-order-0159",
+        "contactName": "User Ten",
+        "email": "user.ten@example.com",
+        "shippingAddress": {"address1": "159 Example St"},
+        "lines": [
+            {
+                "productId": "prod-tagged",
+                "product": {"name": "Custom Accessory", "sku": "ACC-1"},
+                "quantity": {"standardQuantity": 20},
+            }
+        ],
+        "pickLines": [
+            {
+                "productId": "prod-tagged",
+                "product": {"name": "Custom Accessory", "sku": "ACC-1"},
+                "quantity": {"standardQuantity": 5},
+            }
+        ],
+        "packLines": [],
+        "shipLines": [],
+    }
+
+    updated = OrderService(session).create_order_from_inflow(incoming_payload)
+    session.refresh(updated)
+
+    assert updated.inflow_data["lines"] == [
+        {
+            "productId": "prod-tagged",
+            "product": {"name": "Custom Accessory", "sku": "ACC-1"},
+            "quantity": {"standardQuantity": 20.0},
+        }
+    ]
+    assert updated.inflow_data["pickLines"] == []
+    assert updated.inflow_data["packLines"] == []
+    assert updated.inflow_data["shipLines"] == []
+
+    pick_status = InflowService().get_pick_status(updated.inflow_data)
+    assert pick_status["total_ordered"] == 20
+    assert pick_status["total_picked"] == 0
+
+    session.close()
+    engine.dispose()
+
+
 def test_parent_remainder_blocks_prep_actions_until_remaining_items_are_picked():
     """Remainder parent legs should not allow prep actions before their items are picked."""
 
