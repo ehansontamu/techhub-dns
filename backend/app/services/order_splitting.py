@@ -381,6 +381,17 @@ class OrderSplittingService:
             current_pick_lines,
             latest_child_shipped_at,
         )
+        has_pick_timestamps = any(
+            self._parse_inflow_datetime(line.get("pickDate")) is not None
+            for line in current_pick_lines
+            if isinstance(line, dict)
+        )
+        if latest_child_shipped_at is not None and has_pick_timestamps:
+            normalized["pickLines"] = self._restrict_lines_to_source(
+                fresh_pick_lines,
+                current_lines,
+            )
+            return normalized
 
         def _quantity_by_product(lines: List[Dict[str, Any]]) -> Dict[str, float]:
             totals: Dict[str, float] = {}
@@ -414,21 +425,18 @@ class OrderSplittingService:
             > current_line_quantities.get(product_id, 0.0) + 0.0001
             for product_id in current_pick_product_ids.intersection(child_product_ids)
         )
-        subtract_stale_pick_lines = (
+        subtract_source_lines = (
             stale_pick_lines
-            if fresh_pick_lines
+            if stale_pick_lines
             else (
-                stale_pick_lines
+                current_pick_lines
                 if has_child_and_remainder_pick_products or has_cumulative_same_product_picks
                 else current_pick_lines
             )
         )
-        normalized_pick_lines = list(fresh_pick_lines)
-        normalized_pick_lines.extend(
-            self._subtract_lines(
-                subtract_stale_pick_lines,
-                child_pick_lines,
-            )
+        normalized_pick_lines = self._subtract_lines(
+            subtract_source_lines,
+            child_pick_lines,
         )
         normalized["pickLines"] = normalized_pick_lines
 
