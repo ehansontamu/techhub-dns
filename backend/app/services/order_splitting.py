@@ -498,19 +498,15 @@ class OrderSplittingService:
             current_pick_lines,
             cycle_started_at,
         )
-        has_pick_timestamps = any(
-            self._parse_inflow_datetime(line.get("pickDate")) is not None
+        pick_line_timestamps = [
+            self._parse_inflow_datetime(line.get("pickDate"))
             for line in current_pick_lines
             if isinstance(line, dict)
+        ]
+        has_pick_timestamps = any(timestamp is not None for timestamp in pick_line_timestamps)
+        all_pick_lines_have_timestamps = bool(pick_line_timestamps) and all(
+            timestamp is not None for timestamp in pick_line_timestamps
         )
-        if cycle_started_at is not None and has_pick_timestamps:
-            normalized["pickLines"] = self._restrict_lines_to_source(
-                fresh_pick_lines,
-                current_lines,
-            )
-            normalized[self.REMAINDER_CYCLE_PENDING_RESET_KEY] = False
-            normalized[self.REMAINDER_CYCLE_LAST_SUPPRESSED_PICK_FINGERPRINT_KEY] = None
-            return normalized
 
         cycle_pick_baseline = normalized.get(self.REMAINDER_CYCLE_PICK_BASELINE_KEY)
         if cycle_pick_baseline is None:
@@ -523,6 +519,24 @@ class OrderSplittingService:
             ]
         else:
             baseline_pick_lines = []
+
+        if cycle_started_at is not None and all_pick_lines_have_timestamps:
+            normalized["pickLines"] = self._restrict_lines_to_source(
+                fresh_pick_lines,
+                current_lines,
+            )
+            normalized[self.REMAINDER_CYCLE_PENDING_RESET_KEY] = False
+            normalized[self.REMAINDER_CYCLE_LAST_SUPPRESSED_PICK_FINGERPRINT_KEY] = None
+            return normalized
+
+        if cycle_started_at is not None and has_pick_timestamps and baseline_pick_lines:
+            normalized["pickLines"] = self._restrict_lines_to_source(
+                self._subtract_lines(current_pick_lines, baseline_pick_lines),
+                current_lines,
+            )
+            normalized[self.REMAINDER_CYCLE_PENDING_RESET_KEY] = False
+            normalized[self.REMAINDER_CYCLE_LAST_SUPPRESSED_PICK_FINGERPRINT_KEY] = None
+            return normalized
 
         if baseline_pick_lines:
             pending_reset_raw = normalized.get(self.REMAINDER_CYCLE_PENDING_RESET_KEY)
