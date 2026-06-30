@@ -2811,6 +2811,24 @@ def test_parent_remainder_sync_keeps_child_shipments_out_of_parent_progress():
     assert pick_status["total_ordered"] == 5
     assert pick_status["total_picked"] == 0
 
+    second_sync = OrderService(session).create_order_from_inflow(incoming_payload)
+    session.refresh(second_sync)
+
+    assert second_sync.inflow_data["lines"] == [
+        {
+            "productId": "prod-monitor",
+            "product": {"name": "Monitor", "sku": "MON-1"},
+            "quantity": {"standardQuantity": 5.0},
+        }
+    ]
+    assert second_sync.inflow_data["pickLines"] == []
+    assert second_sync.inflow_data["packLines"] == []
+    assert second_sync.inflow_data["shipLines"] == []
+
+    second_pick_status = InflowService().get_pick_status(second_sync.inflow_data)
+    assert second_pick_status["total_ordered"] == 5
+    assert second_pick_status["total_picked"] == 0
+
     session.close()
     engine.dispose()
 

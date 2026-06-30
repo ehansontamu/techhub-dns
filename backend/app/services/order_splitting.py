@@ -335,13 +335,12 @@ class OrderSplittingService:
             > current_line_quantities.get(product_id, 0.0) + 0.0001
             for product_id in current_pick_product_ids.intersection(child_product_ids)
         )
-        normalized_pick_lines = (
-            self._subtract_lines(
-                current_pick_lines,
-                child_pick_lines,
-            )
-            if has_child_and_remainder_pick_products or has_cumulative_same_product_picks
-            else current_pick_lines
+        # Remainder parents should never count quantities already consumed by
+        # earlier child legs, even when the current remainder uses the same
+        # product IDs as those earlier partials.
+        normalized_pick_lines = self._subtract_lines(
+            current_pick_lines,
+            child_pick_lines,
         )
         normalized["pickLines"] = normalized_pick_lines
 
