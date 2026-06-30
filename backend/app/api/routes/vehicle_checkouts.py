@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from flask import Blueprint, jsonify, request
+from datetime import datetime, timedelta
+from flask import Blueprint, jsonify, request, abort
 from pydantic import ValidationError as PydanticValidationError
 
 from app.api.vehicle_status_events import broadcast_vehicle_status_update_sync
@@ -74,15 +75,34 @@ def get_active_checkouts():
 @vehicle_checkouts_bp.route("", methods=["GET"])
 @require_auth
 def list_vehicle_checkouts():
-    """List vehicle checkout history (paged)."""
+    """List vehicle checkout history (paged), with optional date range filter."""
     vehicle = request.args.get("vehicle")
     checkout_type = request.args.get("checkout_type")
     page = request.args.get("page", type=int) or 1
     page_size = request.args.get("page_size", type=int) or 25
+    start_date_str = request.args.get("start_date")
+    end_date_str = request.args.get("end_date")
+
+    start_date = None
+    end_date = None
+    try:
+        if start_date_str:
+            start_date = datetime.strptime(start_date_str, "%Y-%m-%d")
+        if end_date_str:
+            end_date = datetime.strptime(end_date_str, "%Y-%m-%d") + timedelta(days=1)
+    except ValueError:
+        abort(400, description="Invalid date format — expected YYYY-MM-DD")
 
     with get_db() as db:
         service = VehicleCheckoutService(db)
-        result = service.list_checkouts(vehicle=vehicle, checkout_type=checkout_type, page=page, page_size=page_size)
+        result = service.list_checkouts(
+            vehicle=vehicle,
+            checkout_type=checkout_type,
+            start_date=start_date,
+            end_date=end_date,
+            page=page,
+            page_size=page_size,
+        )
         return jsonify(result)
 
 

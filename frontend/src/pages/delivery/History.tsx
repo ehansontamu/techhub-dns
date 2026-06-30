@@ -1,14 +1,14 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { queryOptions, useQuery } from "@tanstack/react-query";
 import { Clock, ExternalLink } from "lucide-react";
 
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { getDeliveryRunHistoryQueryOptions } from "../../queries/deliveryRuns";
+import { vehicleCheckoutsApi } from "../../api/vehicleCheckouts";
 import { formatToCentralTime } from "../../utils/timezone";
-import type { DeliveryRunResponse } from "../../api/deliveryRuns";
 
 // ── Date helpers ──────────────────────────────────────────────────────────────
 
@@ -19,34 +19,11 @@ function toDateInputValue(date: Date): string {
   return `${y}-${m}-${d}`;
 }
 
-function todayLocal(): Date {
-  return new Date();
-}
-
-function daysAgo(n: number): Date {
-  const d = new Date();
-  d.setDate(d.getDate() - n);
-  return d;
-}
-
-function startOfMonth(): Date {
-  const d = new Date();
-  d.setDate(1);
-  return d;
-}
-
-function startOfLastMonth(): Date {
-  const d = new Date();
-  d.setDate(1);
-  d.setMonth(d.getMonth() - 1);
-  return d;
-}
-
-function endOfLastMonth(): Date {
-  const d = new Date();
-  d.setDate(0); // last day of previous month
-  return d;
-}
+function todayLocal() { return new Date(); }
+function daysAgo(n: number) { const d = new Date(); d.setDate(d.getDate() - n); return d; }
+function startOfMonth() { const d = new Date(); d.setDate(1); return d; }
+function startOfLastMonth() { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - 1); return d; }
+function endOfLastMonth() { const d = new Date(); d.setDate(0); return d; }
 
 const PRESETS = [
   { label: "Today", start: () => todayLocal(), end: () => todayLocal() },
@@ -56,15 +33,24 @@ const PRESETS = [
   { label: "Last month", start: () => startOfLastMonth(), end: () => endOfLastMonth() },
 ] as const;
 
-const STATUS_OPTIONS = [
-  { value: "Completed", label: "Completed" },
-  { value: "Cancelled", label: "Cancelled" },
-  { value: "Active", label: "Active" },
-] as const;
+// ── Unified row type ──────────────────────────────────────────────────────────
+
+type HistoryRow = {
+  id: string;
+  kind: "run" | "checkout";
+  typeLabel: string;
+  runner: string;
+  vehicle: string;
+  status: string;
+  start_time: string | null;
+  end_time: string | null;
+  orderCount: number | null;
+  runId: string | null;
+};
 
 // ── Formatting helpers ────────────────────────────────────────────────────────
 
-function formatVehicle(vehicle: string): string {
+function formatVehicle(vehicle: string) {
   return vehicle.split("_").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
 }
 
@@ -88,6 +74,36 @@ function getStatusVariant(status: string): "success" | "secondary" | "destructiv
   }
 }
 
+function getTypeVariant(typeLabel: string): "default" | "secondary" | "outline" {
+  if (typeLabel === "Delivery" || typeLabel === "Pickup") return "secondary";
+  if (typeLabel === "Tech Duty") return "outline";
+  return "outline";
+}
+
+// ── Query for "other" checkouts (Tech Duty, Administrative, etc.) ─────────────
+
+function getCheckoutHistoryQueryOptions(params: { start_date?: string; end_date?: string }) {
+  return queryOptions({
+    queryKey: ["vehicle-checkouts", "history", params],
+    queryFn: () =>
+      vehicleCheckoutsApi.listCheckouts({
+        checkout_type: "other",
+        start_date: params.start_date,
+        end_date: params.end_date,
+        page_size: 200,
+      }),
+    staleTime: 60_000,
+  });
+}
+
+// ── Status options shown in the filter ───────────────────────────────────────
+
+const STATUS_OPTIONS = [
+  { value: "Completed", label: "Completed" },
+  { value: "Active", label: "Active" },
+  { value: "Cancelled", label: "Cancelled" },
+] as const;
+
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export default function DeliveryHistory() {
@@ -97,17 +113,82 @@ export default function DeliveryHistory() {
   const [startDate, setStartDate] = useState(defaultStart);
   const [endDate, setEndDate] = useState(defaultEnd);
   const [activePreset, setActivePreset] = useState<string>("Last 30 days");
-  const [selectedStatuses, setSelectedStatuses] = useState<string[]>(["Completed", "Cancelled"]);
+  const [selectedStatuses, setSelectedStatuses] = useState<string[]>(["Completed", "Active", "Cancelled"]);
 
-  // The query params we actually fetch with — only update when "Apply" is clicked or preset fires
   const [fetchParams, setFetchParams] = useState({
-    status: ["Completed", "Cancelled"],
     start_date: defaultStart,
     end_date: defaultEnd,
   });
 
-  const { data: runs, isLoading, isError, refetch } = useQuery(
-    getDeliveryRunHistoryQueryOptions(fetchParams)
+  const runsQuery = useQuery(
+    getDeliveryRunHistoryQueryOptions({
+      status: [],  // fetch all statuses; we filter client-side for unified filtering
+      start_date: fetchParams.start_date,
+      end_date: fetchParams.end_date,
+    })
+  );
+
+  const checkoutsQuery = useQuery(
+    getCheckoutHistoryQueryOptions({
+      start_date: fetchParams.start_date,
+      end_date: fetchParams.end_date,
+    })
+  );
+
+  const isLoading = runsQuery.isLoading || checkoutsQuery.isLoading;
+  const isError = runsQuery.isError || checkoutsQuery.isError;
+
+  // Merge delivery runs + "other" checkouts into one sorted list
+  const allRows = useMemo((): HistoryRow[] => {
+    const rows: HistoryRow[] = [];
+
+    for (const run of runsQuery.data ?? []) {
+      const typeLabel = run.vehicle === "pickup" ? "Pickup" : "Delivery";
+      rows.push({
+        id: run.id,
+        kind: "run",
+        typeLabel,
+        runner: run.runner,
+        vehicle: run.vehicle,
+        status: run.status,
+        start_time: run.start_time ?? null,
+        end_time: run.end_time ?? null,
+        orderCount: run.order_ids != null ? run.order_ids.length : null,
+        runId: run.id,
+      });
+    }
+
+    for (const checkout of checkoutsQuery.data?.items ?? []) {
+      const typeLabel = checkout.purpose?.trim() || "Other";
+      const status = checkout.checked_in_at ? "Completed" : "Active";
+      rows.push({
+        id: checkout.id,
+        kind: "checkout",
+        typeLabel,
+        runner: checkout.checked_out_by,
+        vehicle: checkout.vehicle,
+        status,
+        start_time: checkout.checked_out_at,
+        end_time: checkout.checked_in_at,
+        orderCount: null,
+        runId: null,
+      });
+    }
+
+    // Sort by start_time descending, nulls last
+    rows.sort((a, b) => {
+      const aTime = a.start_time ? new Date(a.start_time).getTime() : 0;
+      const bTime = b.start_time ? new Date(b.start_time).getTime() : 0;
+      return bTime - aTime;
+    });
+
+    return rows;
+  }, [runsQuery.data, checkoutsQuery.data]);
+
+  // Apply status filter
+  const filteredRows = useMemo(
+    () => allRows.filter((row) => selectedStatuses.includes(row.status)),
+    [allRows, selectedStatuses]
   );
 
   function applyPreset(preset: typeof PRESETS[number]) {
@@ -116,12 +197,12 @@ export default function DeliveryHistory() {
     setStartDate(s);
     setEndDate(e);
     setActivePreset(preset.label);
-    setFetchParams({ status: selectedStatuses, start_date: s, end_date: e });
+    setFetchParams({ start_date: s, end_date: e });
   }
 
   function handleApply() {
     setActivePreset("");
-    setFetchParams({ status: selectedStatuses, start_date: startDate, end_date: endDate });
+    setFetchParams({ start_date: startDate, end_date: endDate });
   }
 
   function toggleStatus(value: string) {
@@ -130,13 +211,15 @@ export default function DeliveryHistory() {
     );
   }
 
-  const displayRuns: DeliveryRunResponse[] = runs ?? [];
+  function handleRefresh() {
+    void runsQuery.refetch();
+    void checkoutsQuery.refetch();
+  }
 
   return (
     <div className="space-y-5">
       {/* ── Filters ── */}
       <div className="rounded-2xl border border-border/70 bg-card/80 p-4 shadow-none space-y-4">
-        {/* Presets */}
         <div className="flex flex-wrap gap-2">
           {PRESETS.map((preset) => (
             <Button
@@ -150,7 +233,6 @@ export default function DeliveryHistory() {
           ))}
         </div>
 
-        {/* Custom date range */}
         <div className="flex flex-wrap items-end gap-3">
           <div className="space-y-1">
             <label className="text-xs text-muted-foreground font-medium">From</label>
@@ -158,10 +240,7 @@ export default function DeliveryHistory() {
               type="date"
               value={startDate}
               max={endDate}
-              onChange={(e) => {
-                setStartDate(e.target.value);
-                setActivePreset("");
-              }}
+              onChange={(e) => { setStartDate(e.target.value); setActivePreset(""); }}
               className="h-9 w-40 text-sm"
             />
           </div>
@@ -172,15 +251,11 @@ export default function DeliveryHistory() {
               value={endDate}
               min={startDate}
               max={toDateInputValue(todayLocal())}
-              onChange={(e) => {
-                setEndDate(e.target.value);
-                setActivePreset("");
-              }}
+              onChange={(e) => { setEndDate(e.target.value); setActivePreset(""); }}
               className="h-9 w-40 text-sm"
             />
           </div>
 
-          {/* Status filter */}
           <div className="space-y-1">
             <label className="text-xs text-muted-foreground font-medium">Status</label>
             <div className="flex gap-1.5">
@@ -201,7 +276,7 @@ export default function DeliveryHistory() {
             </div>
           </div>
 
-          <Button size="sm" className="h-9" onClick={handleApply} disabled={selectedStatuses.length === 0}>
+          <Button size="sm" className="h-9" onClick={handleApply}>
             Apply
           </Button>
         </div>
@@ -211,30 +286,30 @@ export default function DeliveryHistory() {
       <div className="rounded-2xl border border-border/70 bg-card/80 shadow-none overflow-hidden">
         <div className="flex items-center justify-between px-5 py-4 border-b border-border/70">
           <div>
-            <h2 className="text-sm font-semibold">Run History</h2>
+            <h2 className="text-sm font-semibold">Vehicle Activity History</h2>
             <p className="text-xs text-muted-foreground mt-0.5">
               {isLoading
                 ? "Loading..."
-                : `${displayRuns.length} run${displayRuns.length !== 1 ? "s" : ""} found`}
+                : `${filteredRows.length} record${filteredRows.length !== 1 ? "s" : ""} — delivery runs, tech duty, and administrative checkouts`}
             </p>
           </div>
-          <Button variant="outline" size="sm" onClick={() => void refetch()} disabled={isLoading}>
+          <Button variant="outline" size="sm" onClick={handleRefresh} disabled={isLoading}>
             Refresh
           </Button>
         </div>
 
         {isError ? (
           <div className="px-5 py-10 text-center text-sm text-destructive">
-            Failed to load run history. Check your date range and try again.
+            Failed to load history. Check your date range and try again.
           </div>
         ) : isLoading ? (
           <div className="px-5 py-10 text-center text-sm text-muted-foreground">
-            Loading run history...
+            Loading history...
           </div>
-        ) : displayRuns.length === 0 ? (
+        ) : filteredRows.length === 0 ? (
           <div className="px-5 py-10 text-center">
             <Clock className="mx-auto mb-3 h-8 w-8 text-muted-foreground/50" />
-            <p className="text-sm text-muted-foreground">No runs found for this date range.</p>
+            <p className="text-sm text-muted-foreground">No activity found for this date range.</p>
             <p className="text-xs text-muted-foreground mt-1">Try expanding the date range or adjusting the status filter.</p>
           </div>
         ) : (
@@ -242,46 +317,52 @@ export default function DeliveryHistory() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border/70 bg-muted/30">
-                  <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground">Run</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground">Type</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground">Runner</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground">Vehicle</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground">Status</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground">Started</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground">Ended</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground">Checked Out</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground">Checked In</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground">Duration</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground">Orders</th>
                   <th className="px-4 py-3" />
                 </tr>
               </thead>
               <tbody className="divide-y divide-border/50">
-                {displayRuns.map((run) => (
-                  <tr key={run.id} className="hover:bg-muted/30 transition-colors">
-                    <td className="px-4 py-3 font-medium text-foreground">{run.name}</td>
-                    <td className="px-4 py-3 text-muted-foreground">{run.runner}</td>
-                    <td className="px-4 py-3 text-muted-foreground">{formatVehicle(run.vehicle)}</td>
+                {filteredRows.map((row) => (
+                  <tr key={`${row.kind}-${row.id}`} className="hover:bg-muted/30 transition-colors">
                     <td className="px-4 py-3">
-                      <Badge variant={getStatusVariant(run.status)}>{run.status}</Badge>
+                      <Badge variant={getTypeVariant(row.typeLabel)}>{row.typeLabel}</Badge>
+                    </td>
+                    <td className="px-4 py-3 font-medium text-foreground">{row.runner}</td>
+                    <td className="px-4 py-3 text-muted-foreground">{formatVehicle(row.vehicle)}</td>
+                    <td className="px-4 py-3">
+                      <Badge variant={getStatusVariant(row.status)}>{row.status}</Badge>
                     </td>
                     <td className="px-4 py-3 text-muted-foreground whitespace-nowrap">
-                      {run.start_time ? formatToCentralTime(run.start_time) : "—"}
+                      {row.start_time ? formatToCentralTime(row.start_time) : "—"}
                     </td>
                     <td className="px-4 py-3 text-muted-foreground whitespace-nowrap">
-                      {run.end_time ? formatToCentralTime(run.end_time) : "—"}
+                      {row.end_time ? formatToCentralTime(row.end_time) : "—"}
                     </td>
                     <td className="px-4 py-3 text-muted-foreground">
-                      {formatDuration(run.start_time, run.end_time ?? undefined)}
+                      {formatDuration(row.start_time, row.end_time)}
                     </td>
                     <td className="px-4 py-3 text-muted-foreground">
-                      {run.order_ids != null ? run.order_ids.length : "—"}
+                      {row.orderCount != null ? row.orderCount : "—"}
                     </td>
                     <td className="px-4 py-3">
-                      <Link
-                        to={`/delivery/runs/${run.id}`}
-                        className="inline-flex items-center gap-1 text-xs text-accent hover:underline"
-                      >
-                        View
-                        <ExternalLink className="h-3 w-3" />
-                      </Link>
+                      {row.runId ? (
+                        <Link
+                          to={`/delivery/runs/${row.runId}`}
+                          className="inline-flex items-center gap-1 text-xs text-accent hover:underline"
+                        >
+                          View
+                          <ExternalLink className="h-3 w-3" />
+                        </Link>
+                      ) : (
+                        <span className="text-xs text-muted-foreground/40">—</span>
+                      )}
                     </td>
                   </tr>
                 ))}
