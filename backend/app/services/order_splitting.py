@@ -306,6 +306,28 @@ class OrderSplittingService:
                     latest = shipped_at
         return latest
 
+    def _split_fresh_and_stale_pick_lines(
+        self,
+        pick_lines: List[Dict[str, Any]],
+        latest_child_shipped_at: Optional[datetime],
+    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        if latest_child_shipped_at is None:
+            return [], list(pick_lines)
+
+        fresh_lines: List[Dict[str, Any]] = []
+        stale_lines: List[Dict[str, Any]] = []
+
+        for line in pick_lines:
+            if not isinstance(line, dict):
+                continue
+            pick_at = self._parse_inflow_datetime(line.get("pickDate"))
+            if pick_at is not None and pick_at > latest_child_shipped_at:
+                fresh_lines.append(deepcopy(line))
+            else:
+                stale_lines.append(deepcopy(line))
+
+        return fresh_lines, stale_lines
+
     def normalize_partial_remainder_snapshot(
         self,
         original_order: Order,
@@ -355,23 +377,10 @@ class OrderSplittingService:
             return normalized
 
         latest_child_shipped_at = self._latest_recursive_child_shipped_at(original_order)
-        if latest_child_shipped_at is not None:
-            latest_current_pick_at = max(
-                (
-                    parsed
-                    for parsed in (
-                        self._parse_inflow_datetime(line.get("pickDate"))
-                        for line in current_pick_lines
-                    )
-                    if parsed is not None
-                ),
-                default=None,
-            )
-            # If the current remainder picks happened after the most recent child
-            # shipment, treat them as fresh remainder-cycle picks instead of
-            # subtracting older delivered child quantities a second time.
-            if latest_current_pick_at is not None and latest_current_pick_at > latest_child_shipped_at:
-                return normalized
+        fresh_pick_lines, stale_pick_lines = self._split_fresh_and_stale_pick_lines(
+            current_pick_lines,
+            latest_child_shipped_at,
+        )
 
         def _quantity_by_product(lines: List[Dict[str, Any]]) -> Dict[str, float]:
             totals: Dict[str, float] = {}
@@ -405,12 +414,21 @@ class OrderSplittingService:
             > current_line_quantities.get(product_id, 0.0) + 0.0001
             for product_id in current_pick_product_ids.intersection(child_product_ids)
         )
-        # Remainder parents should never count quantities already consumed by
-        # earlier child legs, even when the current remainder uses the same
-        # product IDs as those earlier partials.
-        normalized_pick_lines = self._subtract_lines(
-            current_pick_lines,
-            child_pick_lines,
+        subtract_stale_pick_lines = (
+            stale_pick_lines
+            if fresh_pick_lines
+            else (
+                stale_pick_lines
+                if has_child_and_remainder_pick_products or has_cumulative_same_product_picks
+                else current_pick_lines
+            )
+        )
+        normalized_pick_lines = list(fresh_pick_lines)
+        normalized_pick_lines.extend(
+            self._subtract_lines(
+                subtract_stale_pick_lines,
+                child_pick_lines,
+            )
         )
         normalized["pickLines"] = normalized_pick_lines
 
