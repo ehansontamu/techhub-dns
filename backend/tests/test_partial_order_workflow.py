@@ -3351,6 +3351,131 @@ def test_parent_remainder_sync_allows_same_size_pick_batch_after_stale_delivery_
     engine.dispose()
 
 
+def test_parent_remainder_sync_allows_same_size_pick_batch_without_timestamp():
+    """Without a stable change token, suppress the stale baseline once and then surface later equal picks."""
+
+    session, engine = _make_sqlite_session()
+    parent_order = Order(
+        id="order-parent-same-size-no-timestamp",
+        inflow_order_id="TH0611",
+        inflow_sales_order_id="sales-order-0611",
+        recipient_name="User Fourteen",
+        recipient_contact="user.fourteen@example.com",
+        delivery_location="Building 611",
+        po_number="PO-0611",
+        status=OrderStatus.PICKED.value,
+        has_remainder="Y",
+        inflow_data={
+            "orderNumber": "TH0611",
+            "contactName": "User Fourteen",
+            "email": "user.fourteen@example.com",
+            "shippingAddress": {"address1": "611 Example St"},
+            "lines": [
+                {
+                    "productId": "prod-tagged",
+                    "product": {"name": "Tagged Device", "sku": "TAG-1"},
+                    "quantity": {"standardQuantity": "6"},
+                }
+            ],
+            "pickLines": [],
+            "packLines": [],
+            "shipLines": [],
+            OrderSplittingService.REMAINDER_CYCLE_PICK_BASELINE_KEY: [
+                {
+                    "productId": "prod-tagged",
+                    "product": {"name": "Tagged Device", "sku": "TAG-1"},
+                    "quantity": {"standardQuantity": "1"},
+                }
+            ],
+            OrderSplittingService.REMAINDER_CYCLE_PENDING_RESET_KEY: True,
+            OrderSplittingService.REMAINDER_CYCLE_LAST_SUPPRESSED_PICK_FINGERPRINT_KEY: None,
+        },
+    )
+    child_order = Order(
+        id="order-child-same-size-no-timestamp",
+        inflow_order_id="TH0611-P",
+        inflow_sales_order_id="sales-order-0611",
+        recipient_name="User Fourteen",
+        recipient_contact="user.fourteen@example.com",
+        delivery_location="Building 611",
+        po_number="PO-0611",
+        status=OrderStatus.PICKED.value,
+        parent_order_id=parent_order.id,
+        inflow_data={
+            "orderNumber": "TH0611-P",
+            "lines": [
+                {
+                    "productId": "prod-tagged",
+                    "product": {"name": "Tagged Device", "sku": "TAG-1"},
+                    "quantity": {"standardQuantity": "1"},
+                }
+            ],
+            "pickLines": [
+                {
+                    "productId": "prod-tagged",
+                    "product": {"name": "Tagged Device", "sku": "TAG-1"},
+                    "quantity": {"standardQuantity": "1"},
+                }
+            ],
+            "packLines": [],
+            "shipLines": [],
+        },
+    )
+    session.add(parent_order)
+    session.add(child_order)
+    session.commit()
+    parent_order.remainder_order_id = child_order.id
+    session.commit()
+
+    ambiguous_payload = {
+        "orderNumber": "TH0611",
+        "salesOrderId": "sales-order-0611",
+        "contactName": "User Fourteen",
+        "email": "user.fourteen@example.com",
+        "shippingAddress": {"address1": "611 Example St"},
+        "lines": [
+            {
+                "productId": "prod-tagged",
+                "product": {"name": "Tagged Device", "sku": "TAG-1"},
+                "quantity": {"standardQuantity": 6},
+            }
+        ],
+        "pickLines": [
+            {
+                "productId": "prod-tagged",
+                "product": {"name": "Tagged Device", "sku": "TAG-1"},
+                "quantity": {"standardQuantity": 1},
+            }
+        ],
+        "packLines": [],
+        "shipLines": [],
+    }
+
+    first_sync = OrderService(session).create_order_from_inflow(ambiguous_payload)
+    session.refresh(first_sync)
+
+    assert first_sync.inflow_data["pickLines"] == []
+    assert first_sync.inflow_data[OrderSplittingService.REMAINDER_CYCLE_PENDING_RESET_KEY] is False
+
+    second_sync = OrderService(session).create_order_from_inflow(ambiguous_payload)
+    session.refresh(second_sync)
+
+    assert second_sync.inflow_data["pickLines"] == [
+        {
+            "productId": "prod-tagged",
+            "product": {"name": "Tagged Device", "sku": "TAG-1"},
+            "quantity": {"standardQuantity": 1.0},
+        }
+    ]
+
+    pick_status = InflowService().get_pick_status(second_sync.inflow_data)
+    assert pick_status["total_ordered"] == 6
+    assert pick_status["total_picked"] == 1
+
+    session.close()
+    engine.dispose()
+
+
 def test_parent_remainder_blocks_prep_actions_until_remaining_items_are_picked():
     """Remainder parent legs should not allow prep actions before their items are picked."""
 

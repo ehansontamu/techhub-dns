@@ -530,6 +530,7 @@ class OrderSplittingService:
                 pending_reset_raw = original_snapshot.get(self.REMAINDER_CYCLE_PENDING_RESET_KEY)
             pending_reset = bool(pending_reset_raw)
             fingerprint = self._remainder_cycle_pick_fingerprint(normalized)
+            has_snapshot_change_token = bool(normalized.get("timestamp"))
             last_suppressed_fingerprint = normalized.get(
                 self.REMAINDER_CYCLE_LAST_SUPPRESSED_PICK_FINGERPRINT_KEY
             )
@@ -542,6 +543,14 @@ class OrderSplittingService:
                 current_pick_lines,
                 baseline_pick_lines,
             ):
+                if not has_snapshot_change_token:
+                    if last_suppressed_fingerprint is None:
+                        normalized["pickLines"] = []
+                        normalized[self.REMAINDER_CYCLE_PENDING_RESET_KEY] = False
+                        normalized[
+                            self.REMAINDER_CYCLE_LAST_SUPPRESSED_PICK_FINGERPRINT_KEY
+                        ] = fingerprint
+                        return normalized
                 if (
                     last_suppressed_fingerprint is None
                     or last_suppressed_fingerprint == fingerprint
