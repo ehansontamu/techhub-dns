@@ -1,4 +1,4 @@
-import { Outlet } from "react-router-dom";
+import { NavLink, Outlet } from "react-router-dom";
 
 export default function DeliveryLayout() {
   return (
@@ -6,6 +6,33 @@ export default function DeliveryLayout() {
       <div className="flex flex-col gap-1">
         <h1 className="text-lg font-semibold leading-none tracking-tight">Delivery</h1>
         <p className="text-xs text-muted-foreground">Manage dispatch workflow, run history, and vehicle availability.</p>
+      </div>
+
+      <div className="flex gap-1 border-b border-border">
+        <NavLink
+          to="dispatch"
+          className={({ isActive }) =>
+            `px-4 py-2 text-sm font-medium transition-colors border-b-2 -mb-px ${
+              isActive
+                ? "border-foreground text-foreground"
+                : "border-transparent text-muted-foreground hover:text-foreground"
+            }`
+          }
+        >
+          Dispatch
+        </NavLink>
+        <NavLink
+          to="history"
+          className={({ isActive }) =>
+            `px-4 py-2 text-sm font-medium transition-colors border-b-2 -mb-px ${
+              isActive
+                ? "border-foreground text-foreground"
+                : "border-transparent text-muted-foreground hover:text-foreground"
+            }`
+          }
+        >
+          History
+        </NavLink>
       </div>
 
       <Outlet />

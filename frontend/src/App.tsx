@@ -17,6 +17,7 @@ const Orders = lazy(() => import("./pages/Orders"));
 const OrderDetailPage = lazy(() => import("./pages/OrderDetailPage"));
 const DeliveryLayout = lazy(() => import("./pages/delivery/DeliveryLayout"));
 const DeliveryDispatchPage = lazy(() => import("./pages/delivery/Dispatch"));
+const DeliveryHistoryPage = lazy(() => import("./pages/delivery/History"));
 const Shipping = lazy(() => import("./pages/Shipping"));
 const Admin = lazy(() => import("./pages/Admin"));
 const Settings = lazy(() => import("./pages/Settings"));
@@ -49,6 +50,7 @@ function AppRoutes() {
             <Route path="/delivery" element={<ProtectedRoute><DeliveryLayout /></ProtectedRoute>}>
                 <Route index element={<Navigate to="dispatch" replace />} />
                 <Route path="dispatch" element={<DeliveryDispatchPage />} />
+                <Route path="history" element={<DeliveryHistoryPage />} />
                 <Route path="runs/:runId" element={<DeliveryRunDetailPage />} />
             </Route>
             <Route path="/shipping" element={<ProtectedRoute><Shipping /></ProtectedRoute>} />

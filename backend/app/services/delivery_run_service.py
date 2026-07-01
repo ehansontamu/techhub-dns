@@ -599,9 +599,13 @@ class DeliveryRunService:
         )
 
     def get_all_run_details(
-        self, status: Optional[List[str]] = None, vehicle: Optional[str] = None
+        self,
+        status: Optional[List[str]] = None,
+        vehicle: Optional[str] = None,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None,
     ) -> List[DeliveryRun]:
-        """Get all delivery runs, optionally filtered by status/vehicle."""
+        """Get all delivery runs, optionally filtered by status/vehicle/date range."""
         query = self.db.query(DeliveryRun)
 
         if status:
@@ -610,6 +614,12 @@ class DeliveryRunService:
         if vehicle is not None:
             vehicle_norm = self._validate_vehicle(vehicle)
             query = query.filter(DeliveryRun.vehicle == vehicle_norm)
+
+        if start_date is not None:
+            query = query.filter(DeliveryRun.created_at >= start_date)
+
+        if end_date is not None:
+            query = query.filter(DeliveryRun.created_at < end_date)
 
         return query.order_by(DeliveryRun.created_at.desc()).all()
 

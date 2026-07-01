@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta
 from flask import Blueprint, request, jsonify, abort
 from flask_socketio import emit
 from typing import List
@@ -145,14 +146,30 @@ def create_run():
 @bp.route("", methods=["GET"])
 @require_auth
 def get_runs():
-    """Get delivery runs (optionally filtered by status)"""
+    """Get delivery runs, optionally filtered by status, vehicle, and date range."""
     status_filter = request.args.getlist("status")
     vehicle = request.args.get("vehicle")
+    start_date_str = request.args.get("start_date")
+    end_date_str = request.args.get("end_date")
+
+    start_date = None
+    end_date = None
+    try:
+        if start_date_str:
+            start_date = datetime.strptime(start_date_str, "%Y-%m-%d")
+        if end_date_str:
+            # Exclusive upper bound: midnight of the day after end_date
+            end_date = datetime.strptime(end_date_str, "%Y-%m-%d") + timedelta(days=1)
+    except ValueError:
+        abort(400, description="Invalid date format — expected YYYY-MM-DD")
 
     with get_db() as db:
         service = DeliveryRunService(db)
         runs = service.get_all_run_details(
-            status=status_filter if status_filter else None, vehicle=vehicle
+            status=status_filter if status_filter else None,
+            vehicle=vehicle,
+            start_date=start_date,
+            end_date=end_date,
         )
 
         result = []

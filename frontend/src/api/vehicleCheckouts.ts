@@ -96,6 +96,8 @@ export const vehicleCheckoutsApi = {
   listCheckouts: async (query?: {
     vehicle?: Vehicle;
     checkout_type?: VehicleCheckoutType;
+    start_date?: string;
+    end_date?: string;
     page?: number;
     page_size?: number;
   }): Promise<ListVehicleCheckoutsResponse> => {
