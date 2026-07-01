@@ -520,6 +520,29 @@ class OrderSplittingService:
         else:
             baseline_pick_lines = []
 
+        previous_snapshot_timestamp = original_snapshot.get("timestamp")
+        current_snapshot_timestamp = normalized.get("timestamp")
+        has_new_snapshot_timestamp = (
+            previous_snapshot_timestamp is not None
+            and
+            current_snapshot_timestamp is not None
+            and current_snapshot_timestamp != previous_snapshot_timestamp
+        )
+
+        if (
+            has_new_snapshot_timestamp
+            and current_pick_lines
+            and self._line_quantity_total(current_pick_lines)
+            <= self._line_quantity_total(current_lines) + 0.0001
+        ):
+            normalized["pickLines"] = self._restrict_lines_to_source(
+                current_pick_lines,
+                current_lines,
+            )
+            normalized[self.REMAINDER_CYCLE_PENDING_RESET_KEY] = False
+            normalized[self.REMAINDER_CYCLE_LAST_SUPPRESSED_PICK_FINGERPRINT_KEY] = None
+            return normalized
+
         if cycle_started_at is not None and all_pick_lines_have_timestamps:
             normalized["pickLines"] = self._restrict_lines_to_source(
                 fresh_pick_lines,

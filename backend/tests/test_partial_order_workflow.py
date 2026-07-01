@@ -3603,6 +3603,166 @@ def test_parent_remainder_sync_keeps_new_pick_without_pickdate_when_stale_pickda
     engine.dispose()
 
 
+def test_parent_remainder_sync_trusts_new_snapshot_timestamp_for_remainder_picks():
+    """A newer InFlow snapshot should surface real remainder picks even if old pickDates linger."""
+
+    session, engine = _make_sqlite_session()
+    parent_order = Order(
+        id="order-parent-newer-timestamp",
+        inflow_order_id="TH0613",
+        inflow_sales_order_id="sales-order-0613",
+        recipient_name="User Sixteen",
+        recipient_contact="user.sixteen@example.com",
+        delivery_location="Building 613",
+        po_number="PO-0613",
+        status=OrderStatus.PICKED.value,
+        has_remainder="Y",
+        inflow_data={
+            "orderNumber": "TH0613",
+            "contactName": "User Sixteen",
+            "email": "user.sixteen@example.com",
+            "shippingAddress": {"address1": "613 Example St"},
+            "timestamp": "0000000000000001",
+            "lines": [
+                {
+                    "productId": "prod-tagged",
+                    "product": {"name": "Tagged Device", "sku": "TAG-1"},
+                    "quantity": {"standardQuantity": "3"},
+                }
+            ],
+            "pickLines": [],
+            "packLines": [],
+            "shipLines": [],
+            OrderSplittingService.REMAINDER_CYCLE_STARTED_AT_KEY: "2026-06-30T20:00:00Z",
+            OrderSplittingService.REMAINDER_CYCLE_PICK_BASELINE_KEY: [
+                {
+                    "productId": "prod-tagged",
+                    "product": {"name": "Tagged Device", "sku": "TAG-1"},
+                    "quantity": {"standardQuantity": "2"},
+                }
+            ],
+            OrderSplittingService.REMAINDER_CYCLE_PENDING_RESET_KEY: True,
+            OrderSplittingService.REMAINDER_CYCLE_LAST_SUPPRESSED_PICK_FINGERPRINT_KEY: None,
+        },
+    )
+    child_order = Order(
+        id="order-child-newer-timestamp",
+        inflow_order_id="TH0613-P",
+        inflow_sales_order_id="sales-order-0613",
+        recipient_name="User Sixteen",
+        recipient_contact="user.sixteen@example.com",
+        delivery_location="Building 613",
+        po_number="PO-0613",
+        status=OrderStatus.PICKED.value,
+        parent_order_id=parent_order.id,
+        inflow_data={
+            "orderNumber": "TH0613-P",
+            "lines": [
+                {
+                    "productId": "prod-tagged",
+                    "product": {"name": "Tagged Device", "sku": "TAG-1"},
+                    "quantity": {"standardQuantity": "2"},
+                }
+            ],
+            "pickLines": [
+                {
+                    "productId": "prod-tagged",
+                    "product": {"name": "Tagged Device", "sku": "TAG-1"},
+                    "quantity": {"standardQuantity": "2"},
+                    "pickDate": "2026-06-30T19:45:00Z",
+                }
+            ],
+            "packLines": [],
+            "shipLines": [],
+        },
+    )
+    session.add(parent_order)
+    session.add(child_order)
+    session.commit()
+    parent_order.remainder_order_id = child_order.id
+    session.commit()
+
+    second_pick_payload = {
+        "orderNumber": "TH0613",
+        "salesOrderId": "sales-order-0613",
+        "contactName": "User Sixteen",
+        "email": "user.sixteen@example.com",
+        "shippingAddress": {"address1": "613 Example St"},
+        "timestamp": "0000000000000002",
+        "lines": [
+            {
+                "productId": "prod-tagged",
+                "product": {"name": "Tagged Device", "sku": "TAG-1"},
+                "quantity": {"standardQuantity": 3},
+            }
+        ],
+        "pickLines": [
+            {
+                "productId": "prod-tagged",
+                "product": {"name": "Tagged Device", "sku": "TAG-1"},
+                "quantity": {"standardQuantity": 2},
+                "pickDate": "2026-06-30T19:45:00Z",
+            }
+        ],
+        "packLines": [],
+        "shipLines": [],
+    }
+
+    second_pick_sync = OrderService(session).create_order_from_inflow(second_pick_payload)
+    session.refresh(second_pick_sync)
+
+    assert second_pick_sync.inflow_data["pickLines"] == [
+        {
+            "productId": "prod-tagged",
+            "product": {"name": "Tagged Device", "sku": "TAG-1"},
+            "quantity": {"standardQuantity": 2.0},
+            "pickDate": "2026-06-30T19:45:00Z",
+        }
+    ]
+
+    third_pick_payload = {
+        **second_pick_payload,
+        "timestamp": "0000000000000003",
+        "pickLines": [
+            {
+                "productId": "prod-tagged",
+                "product": {"name": "Tagged Device", "sku": "TAG-1"},
+                "quantity": {"standardQuantity": 2},
+                "pickDate": "2026-06-30T19:45:00Z",
+            },
+            {
+                "productId": "prod-tagged",
+                "product": {"name": "Tagged Device", "sku": "TAG-1"},
+                "quantity": {"standardQuantity": 1},
+            },
+        ],
+    }
+
+    third_pick_sync = OrderService(session).create_order_from_inflow(third_pick_payload)
+    session.refresh(third_pick_sync)
+
+    assert third_pick_sync.inflow_data["pickLines"] == [
+        {
+            "productId": "prod-tagged",
+            "product": {"name": "Tagged Device", "sku": "TAG-1"},
+            "quantity": {"standardQuantity": 2.0},
+            "pickDate": "2026-06-30T19:45:00Z",
+        },
+        {
+            "productId": "prod-tagged",
+            "product": {"name": "Tagged Device", "sku": "TAG-1"},
+            "quantity": {"standardQuantity": 1.0},
+        },
+    ]
+
+    pick_status = InflowService().get_pick_status(third_pick_sync.inflow_data)
+    assert pick_status["total_ordered"] == 3
+    assert pick_status["total_picked"] == 3
+
+    session.close()
+    engine.dispose()
+
+
 def test_parent_remainder_blocks_prep_actions_until_remaining_items_are_picked():
     """Remainder parent legs should not allow prep actions before their items are picked."""
 
