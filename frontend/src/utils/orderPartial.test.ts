@@ -54,6 +54,28 @@ describe("getPartialOrderInfo", () => {
     expect(info.totalOrdered).toBe(2);
     expect(info.totalPicked).toBe(2);
   });
+
+  it("prefers server pick_status for remainder legs over raw inflow fallback data", () => {
+    const info = getPartialOrderInfo({
+      inflow_data: {
+        lines: [{ productId: "1", quantity: { standardQuantity: 10 } }],
+        pickLines: [{ productId: "1", quantity: { standardQuantity: 2 } }],
+      },
+      has_remainder: "Y",
+      remainder_order_id: "remainder-uuid",
+      pick_status: {
+        total_ordered: 8,
+        total_picked: 0,
+        is_fully_picked: false,
+        missing_items: [{ product_id: "1", product_name: "Widget", ordered: 8, picked: 0 }],
+      },
+    } as any);
+
+    expect(info.hasRemainder).toBe(true);
+    expect(info.totalOrdered).toBe(8);
+    expect(info.totalPicked).toBe(0);
+    expect(info.shortfall).toBe(8);
+  });
 });
 
 describe("getOrderProductTableView", () => {
