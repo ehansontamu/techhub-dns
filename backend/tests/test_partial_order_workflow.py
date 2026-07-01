@@ -3857,6 +3857,167 @@ def test_parent_remainder_sync_trusts_active_child_remainder_picks_before_fulfil
     engine.dispose()
 
 
+def test_recursive_same_product_remainder_uses_cumulative_pick_baseline():
+    """Same-product recursive splits should subtract only the cumulative baseline for each cycle."""
+
+    session, engine = _make_sqlite_session()
+    parent_order = Order(
+        id="order-parent-same-product-cycle",
+        inflow_order_id="TH0615",
+        inflow_sales_order_id="sales-order-0615",
+        recipient_name="User Eighteen",
+        recipient_contact="user.eighteen@example.com",
+        delivery_location="Building 615",
+        po_number="PO-0615",
+        status=OrderStatus.PICKED.value,
+        tagged_by="tech@example.com",
+        inflow_data={
+            "orderNumber": "TH0615",
+            "contactName": "User Eighteen",
+            "email": "user.eighteen@example.com",
+            "shippingAddress": {"address1": "615 Example St"},
+            "lines": [
+                {
+                    "productId": "prod-monitor",
+                    "product": {"name": "Monitor", "sku": "MON-1"},
+                    "quantity": {"standardQuantity": "8"},
+                }
+            ],
+            "pickLines": [
+                {
+                    "productId": "prod-monitor",
+                    "product": {"name": "Monitor", "sku": "MON-1"},
+                    "quantity": {"standardQuantity": "2"},
+                }
+            ],
+        },
+    )
+    session.add(parent_order)
+    session.commit()
+
+    splitting_service = OrderSplittingService(session)
+    first_child = splitting_service.create_partial_picklist_leg(
+        parent_order,
+        user_id="tech@example.com",
+    )
+    session.refresh(parent_order)
+    session.refresh(first_child)
+
+    assert first_child is not None
+    assert first_child.inflow_data["pickLines"] == [
+        {
+            "productId": "prod-monitor",
+            "product": {"name": "Monitor", "sku": "MON-1"},
+            "quantity": {"standardQuantity": "2.0"},
+        }
+    ]
+    assert parent_order.inflow_data["lines"] == [
+        {
+            "productId": "prod-monitor",
+            "product": {"name": "Monitor", "sku": "MON-1"},
+            "quantity": {"standardQuantity": 6.0},
+        }
+    ]
+    assert parent_order.inflow_data["pickLines"] == []
+
+    order_service = OrderService(session)
+    five_picked_payload = {
+        "orderNumber": "TH0615",
+        "salesOrderId": "sales-order-0615",
+        "contactName": "User Eighteen",
+        "email": "user.eighteen@example.com",
+        "shippingAddress": {"address1": "615 Example St"},
+        "lines": [
+            {
+                "productId": "prod-monitor",
+                "product": {"name": "Monitor", "sku": "MON-1"},
+                "quantity": {"standardQuantity": "8"},
+            }
+        ],
+        "pickLines": [
+            {
+                "productId": "prod-monitor",
+                "product": {"name": "Monitor", "sku": "MON-1"},
+                "quantity": {"standardQuantity": "5"},
+            }
+        ],
+        "packLines": [],
+        "shipLines": [],
+    }
+
+    first_remainder_sync = order_service.create_order_from_inflow(five_picked_payload)
+    session.refresh(first_remainder_sync)
+
+    assert first_remainder_sync.inflow_data["pickLines"] == [
+        {
+            "productId": "prod-monitor",
+            "product": {"name": "Monitor", "sku": "MON-1"},
+            "quantity": {"standardQuantity": 3.0},
+        }
+    ]
+
+    second_child = splitting_service.create_partial_picklist_leg(
+        parent_order,
+        user_id="tech@example.com",
+    )
+    session.refresh(parent_order)
+    session.refresh(second_child)
+
+    assert second_child is not None
+    assert second_child.inflow_order_id == "TH0615-P2"
+    assert second_child.inflow_data["pickLines"] == [
+        {
+            "productId": "prod-monitor",
+            "product": {"name": "Monitor", "sku": "MON-1"},
+            "quantity": {"standardQuantity": "3.0"},
+        }
+    ]
+    assert parent_order.inflow_data["lines"] == [
+        {
+            "productId": "prod-monitor",
+            "product": {"name": "Monitor", "sku": "MON-1"},
+            "quantity": {"standardQuantity": 3.0},
+        }
+    ]
+    assert parent_order.inflow_data["pickLines"] == []
+    assert parent_order.inflow_data[OrderSplittingService.REMAINDER_CYCLE_PICK_BASELINE_KEY] == [
+        {
+            "productId": "prod-monitor",
+            "product": {"name": "Monitor", "sku": "MON-1"},
+            "quantity": {"standardQuantity": 5.0},
+        }
+    ]
+
+    eight_picked_payload = {
+        **five_picked_payload,
+        "pickLines": [
+            {
+                "productId": "prod-monitor",
+                "product": {"name": "Monitor", "sku": "MON-1"},
+                "quantity": {"standardQuantity": "8"},
+            }
+        ],
+    }
+
+    final_remainder_sync = order_service.create_order_from_inflow(eight_picked_payload)
+    session.refresh(final_remainder_sync)
+
+    assert final_remainder_sync.inflow_data["pickLines"] == [
+        {
+            "productId": "prod-monitor",
+            "product": {"name": "Monitor", "sku": "MON-1"},
+            "quantity": {"standardQuantity": 3.0},
+        }
+    ]
+
+    pick_status = InflowService().get_pick_status(final_remainder_sync.inflow_data)
+    assert pick_status["total_ordered"] == 3
+    assert pick_status["total_picked"] == 3
+
+    session.close()
+    engine.dispose()
+
+
 def test_parent_remainder_blocks_prep_actions_until_remaining_items_are_picked():
     """Remainder parent legs should not allow prep actions before their items are picked."""
 

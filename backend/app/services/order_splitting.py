@@ -29,6 +29,7 @@ class OrderSplittingService:
 
     REMAINDER_CYCLE_STARTED_AT_KEY = "_techhub_remainder_cycle_started_at"
     REMAINDER_CYCLE_PICK_BASELINE_KEY = "_techhub_remainder_cycle_pick_baseline"
+    REMAINDER_CYCLE_RAW_LINES_KEY = "_techhub_remainder_cycle_raw_lines"
     REMAINDER_CYCLE_PENDING_RESET_KEY = "_techhub_remainder_cycle_pending_pick_reset"
     REMAINDER_CYCLE_LAST_SUPPRESSED_PICK_FINGERPRINT_KEY = (
         "_techhub_remainder_cycle_last_suppressed_pick_fingerprint"
@@ -170,6 +171,81 @@ class OrderSplittingService:
             normalized_lines.append(copied_line)
         return normalized_lines
 
+    def _add_lines(
+        self,
+        source_lines: List[Dict[str, Any]],
+        add_lines: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """Add line quantities by product while preserving representative line metadata."""
+        combined_lines_by_product: Dict[str, Dict[str, Any]] = {}
+        combined_quantities: Dict[str, float] = {}
+
+        for line in [*source_lines, *add_lines]:
+            if not isinstance(line, dict):
+                continue
+            product_id = line.get("productId")
+            if not product_id:
+                continue
+
+            product_key = str(product_id)
+            if product_key not in combined_lines_by_product:
+                combined_lines_by_product[product_key] = deepcopy(line)
+                combined_quantities[product_key] = 0.0
+            combined_quantities[product_key] = combined_quantities.get(
+                product_key,
+                0.0,
+            ) + self._parse_standard_quantity(
+                line.get("quantity"),
+            )
+
+        combined_lines: List[Dict[str, Any]] = []
+        for product_key, line in combined_lines_by_product.items():
+            quantity_data = dict(line.get("quantity") or {})
+            quantity_data["standardQuantity"] = combined_quantities.get(product_key, 0.0)
+            quantity_data.pop("serialNumbers", None)
+            line["quantity"] = quantity_data
+            combined_lines.append(line)
+
+        return combined_lines
+
+    def _line_quantities_by_product(
+        self,
+        lines: List[Dict[str, Any]],
+    ) -> Dict[str, float]:
+        quantities: Dict[str, float] = {}
+        for line in lines:
+            if not isinstance(line, dict):
+                continue
+            product_id = line.get("productId")
+            if not product_id:
+                continue
+            product_key = str(product_id)
+            quantities[product_key] = quantities.get(
+                product_key,
+                0.0,
+            ) + self._parse_standard_quantity(
+                line.get("quantity"),
+            )
+        return quantities
+
+    def _source_lines_are_full_order_snapshot(
+        self,
+        source_lines: List[Dict[str, Any]],
+        remainder_lines: List[Dict[str, Any]],
+    ) -> bool:
+        if not source_lines or not remainder_lines:
+            return False
+
+        source_quantities = self._line_quantities_by_product(source_lines)
+        remainder_quantities = self._line_quantities_by_product(remainder_lines)
+
+        for product_id, source_quantity in source_quantities.items():
+            remainder_quantity = remainder_quantities.get(product_id, 0.0)
+            if source_quantity > remainder_quantity + 0.0001:
+                return True
+
+        return False
+
     def _build_partial_leg_view(self, inflow_data: Dict[str, Any]) -> Dict[str, Any]:
         """Build a local snapshot for the picked leg of a partial order."""
         order_view = deepcopy(inflow_data or {})
@@ -262,11 +338,21 @@ class OrderSplittingService:
             if isinstance(line, dict)
         )
         remainder_view["total"] = remainder_view["subtotal"]
-        remainder_view[self.REMAINDER_CYCLE_PICK_BASELINE_KEY] = [
+        previous_cycle_baseline = [
+            deepcopy(line)
+            for line in inflow_data.get(self.REMAINDER_CYCLE_PICK_BASELINE_KEY, [])
+            if isinstance(line, dict)
+        ]
+        current_cycle_pick_lines = [
             deepcopy(line)
             for line in inflow_data.get("pickLines", [])
             if isinstance(line, dict)
         ]
+        remainder_view[self.REMAINDER_CYCLE_PICK_BASELINE_KEY] = self._add_lines(
+            previous_cycle_baseline,
+            current_cycle_pick_lines,
+        )
+        remainder_view[self.REMAINDER_CYCLE_RAW_LINES_KEY] = []
         remainder_view[self.REMAINDER_CYCLE_PENDING_RESET_KEY] = True
         remainder_view[self.REMAINDER_CYCLE_LAST_SUPPRESSED_PICK_FINGERPRINT_KEY] = None
         remainder_view[self.REMAINDER_CYCLE_STARTED_AT_KEY] = (
@@ -507,6 +593,53 @@ class OrderSplittingService:
             for line in child_pick_lines
             if line.get("productId")
         }
+        current_line_product_ids = {
+            str(line.get("productId"))
+            for line in current_lines
+            if line.get("productId")
+        }
+        raw_source_lines_value = normalized.get(self.REMAINDER_CYCLE_RAW_LINES_KEY)
+        has_raw_source_lines = bool(
+            isinstance(raw_source_lines_value, list)
+            and any(isinstance(line, dict) for line in raw_source_lines_value)
+        )
+        has_child_and_remainder_products = bool(
+            current_line_product_ids.intersection(child_product_ids)
+            and current_line_product_ids.difference(child_product_ids)
+        )
+        has_cycle_pick_baseline = self.REMAINDER_CYCLE_PICK_BASELINE_KEY in normalized
+        if (
+            rebuild_lines
+            and has_child_and_remainder_products
+            and not has_raw_source_lines
+            and not has_cycle_pick_baseline
+        ):
+            current_lines = self._subtract_lines(current_lines, child_pick_lines)
+            normalized["lines"] = deepcopy(current_lines)
+            current_pick_lines = self._restrict_lines_to_source(
+                current_pick_lines,
+                current_lines,
+            )
+            normalized["pickLines"] = deepcopy(current_pick_lines)
+            current_pick_product_ids = {
+                str(line.get("productId"))
+                for line in current_pick_lines
+                if line.get("productId")
+            }
+            subtotal = sum(
+                (
+                    float(line.get("unitPrice") or 0)
+                    if isinstance(line, dict)
+                    else 0.0
+                )
+                * self._parse_standard_quantity(
+                    line.get("quantity") if isinstance(line, dict) else 0,
+                )
+                for line in current_lines
+                if isinstance(line, dict)
+            )
+            normalized["subtotal"] = subtotal
+            normalized["total"] = subtotal
         if not current_pick_product_ids.intersection(child_product_ids):
             return normalized
 
@@ -544,6 +677,32 @@ class OrderSplittingService:
             ]
         else:
             baseline_pick_lines = []
+
+        raw_source_lines = normalized.get(self.REMAINDER_CYCLE_RAW_LINES_KEY)
+        if isinstance(raw_source_lines, list):
+            raw_source_lines = [
+                deepcopy(line)
+                for line in raw_source_lines
+                if isinstance(line, dict)
+            ]
+        else:
+            raw_source_lines = []
+        picks_are_cumulative = bool(
+            baseline_pick_lines
+            and self._source_lines_are_full_order_snapshot(
+                raw_source_lines,
+                current_lines,
+            )
+        )
+        normalized[self.REMAINDER_CYCLE_RAW_LINES_KEY] = []
+        if picks_are_cumulative:
+            normalized["pickLines"] = self._restrict_lines_to_source(
+                self._subtract_lines(current_pick_lines, baseline_pick_lines),
+                current_lines,
+            )
+            normalized[self.REMAINDER_CYCLE_PENDING_RESET_KEY] = False
+            normalized[self.REMAINDER_CYCLE_LAST_SUPPRESSED_PICK_FINGERPRINT_KEY] = None
+            return normalized
 
         if not self._current_remainder_child_can_echo_picks(original_order):
             if (

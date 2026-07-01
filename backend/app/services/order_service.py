@@ -80,6 +80,15 @@ class OrderService:
             or existing_order.has_remainder
         ):
             current_snapshot = dict(existing_order.inflow_data or {})
+            is_parent_remainder = bool(
+                getattr(existing_order, "remainder_order_id", None)
+                and not getattr(existing_order, "parent_order_id", None)
+            )
+            raw_lines = inflow_data.get("lines")
+            if is_parent_remainder and isinstance(raw_lines, list):
+                merged[OrderSplittingService.REMAINDER_CYCLE_RAW_LINES_KEY] = deepcopy(
+                    raw_lines
+                )
             # Preserve the split leg item set, but let fresh pick/pack/ship state
             # flow through so remainder legs can unblock once the remaining items
             # are actually picked.
@@ -100,10 +109,17 @@ class OrderService:
                 )
             for field in (
                 OrderSplittingService.REMAINDER_CYCLE_PICK_BASELINE_KEY,
+                OrderSplittingService.REMAINDER_CYCLE_RAW_LINES_KEY,
                 OrderSplittingService.REMAINDER_CYCLE_PENDING_RESET_KEY,
                 OrderSplittingService.REMAINDER_CYCLE_LAST_SUPPRESSED_PICK_FINGERPRINT_KEY,
             ):
                 if field in current_snapshot:
+                    if (
+                        field == OrderSplittingService.REMAINDER_CYCLE_RAW_LINES_KEY
+                        and is_parent_remainder
+                        and isinstance(raw_lines, list)
+                    ):
+                        continue
                     merged[field] = deepcopy(current_snapshot.get(field))
         return merged
 
