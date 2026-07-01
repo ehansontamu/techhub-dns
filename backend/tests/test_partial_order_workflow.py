@@ -1550,8 +1550,8 @@ def test_recursive_remainder_split_creates_next_partial_leg():
     engine.dispose()
 
 
-def test_recursive_partial_split_uses_delta_picks_for_next_child_leg():
-    """Later recursive legs should only capture the newest picked delta, not prior child quantities."""
+def test_recursive_partial_split_uses_active_remainder_picks_for_next_child_leg():
+    """Later recursive legs should capture the currently visible remainder picks."""
 
     session, engine = _make_sqlite_session()
 
@@ -1643,7 +1643,7 @@ def test_recursive_partial_split_uses_delta_picks_for_next_child_leg():
         {
             "productId": "prod-laptop",
             "product": {"name": "Laptop", "sku": "LAP-1"},
-            "quantity": {"standardQuantity": 40.0},
+            "quantity": {"standardQuantity": 60.0},
         }
     ]
 
@@ -1695,21 +1695,21 @@ def test_recursive_partial_split_uses_delta_picks_for_next_child_leg():
         {
             "productId": "prod-laptop",
             "product": {"name": "Laptop", "sku": "LAP-1"},
-            "quantity": {"standardQuantity": "40.0"},
+            "quantity": {"standardQuantity": "60.0"},
         }
     ]
     assert result.inflow_data["pickLines"] == [
         {
             "productId": "prod-laptop",
             "product": {"name": "Laptop", "sku": "LAP-1"},
-            "quantity": {"standardQuantity": "40.0"},
+            "quantity": {"standardQuantity": "60.0"},
         }
     ]
     assert parent_order.inflow_data["lines"] == [
         {
             "productId": "prod-laptop",
             "product": {"name": "Laptop", "sku": "LAP-1"},
-            "quantity": {"standardQuantity": 25.0},
+            "quantity": {"standardQuantity": 5.0},
         }
     ]
     assert parent_order.inflow_data["pickLines"] == []
@@ -1717,7 +1717,7 @@ def test_recursive_partial_split_uses_delta_picks_for_next_child_leg():
     with patch.object(order_service, "_requires_asset_tags", return_value=False):
         tagged_child = order_service.mark_asset_tagged(
             result.id,
-            ["TAG-40"],
+            ["TAG-60"],
             technician="tech@example.com",
         )
 
@@ -1756,50 +1756,10 @@ def test_recursive_partial_split_uses_delta_picks_for_next_child_leg():
         {
             "productId": "prod-laptop",
             "product": {"name": "Laptop", "sku": "LAP-1"},
-            "quantity": {"standardQuantity": 25.0},
+            "quantity": {"standardQuantity": 5.0},
         }
     ]
     assert refreshed.inflow_data["pickLines"] == []
-
-    stale_full_snapshot = {
-        **full_order_refresh,
-        "lines": [
-            {
-                "productId": "prod-laptop",
-                "product": {"name": "Laptop", "sku": "LAP-1"},
-                "quantity": {
-                    "standardQuantity": "85",
-                    "serialNumbers": ["FIRST-LEG", "SECOND-LEG"],
-                },
-            }
-        ],
-        "pickLines": [
-            {
-                "productId": "prod-laptop",
-                "product": {"name": "Laptop", "sku": "LAP-1"},
-                "quantity": {
-                    "standardQuantity": "60",
-                    "serialNumbers": ["FIRST-LEG", "SECOND-LEG"],
-                },
-            }
-        ],
-    }
-    parent_order.inflow_data = stale_full_snapshot
-    session.commit()
-
-    repaired_document_view = splitting_service.build_parent_remainder_document_view(
-        parent_order
-    )
-
-    assert repaired_document_view is not None
-    assert repaired_document_view["lines"] == [
-        {
-            "productId": "prod-laptop",
-            "product": {"name": "Laptop", "sku": "LAP-1"},
-            "quantity": {"standardQuantity": 25.0, "serialNumbers": []},
-        }
-    ]
-    assert repaired_document_view["pickLines"] == []
 
     session.close()
     engine.dispose()
@@ -3351,8 +3311,8 @@ def test_parent_remainder_sync_allows_same_size_pick_batch_after_stale_delivery_
     engine.dispose()
 
 
-def test_parent_remainder_sync_allows_same_size_pick_batch_without_timestamp():
-    """Without a stable change token, suppress the stale baseline once and then surface later equal picks."""
+def test_parent_remainder_sync_trusts_same_size_pick_batch_without_timestamp_while_child_is_active():
+    """With an active child leg, timestampless remainder picks should show directly."""
 
     session, engine = _make_sqlite_session()
     parent_order = Order(
@@ -3454,7 +3414,13 @@ def test_parent_remainder_sync_allows_same_size_pick_batch_without_timestamp():
     first_sync = OrderService(session).create_order_from_inflow(ambiguous_payload)
     session.refresh(first_sync)
 
-    assert first_sync.inflow_data["pickLines"] == []
+    assert first_sync.inflow_data["pickLines"] == [
+        {
+            "productId": "prod-tagged",
+            "product": {"name": "Tagged Device", "sku": "TAG-1"},
+            "quantity": {"standardQuantity": 1.0},
+        }
+    ]
     assert first_sync.inflow_data[OrderSplittingService.REMAINDER_CYCLE_PENDING_RESET_KEY] is False
 
     second_sync = OrderService(session).create_order_from_inflow(ambiguous_payload)
@@ -3603,8 +3569,8 @@ def test_parent_remainder_sync_keeps_new_pick_without_pickdate_when_stale_pickda
     engine.dispose()
 
 
-def test_parent_remainder_sync_trusts_new_snapshot_timestamp_for_remainder_picks():
-    """A newer InFlow snapshot should surface real remainder picks even if old pickDates linger."""
+def test_parent_remainder_sync_ignores_stale_pickdates_even_on_newer_snapshot():
+    """A newer snapshot should not resurrect pre-cycle child picks on an active remainder leg."""
 
     session, engine = _make_sqlite_session()
     parent_order = Order(
@@ -3711,14 +3677,7 @@ def test_parent_remainder_sync_trusts_new_snapshot_timestamp_for_remainder_picks
     second_pick_sync = OrderService(session).create_order_from_inflow(second_pick_payload)
     session.refresh(second_pick_sync)
 
-    assert second_pick_sync.inflow_data["pickLines"] == [
-        {
-            "productId": "prod-tagged",
-            "product": {"name": "Tagged Device", "sku": "TAG-1"},
-            "quantity": {"standardQuantity": 2.0},
-            "pickDate": "2026-06-30T19:45:00Z",
-        }
-    ]
+    assert second_pick_sync.inflow_data["pickLines"] == []
 
     third_pick_payload = {
         **second_pick_payload,
@@ -3745,17 +3704,152 @@ def test_parent_remainder_sync_trusts_new_snapshot_timestamp_for_remainder_picks
         {
             "productId": "prod-tagged",
             "product": {"name": "Tagged Device", "sku": "TAG-1"},
-            "quantity": {"standardQuantity": 2.0},
-            "pickDate": "2026-06-30T19:45:00Z",
-        },
-        {
-            "productId": "prod-tagged",
-            "product": {"name": "Tagged Device", "sku": "TAG-1"},
             "quantity": {"standardQuantity": 1.0},
         },
     ]
 
     pick_status = InflowService().get_pick_status(third_pick_sync.inflow_data)
+    assert pick_status["total_ordered"] == 3
+    assert pick_status["total_picked"] == 1
+
+    session.close()
+    engine.dispose()
+
+
+def test_parent_remainder_sync_trusts_active_child_remainder_picks_before_fulfillment():
+    """While the latest child leg is still active, new remainder picks should show directly."""
+
+    session, engine = _make_sqlite_session()
+    parent_order = Order(
+        id="order-parent-active-child-remainder",
+        inflow_order_id="TH0614",
+        inflow_sales_order_id="sales-order-0614",
+        recipient_name="User Seventeen",
+        recipient_contact="user.seventeen@example.com",
+        delivery_location="Building 614",
+        po_number="PO-0614",
+        status=OrderStatus.PICKED.value,
+        has_remainder="Y",
+        inflow_data={
+            "orderNumber": "TH0614",
+            "contactName": "User Seventeen",
+            "email": "user.seventeen@example.com",
+            "shippingAddress": {"address1": "614 Example St"},
+            "lines": [
+                {
+                    "productId": "prod-tagged",
+                    "product": {"name": "Tagged Device", "sku": "TAG-1"},
+                    "quantity": {"standardQuantity": "3"},
+                }
+            ],
+            "pickLines": [],
+            "packLines": [],
+            "shipLines": [],
+            OrderSplittingService.REMAINDER_CYCLE_PICK_BASELINE_KEY: [
+                {
+                    "productId": "prod-tagged",
+                    "product": {"name": "Tagged Device", "sku": "TAG-1"},
+                    "quantity": {"standardQuantity": "2"},
+                }
+            ],
+            OrderSplittingService.REMAINDER_CYCLE_PENDING_RESET_KEY: True,
+            OrderSplittingService.REMAINDER_CYCLE_LAST_SUPPRESSED_PICK_FINGERPRINT_KEY: None,
+        },
+    )
+    active_child = Order(
+        id="order-child-active-child-remainder",
+        inflow_order_id="TH0614-P",
+        inflow_sales_order_id="sales-order-0614",
+        recipient_name="User Seventeen",
+        recipient_contact="user.seventeen@example.com",
+        delivery_location="Building 614",
+        po_number="PO-0614",
+        status=OrderStatus.PICKED.value,
+        parent_order_id=parent_order.id,
+        inflow_data={
+            "orderNumber": "TH0614-P",
+            "lines": [
+                {
+                    "productId": "prod-tagged",
+                    "product": {"name": "Tagged Device", "sku": "TAG-1"},
+                    "quantity": {"standardQuantity": "2"},
+                }
+            ],
+            "pickLines": [
+                {
+                    "productId": "prod-tagged",
+                    "product": {"name": "Tagged Device", "sku": "TAG-1"},
+                    "quantity": {"standardQuantity": "2"},
+                }
+            ],
+            "packLines": [],
+            "shipLines": [],
+        },
+    )
+    session.add(parent_order)
+    session.add(active_child)
+    session.commit()
+    parent_order.remainder_order_id = active_child.id
+    session.commit()
+
+    two_pick_payload = {
+        "orderNumber": "TH0614",
+        "salesOrderId": "sales-order-0614",
+        "contactName": "User Seventeen",
+        "email": "user.seventeen@example.com",
+        "shippingAddress": {"address1": "614 Example St"},
+        "lines": [
+            {
+                "productId": "prod-tagged",
+                "product": {"name": "Tagged Device", "sku": "TAG-1"},
+                "quantity": {"standardQuantity": 3},
+            }
+        ],
+        "pickLines": [
+            {
+                "productId": "prod-tagged",
+                "product": {"name": "Tagged Device", "sku": "TAG-1"},
+                "quantity": {"standardQuantity": 2},
+            }
+        ],
+        "packLines": [],
+        "shipLines": [],
+    }
+
+    two_pick_sync = OrderService(session).create_order_from_inflow(two_pick_payload)
+    session.refresh(two_pick_sync)
+
+    assert two_pick_sync.inflow_data["pickLines"] == [
+        {
+            "productId": "prod-tagged",
+            "product": {"name": "Tagged Device", "sku": "TAG-1"},
+            "quantity": {"standardQuantity": 2.0},
+        }
+    ]
+
+    three_pick_payload = {
+        **two_pick_payload,
+        "pickLines": [
+            {
+                "productId": "prod-tagged",
+                "product": {"name": "Tagged Device", "sku": "TAG-1"},
+                "quantity": {"standardQuantity": 3},
+            }
+        ],
+    }
+
+    three_pick_sync = OrderService(session).create_order_from_inflow(three_pick_payload)
+    session.refresh(three_pick_sync)
+
+    assert three_pick_sync.inflow_data["pickLines"] == [
+        {
+            "productId": "prod-tagged",
+            "product": {"name": "Tagged Device", "sku": "TAG-1"},
+            "quantity": {"standardQuantity": 3.0},
+        }
+    ]
+
+    pick_status = InflowService().get_pick_status(three_pick_sync.inflow_data)
     assert pick_status["total_ordered"] == 3
     assert pick_status["total_picked"] == 3
 

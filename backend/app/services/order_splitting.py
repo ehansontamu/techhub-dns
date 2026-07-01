@@ -313,6 +313,31 @@ class OrderSplittingService:
                     child_pick_lines.append(deepcopy(line))
         return child_pick_lines
 
+    def _current_remainder_child_can_echo_picks(self, original_order: Order) -> bool:
+        """Return True when the latest child leg may bleed its own fulfilled picks back to the parent."""
+        child_order_id = getattr(original_order, "remainder_order_id", None)
+        if not child_order_id:
+            return False
+
+        child_order = self.db.query(Order).filter(Order.id == child_order_id).first()
+        if child_order is None:
+            return False
+
+        inflow_data = child_order.inflow_data if isinstance(child_order.inflow_data, dict) else {}
+        pack_lines = inflow_data.get("packLines") or []
+        ship_lines = inflow_data.get("shipLines") or []
+
+        if isinstance(pack_lines, list) and any(isinstance(line, dict) for line in pack_lines):
+            return True
+        if isinstance(ship_lines, list) and any(isinstance(line, dict) for line in ship_lines):
+            return True
+
+        child_status = str(getattr(child_order, "status", "") or "").strip().lower()
+        return child_status in {
+            OrderStatus.SHIPPING.value,
+            OrderStatus.DELIVERED.value,
+        }
+
     def _latest_recursive_child_shipped_at(self, original_order: Order) -> Optional[datetime]:
         if not original_order.id:
             return None
@@ -519,6 +544,34 @@ class OrderSplittingService:
             ]
         else:
             baseline_pick_lines = []
+
+        if not self._current_remainder_child_can_echo_picks(original_order):
+            if (
+                baseline_pick_lines
+                and self._line_quantity_total(current_pick_lines)
+                > self._line_quantity_total(current_lines) + 0.0001
+            ):
+                pick_lines_to_keep = self._subtract_lines(
+                    current_pick_lines,
+                    baseline_pick_lines,
+                )
+            elif cycle_started_at is not None and all_pick_lines_have_timestamps:
+                pick_lines_to_keep = fresh_pick_lines
+            elif cycle_started_at is not None and has_pick_timestamps and baseline_pick_lines:
+                pick_lines_to_keep = self._subtract_lines(
+                    current_pick_lines,
+                    baseline_pick_lines,
+                )
+            else:
+                pick_lines_to_keep = current_pick_lines
+
+            normalized["pickLines"] = self._restrict_lines_to_source(
+                pick_lines_to_keep,
+                current_lines,
+            )
+            normalized[self.REMAINDER_CYCLE_PENDING_RESET_KEY] = False
+            normalized[self.REMAINDER_CYCLE_LAST_SUPPRESSED_PICK_FINGERPRINT_KEY] = None
+            return normalized
 
         previous_snapshot_timestamp = original_snapshot.get("timestamp")
         current_snapshot_timestamp = normalized.get("timestamp")
