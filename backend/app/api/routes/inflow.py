@@ -9,6 +9,7 @@ import json
 
 from app.database import get_db
 from app.services.inflow_service import InflowService
+from app.services.inflow_sync_service import refresh_active_remainder_parent_orders
 from app.services.order_service import OrderService
 from app.services.background_tasks import BackgroundTaskService
 from app.api.routes.orders import _broadcast_orders_sync
@@ -49,6 +50,11 @@ def _run_inflow_sync():
         inflow_orders = inflow_service.sync_recent_started_orders_sync(
             max_pages=3, per_page=100, target_matches=100
         )
+        seen_order_numbers = {
+            str(order.get("orderNumber") or "").strip()
+            for order in inflow_orders
+            if order.get("orderNumber")
+        }
 
         orders_created = 0
         orders_updated = 0
@@ -84,11 +90,21 @@ def _run_inflow_sync():
         # Final commit for remaining orders
         db.commit()
 
+        remainder_refreshed = refresh_active_remainder_parent_orders(
+            db,
+            inflow_service,
+            order_service,
+            seen_order_numbers=seen_order_numbers,
+        )
+
     # Broadcast order updates via SocketIO
     broadcast_dedup.request_broadcast(_broadcast_orders_sync)
 
     logger.info(
-        f"Background Inflow sync completed: {orders_created} created, {orders_updated} updated"
+        "Background Inflow sync completed: %s created, %s updated, %s active remainders refreshed",
+        orders_created,
+        orders_updated,
+        remainder_refreshed,
     )
 
 

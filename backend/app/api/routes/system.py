@@ -23,6 +23,7 @@ from app.services.saml_auth_service import saml_auth_service
 from app.services.canopy_orders_uploader_service import CanopyOrdersUploaderService
 from app.services.graph_service import graph_service
 from app.services.inflow_service import InflowService
+from app.services.inflow_sync_service import refresh_active_remainder_parent_orders
 from app.database import get_db_session
 from app.models.system_setting import SystemSetting
 from app.models.order import Order
@@ -1883,13 +1884,16 @@ def sync_orders():
 
     # Sync recent started orders
     # We use sync version because this is a blocking HTTP request
-    from app.database import get_db_session
-
     db = get_db_session()
 
     try:
         # First fetch orders from Inflow
         orders = service.sync_recent_started_orders_sync(max_pages=3, target_matches=50)
+        seen_order_numbers = {
+            str(order.get("orderNumber") or "").strip()
+            for order in orders
+            if order.get("orderNumber")
+        }
 
         # Then create/update them in local DB
         from app.services.order_service import OrderService
@@ -1909,11 +1913,22 @@ def sync_orders():
                     f"Failed to sync order {order_data.get('orderNumber')}: {e}"
                 )
 
+        remainder_refreshed = refresh_active_remainder_parent_orders(
+            db,
+            service,
+            order_service,
+            seen_order_numbers=seen_order_numbers,
+        )
+
         return jsonify(
             {
                 "success": True,
-                "message": f"Synced {synced_count} orders from Inflow",
+                "message": (
+                    f"Synced {synced_count} orders from Inflow; "
+                    f"refreshed {remainder_refreshed} active remainder order(s)"
+                ),
                 "count": synced_count,
+                "remainder_refreshed": remainder_refreshed,
             }
         )
     finally:

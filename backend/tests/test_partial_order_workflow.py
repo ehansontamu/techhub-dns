@@ -27,6 +27,7 @@ sys.path.append(str(backend_path))
 from app.database import Base
 from app.models.order import Order, OrderStatus
 from app.services.inflow_service import InflowService
+from app.services.inflow_sync_service import refresh_active_remainder_parent_orders
 from app.services.order_service import OrderService
 from app.services.order_splitting import OrderSplittingService
 from app.utils.exceptions import ValidationError
@@ -4012,6 +4013,121 @@ def test_recursive_same_product_remainder_uses_cumulative_pick_baseline():
 
     pick_status = InflowService().get_pick_status(final_remainder_sync.inflow_data)
     assert pick_status["total_ordered"] == 3
+    assert pick_status["total_picked"] == 3
+
+    session.close()
+    engine.dispose()
+
+
+def test_active_remainder_sync_refreshes_parent_by_exact_order_number():
+    """Known remainder parents should refresh even when they are absent from the recent sync window."""
+
+    session, engine = _make_sqlite_session()
+    parent_order = Order(
+        id="order-parent-exact-remainder-refresh",
+        inflow_order_id="TH0616",
+        inflow_sales_order_id="sales-order-0616",
+        recipient_name="User Nineteen",
+        recipient_contact="user.nineteen@example.com",
+        delivery_location="Building 616",
+        po_number="PO-0616",
+        status=OrderStatus.PICKED.value,
+        tagged_by="tech@example.com",
+        inflow_data={
+            "orderNumber": "TH0616",
+            "contactName": "User Nineteen",
+            "email": "user.nineteen@example.com",
+            "shippingAddress": {"address1": "616 Example St"},
+            "lines": [
+                {
+                    "productId": "prod-monitor",
+                    "product": {"name": "Monitor", "sku": "MON-1"},
+                    "quantity": {"standardQuantity": "8"},
+                }
+            ],
+            "pickLines": [
+                {
+                    "productId": "prod-monitor",
+                    "product": {"name": "Monitor", "sku": "MON-1"},
+                    "quantity": {"standardQuantity": "2"},
+                }
+            ],
+        },
+    )
+    session.add(parent_order)
+    session.commit()
+
+    splitting_service = OrderSplittingService(session)
+    first_child = splitting_service.create_partial_picklist_leg(
+        parent_order,
+        user_id="tech@example.com",
+    )
+    session.refresh(parent_order)
+    session.refresh(first_child)
+
+    assert first_child is not None
+    assert parent_order.inflow_data["pickLines"] == []
+
+    refreshed_payload = {
+        "orderNumber": "TH0616",
+        "salesOrderId": "sales-order-0616",
+        "inventoryStatus": "started",
+        "contactName": "User Nineteen",
+        "email": "user.nineteen@example.com",
+        "shippingAddress": {"address1": "616 Example St"},
+        "lines": [
+            {
+                "productId": "prod-monitor",
+                "product": {"name": "Monitor", "sku": "MON-1"},
+                "quantity": {"standardQuantity": "8"},
+            }
+        ],
+        "pickLines": [
+            {
+                "productId": "prod-monitor",
+                "product": {"name": "Monitor", "sku": "MON-1"},
+                "quantity": {"standardQuantity": "5"},
+            }
+        ],
+        "packLines": [],
+        "shipLines": [],
+    }
+
+    class FakeInflowService:
+        def __init__(self) -> None:
+            self.requested_order_numbers: list[str] = []
+
+        def get_order_by_number_sync(self, order_number: str) -> dict[str, Any] | None:
+            self.requested_order_numbers.append(order_number)
+            if order_number == "TH0616":
+                return refreshed_payload
+            return None
+
+        def is_started_and_picked(self, order: dict[str, Any]) -> bool:
+            return bool(order.get("pickLines"))
+
+    fake_inflow_service = FakeInflowService()
+
+    refreshed_count = refresh_active_remainder_parent_orders(
+        session,
+        cast(Any, fake_inflow_service),
+        OrderService(session),
+        seen_order_numbers=set(),
+    )
+    session.refresh(parent_order)
+
+    assert refreshed_count == 1
+    assert fake_inflow_service.requested_order_numbers == ["TH0616"]
+    assert parent_order.inflow_data["pickLines"] == [
+        {
+            "productId": "prod-monitor",
+            "product": {"name": "Monitor", "sku": "MON-1"},
+            "quantity": {"standardQuantity": 3.0},
+        }
+    ]
+
+    pick_status = InflowService().get_pick_status(parent_order.inflow_data)
+    assert pick_status["total_ordered"] == 6
     assert pick_status["total_picked"] == 3
 
     session.close()
