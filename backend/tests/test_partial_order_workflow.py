@@ -26,6 +26,7 @@ sys.path.append(str(backend_path))
 
 from app.database import Base
 from app.models.order import Order, OrderStatus
+from app.models.system_setting import SystemSetting
 from app.services.inflow_service import InflowService
 from app.services.order_service import OrderService
 from app.services.order_splitting import OrderSplittingService
@@ -2187,9 +2188,13 @@ def test_partial_split_moves_tag_state_to_child_and_remainder_can_retag_when_ful
     session.commit()
 
     order_service = OrderService(session)
-    refreshed_parent = order_service.mark_asset_tagged(
-        parent_order.id, ["TAG-20"], technician="tech2@example.com"
-    )
+    with patch(
+        "app.services.order_service.SystemSettingService.is_setting_enabled",
+        return_value=True,
+    ):
+        refreshed_parent = order_service.mark_asset_tagged(
+            parent_order.id, ["TAG-20"], technician="tech2@example.com"
+        )
 
     assert refreshed_parent.tagged_at is not None
     assert refreshed_parent.tagged_by == "tech2@example.com"
@@ -2264,7 +2269,11 @@ def test_fully_picked_remainder_still_requires_asset_tags_after_prior_pack_lines
 
     order_service = OrderService(session)
 
-    assert order_service._requires_asset_tags(parent_order) is True
+    with patch(
+        "app.services.order_service.SystemSettingService.is_setting_enabled",
+        return_value=True,
+    ):
+        assert order_service._requires_asset_tags(parent_order) is True
 
     session.close()
     engine.dispose()

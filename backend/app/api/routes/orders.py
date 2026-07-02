@@ -128,12 +128,58 @@ def _resolve_asset_tag_required(
     return data
 
 
+def _build_pick_status_data(
+    order,
+    db_session=None,
+    inflow_service: Optional[InflowService] = None,
+):
+    if not getattr(order, "inflow_data", None):
+        return None
+
+    effective_session = db_session or object_session(order)
+    pick_status_source = order.inflow_data
+    if (
+        getattr(order, "remainder_order_id", None)
+        and not getattr(order, "parent_order_id", None)
+        and effective_session is not None
+    ):
+        remainder_pick_source = OrderSplittingService(
+            effective_session
+        ).build_parent_remainder_pick_status_source(order)
+        if remainder_pick_source is not None:
+            pick_status_source = remainder_pick_source
+
+    service = inflow_service or InflowService()
+    return service.get_pick_status(pick_status_source)
+
+
 def _order_response_json(order, db_session=None) -> dict:
-    data = current_app.json.loads(OrderResponse.model_validate(order).model_dump_json())
+    inflow_service = InflowService() if getattr(order, "inflow_data", None) else None
+    response_model = OrderResponse.model_validate(order)
+    pick_status_data = None
+    if inflow_service is not None:
+        try:
+            pick_status_data = _build_pick_status_data(
+                order,
+                db_session,
+                inflow_service,
+            )
+            if pick_status_data is not None:
+                response_model = response_model.model_copy(
+                    update={"pick_status": PickStatus.model_validate(pick_status_data)}
+                )
+        except Exception as exc:
+            logger.warning(
+                "Failed to compute pick_status for order response %s: %s",
+                getattr(order, "inflow_order_id", None) or getattr(order, "id", None),
+                exc,
+            )
+
+    data = current_app.json.loads(response_model.model_dump_json())
     data = _resolve_asset_tag_required(
         data,
         order,
-        InflowService() if getattr(order, "inflow_data", None) else None,
+        inflow_service,
     )
     return _resolve_order_user_fields(data, db_session)
 
@@ -355,14 +401,22 @@ def get_orders():
             pick_status_data = None
 
             # Compute pick_status from inflow_data if available
-            if include_pick_status and o.inflow_data:
+            should_include_pick_status = bool(
+                o.inflow_data
+                and (
+                    include_pick_status
+                    or o.parent_order_id
+                    or o.remainder_order_id
+                    or o.has_remainder
+                )
+            )
+            if should_include_pick_status:
                 try:
-                    pick_status_source = o.inflow_data
-                    if o.remainder_order_id and not o.parent_order_id:
-                        remainder_pick_source = OrderSplittingService(db).build_parent_remainder_pick_status_source(o)
-                        if remainder_pick_source is not None:
-                            pick_status_source = remainder_pick_source
-                    pick_status_data = inflow_service.get_pick_status(pick_status_source)
+                    pick_status_data = _build_pick_status_data(
+                        o,
+                        db,
+                        inflow_service,
+                    )
                 except Exception as exc:
                     logger.warning(
                         "Failed to compute pick_status for order %s: %s",
