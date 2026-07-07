@@ -430,9 +430,7 @@ def get_tag_request_candidates():
     search = (request.args.get("search") or "").strip()
 
     with get_db() as db:
-        inflow_service = InflowService()
         order_service = OrderService(db)
-        asset_tag_requirement_cache: dict[tuple[object, ...], bool] = {}
         query = (
             db.query(Order)
             .filter(Order.hidden_from_ops.is_(False))
@@ -458,10 +456,7 @@ def get_tag_request_candidates():
         for order in candidates:
             if not order.inflow_data:
                 continue
-            if not inflow_service.requires_asset_tags_cached(
-                order.inflow_data,
-                asset_tag_requirement_cache,
-            ):
+            if not order_service._requires_asset_tags(order):
                 continue
             if order_service._parent_remainder_has_unpicked_items(order):
                 continue
