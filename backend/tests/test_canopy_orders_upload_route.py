@@ -116,3 +116,58 @@ def test_partial_leg_canopy_upload_uses_parent_order_number(monkeypatch):
     finally:
         engine.dispose()
         temp_dir.cleanup()
+
+
+def test_remainder_order_without_taggable_items_is_ineligible(monkeypatch):
+    temp_dir, engine, session_factory = _make_session_factory()
+    try:
+        session = session_factory()
+        order = Order(
+            inflow_order_id="TH6002",
+            status=OrderStatus.PICKED.value,
+            has_remainder="Y",
+            remainder_order_id="child-order-2",
+            inflow_data={"lines": [{"productId": "prod-aio"}]},
+        )
+        session.add(order)
+        session.commit()
+        session.close()
+
+        class _FakeUploader:
+            def upload_orders(self, orders):
+                raise AssertionError(f"Upload should not run for ineligible orders: {orders}")
+
+            def send_teams_notification(self, orders, uploaded_url):
+                raise AssertionError(
+                    f"Notification should not run for ineligible orders: {orders}, {uploaded_url}"
+                )
+
+        monkeypatch.setattr(system_routes, "get_db_session", session_factory)
+        monkeypatch.setattr(
+            system_routes, "CanopyOrdersUploaderService", lambda: _FakeUploader()
+        )
+
+        app = Flask(__name__)
+        with app.test_request_context(
+            "/api/system/canopyorders/upload",
+            method="POST",
+            json={"orders": ["TH6002"]},
+        ):
+            with patch.object(
+                system_routes.OrderService,
+                "_requires_asset_tags",
+                return_value=False,
+            ):
+                response = system_routes.upload_canopy_orders.__wrapped__()
+
+        payload = response.get_json() or {}
+        assert response.status_code == 400
+        assert payload["error"] == "One or more orders are not eligible for upload."
+        assert payload["eligible_orders"] == []
+        assert payload["missing_orders"] == []
+        assert payload["ineligible_orders"] == [
+            {"order": "TH6002", "reason": "not asset-tag required"}
+        ]
+    finally:
+        engine.dispose()
+        temp_dir.cleanup()
