@@ -176,6 +176,36 @@ export default function OrderDetailPage() {
         },
     });
 
+    const rmaReopenMutation = useMutation({
+        mutationFn: ({ reason, expectedUpdatedAt }: {
+            reason: string;
+            expectedUpdatedAt?: string;
+        }) => {
+            if (!orderId) {
+                throw new Error("Order id is required");
+            }
+
+            return ordersApi.rmaReopenOrder(orderId, {
+                reason,
+                expected_updated_at: expectedUpdatedAt,
+            });
+        },
+        onSuccess: async () => {
+            await refreshOrder();
+        },
+        onError: async (error: unknown) => {
+            console.error("Failed to reopen order for RMA:", error);
+            if (isAxiosError(error) && error.response?.status === 409) {
+                toast.error("Order changed by another user. Reloaded the latest details.");
+                await refreshOrder();
+                return;
+            }
+
+            const message = extractApiErrorMessage(error, "Failed to reopen order for RMA");
+            toast.error(message);
+        },
+    });
+
     const tagOrderMutation = useMutation({
         mutationFn: (tagIds: string[]) => {
             if (!orderId || !order) {
@@ -424,6 +454,14 @@ export default function OrderDetailPage() {
         await dismissOrderMutation.mutateAsync({ reason, removeSharePointFiles });
     };
 
+    const handleRmaReopen = async (reason: string) => {
+        if (!order) return;
+        await rmaReopenMutation.mutateAsync({
+            reason,
+            expectedUpdatedAt: order.updated_at,
+        });
+    };
+
     const handleArchiveOrder = async (reason: string) => {
         if (!order) return;
         await archiveOrderMutation.mutateAsync({ reason });
@@ -507,6 +545,7 @@ export default function OrderDetailPage() {
                             canDismissOrder={isAdmin}
                             onDismissOrder={handleDismissOrder}
                             onArchiveOrder={handleArchiveOrder}
+                            onRmaReopen={handleRmaReopen}
                             onStatusChange={handleStatusChange}
                             onRollbackStatus={handleRollbackStatus}
                             onTagOrder={handleTagOrder}

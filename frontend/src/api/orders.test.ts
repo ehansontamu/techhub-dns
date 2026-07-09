@@ -96,3 +96,36 @@ describe("ordersApi.rollbackOrderStatus", () => {
     );
   });
 });
+
+describe("ordersApi.rmaReopenOrder", () => {
+  beforeEach(() => {
+    patchMock.mockReset();
+  });
+
+  it("calls the RMA reopen endpoint with normalized payload and changed_by query param", async () => {
+    patchMock.mockResolvedValue({ data: { id: "order-3" } });
+
+    const result = await ordersApi.rmaReopenOrder(
+      "order-3",
+      {
+        reason: "Returned item replaced",
+        expected_updated_at: "2026-07-09T20:00:00Z",
+      },
+      "ops@example.com",
+    );
+
+    expect(patchMock).toHaveBeenCalledWith(
+      "/orders/order-3/rma-reopen",
+      {
+        reason: "Returned item replaced",
+        expected_updated_at: "2026-07-09T20:00:00Z",
+      },
+      {
+        params: {
+          changed_by: "ops@example.com",
+        },
+      },
+    );
+    expect(result).toEqual({ id: "order-3" });
+  });
+});

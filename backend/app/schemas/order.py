@@ -77,6 +77,11 @@ class OrderRollbackUpdate(BaseModel):
     expected_updated_at: Optional[datetime] = None
 
 
+class OrderRmaReopenRequest(BaseModel):
+    reason: str = Field(min_length=1)
+    expected_updated_at: Optional[datetime] = None
+
+
 class AssetTagUpdate(BaseModel):
     tag_ids: List[str] = Field(default_factory=list)
     technician: Optional[str] = None

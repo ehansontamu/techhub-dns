@@ -1630,6 +1630,165 @@ class OrderService:
 
         return order
 
+    def rma_reopen_order(
+        self,
+        order_id: Union[UUID, str],
+        *,
+        changed_by: Optional[str],
+        reason: str,
+        expected_updated_at: Optional[datetime] = None,
+    ) -> Order:
+        """Refresh a delivered order from Inflow and reopen it to picked for an RMA workflow."""
+        order = self._resolve_order(str(order_id), lock=True)
+        if not order:
+            raise NotFoundError("Order", str(order_id))
+
+        self.assert_not_stale(order, expected_updated_at)
+
+        if order.status != OrderStatus.DELIVERED.value:
+            raise ValidationError(
+                "RMA reopen is only available for delivered orders",
+                details={
+                    "order_id": order.inflow_order_id,
+                    "current_status": order.status,
+                },
+            )
+
+        reason = reason.strip()
+        if not reason:
+            raise ValidationError("Reason is required when reopening an order for RMA")
+
+        from app.services.inflow_service import InflowService
+
+        inflow_service = InflowService()
+        inflow_snapshot = None
+        if order.inflow_sales_order_id:
+            inflow_snapshot = inflow_service.get_order_by_id_sync(
+                str(order.inflow_sales_order_id)
+            )
+        if inflow_snapshot is None and order.inflow_order_id:
+            inflow_snapshot = inflow_service.get_order_by_number_sync(
+                order.inflow_order_id
+            )
+        if inflow_snapshot is None:
+            raise ValidationError(
+                "Unable to refresh the latest Inflow order snapshot for this RMA reopen",
+                details={"order_id": order.inflow_order_id},
+            )
+
+        refreshed_snapshot = deepcopy(inflow_snapshot)
+        refreshed_snapshot["packLines"] = []
+        refreshed_snapshot["shipLines"] = []
+
+        old_status = order.status
+        prior_state = {
+            "status": order.status,
+            "delivery_run_id": order.delivery_run_id,
+            "delivery_sequence": order.delivery_sequence,
+            "picklist_generated_at": to_utc_iso_z(order.picklist_generated_at),
+            "picklist_path": order.picklist_path,
+            "qa_completed_at": to_utc_iso_z(order.qa_completed_at),
+            "signature_captured_at": to_utc_iso_z(order.signature_captured_at),
+            "shipping_workflow_status": order.shipping_workflow_status,
+            "tagged_at": to_utc_iso_z(order.tagged_at),
+        }
+
+        order.inflow_data = refreshed_snapshot
+        order.status = OrderStatus.PICKED.value
+        order.updated_at = datetime.utcnow()
+        order.issue_reason = None
+        order.delivery_run_id = None
+        order.delivery_sequence = None
+        order.assigned_deliverer = None
+
+        order.shipping_workflow_status = ShippingWorkflowStatus.WORK_AREA.value
+        order.shipping_workflow_status_updated_at = None
+        order.shipping_workflow_status_updated_by = None
+        order.shipped_to_carrier_at = None
+        order.shipped_to_carrier_by = None
+        order.carrier_name = None
+        order.tracking_number = None
+
+        order.signature_captured_at = None
+        order.signed_picklist_path = None
+        order.bundle_path = None
+
+        order.tagged_at = None
+        order.tagged_by = None
+        order.tag_data = None
+
+        order.picklist_generated_at = None
+        order.picklist_generated_by = None
+        order.picklist_path = None
+
+        order.order_details_path = None
+        order.order_details_generated_at = None
+        order.order_details_email_status = None
+        order.order_details_email_status_updated_at = None
+
+        order.qa_completed_at = None
+        order.qa_completed_by = None
+        order.qa_data = None
+        order.qa_path = None
+        order.qa_method = None
+
+        audit_log = AuditLog(
+            order_id=order.id,
+            changed_by=changed_by,
+            from_status=old_status,
+            to_status=OrderStatus.PICKED.value,
+            reason=reason,
+            timestamp=datetime.utcnow(),
+            extra_metadata={
+                "action": "rma_reopen",
+                "refreshed_from_inflow": True,
+                "cleared_pack_lines": True,
+                "cleared_ship_lines": True,
+                "pick_line_count": len(refreshed_snapshot.get("pickLines", []) or []),
+            },
+        )
+        self.db.add(audit_log)
+        self._record_status_history(
+            order=order,
+            from_status=old_status,
+            to_status=OrderStatus.PICKED.value,
+            actor_identifier=changed_by,
+            metadata={
+                "reason": reason,
+                "rma_reopen": True,
+                "refreshed_from_inflow": True,
+                "cleared_pack_lines": True,
+                "cleared_ship_lines": True,
+            },
+        )
+
+        audit_service = AuditService(self.db)
+        audit_service.log_order_action(
+            order_id=str(order.id),
+            action="rma_reopen",
+            user_id=changed_by or "system",
+            description="Delivered order reopened to picked for RMA processing",
+            old_value=prior_state,
+            new_value={
+                "status": order.status,
+                "delivery_run_id": order.delivery_run_id,
+                "delivery_sequence": order.delivery_sequence,
+                "shipping_workflow_status": order.shipping_workflow_status,
+                "pick_line_count": len(refreshed_snapshot.get("pickLines", []) or []),
+                "pack_line_count": len(refreshed_snapshot.get("packLines", []) or []),
+                "ship_line_count": len(refreshed_snapshot.get("shipLines", []) or []),
+            },
+            audit_metadata={
+                "reason": reason,
+                "refreshed_from_inflow": True,
+                "inflow_order_id": order.inflow_order_id,
+            },
+        )
+
+        self.db.commit()
+        self.db.refresh(order)
+        return order
+
     def _is_valid_transition(self, from_status: str, to_status: str) -> bool:
         """Validate status transition"""
         valid_transitions = {

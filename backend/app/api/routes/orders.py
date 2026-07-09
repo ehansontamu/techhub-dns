@@ -22,6 +22,7 @@ from app.schemas.order import (
     OrderDismissRequest,
     OrderStatusUpdate,
     OrderRollbackUpdate,
+    OrderRmaReopenRequest,
     BulkStatusUpdate,
     OrderUpdate,
     AssetTagUpdate,
@@ -811,6 +812,28 @@ def rollback_order_status(order_id):
             changed_by=changed_by,
             reason=rollback_update.reason,
             expected_updated_at=rollback_update.expected_updated_at,
+        )
+
+        broadcast_dedup.request_broadcast(_broadcast_orders_sync)
+
+        return jsonify(_order_response_json(order, db))
+
+
+@bp.route("/<order_id>/rma-reopen", methods=["PATCH"])
+@require_auth
+def rma_reopen_order(order_id):
+    """Refresh a delivered order from Inflow and reopen it to picked for RMA processing."""
+    data = request.get_json() or {}
+    changed_by = request.args.get("changed_by") or get_current_user_display_name()
+
+    with get_db() as db:
+        service = OrderService(db)
+        reopen_request = OrderRmaReopenRequest(**data)
+        order = service.rma_reopen_order(
+            order_id=order_id,
+            changed_by=changed_by,
+            reason=reopen_request.reason,
+            expected_updated_at=reopen_request.expected_updated_at,
         )
 
         broadcast_dedup.request_broadcast(_broadcast_orders_sync)

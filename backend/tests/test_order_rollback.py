@@ -13,6 +13,8 @@ sys.path.append(".")
 
 from app.models.order import OrderStatus, ShippingWorkflowStatus
 from app.services.order_service import OrderService
+import app.services.inflow_service as inflow_service_module
+import app.services.order_service as order_service_module
 from app.utils.exceptions import ValidationError
 
 
@@ -55,6 +57,7 @@ def build_order(status: OrderStatus):
     return SimpleNamespace(
         id="order-1",
         inflow_order_id="TH123",
+        inflow_sales_order_id="sales-123",
         status=status.value,
         issue_reason="Needs review",
         delivery_run_id="run-1",
@@ -82,6 +85,9 @@ def build_order(status: OrderStatus):
         picklist_path="/tmp/picklist.pdf",
         order_details_path="/tmp/order-details.pdf",
         order_details_generated_at=now,
+        order_details_email_status="sent",
+        order_details_email_status_updated_at=now,
+        inflow_data={"pickLines": [{"productId": "old-product"}], "packLines": [{"productId": "old-product"}], "shipLines": [{"productId": "old-product"}]},
         updated_at=now,
     )
 
@@ -164,8 +170,64 @@ def test_rollback_rejects_forward_transition():
     print("[PASS] rollback rejects forward status changes")
 
 
+def test_rma_reopen_refreshes_snapshot_and_resets_workflow(monkeypatch):
+    order = build_order(OrderStatus.DELIVERED)
+    db = FakeDb(order)
+    service = OrderService(db)
+
+    refreshed_snapshot = {
+        "orderNumber": "TH123",
+        "pickLines": [{"productId": "new-product"}],
+        "packLines": [{"productId": "new-product"}],
+        "shipLines": [{"productId": "new-product"}],
+    }
+    captured_audit = {}
+
+    class FakeInflowService:
+        def get_order_by_id_sync(self, sales_order_id):
+            assert sales_order_id == "sales-123"
+            return refreshed_snapshot
+
+        def get_order_by_number_sync(self, order_number):
+            raise AssertionError("Should prefer sales_order_id when available")
+
+    class FakeAuditService:
+        def __init__(self, db_session):
+            captured_audit["db"] = db_session
+
+        def log_order_action(self, **kwargs):
+            captured_audit["kwargs"] = kwargs
+
+    monkeypatch.setattr(inflow_service_module, "InflowService", FakeInflowService)
+    monkeypatch.setattr(order_service_module, "AuditService", FakeAuditService)
+
+    result = service.rma_reopen_order(
+        order_id=order.id,
+        changed_by="ops@example.com",
+        reason="Returned device replaced with new serial",
+    )
+
+    assert result.status == OrderStatus.PICKED.value
+    assert result.picklist_generated_at is None
+    assert result.qa_completed_at is None
+    assert result.signature_captured_at is None
+    assert result.tagged_at is None
+    assert result.shipping_workflow_status == ShippingWorkflowStatus.WORK_AREA.value
+    assert result.inflow_data["pickLines"] == [{"productId": "new-product"}]
+    assert result.inflow_data["packLines"] == []
+    assert result.inflow_data["shipLines"] == []
+    assert db.committed is True
+    assert db.refreshed is result
+    assert len(db.added) == 2
+    assert db.added[0].extra_metadata["action"] == "rma_reopen"
+    assert db.added[1].status_metadata["rma_reopen"] is True
+    assert captured_audit["kwargs"]["action"] == "rma_reopen"
+    print("[PASS] rma reopen refreshes inflow snapshot and resets workflow")
+
+
 if __name__ == "__main__":
     test_rollback_to_pre_delivery_clears_delivery_and_shipping_state()
     test_rollback_to_qa_clears_qa_state()
     test_rollback_rejects_forward_transition()
+    test_rma_reopen_refreshes_snapshot_and_resets_workflow(pytest.MonkeyPatch())
     print("[SUCCESS] order rollback regression tests passed!")
