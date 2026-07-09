@@ -16,7 +16,7 @@ import StatusTransition from "../components/StatusTransition";
 import { Button } from "../components/ui/button";
 import { useOrdersWebSocket } from "../hooks/useOrdersWebSocket";
 
-import { getOrderAuditQueryOptions, getOrderDetailQueryOptions, getOrdersListQueryOptions, invalidateOrderQueries } from "../queries/orders";
+import { getOrderAuditQueryOptions, getOrderDetailQueryOptions, getOrdersListQueryOptions, invalidateOrderQueries, ordersQueryKeys } from "../queries/orders";
 import { OrderStatus } from "../types/order";
 import { extractApiErrorMessage, shouldThrowToBoundary } from "../utils/apiErrors";
 import { isValidOrderId } from "../utils/orderIds";
@@ -190,7 +190,11 @@ export default function OrderDetailPage() {
                 expected_updated_at: expectedUpdatedAt,
             });
         },
-        onSuccess: async () => {
+        onSuccess: async (updatedOrder) => {
+            if (orderId) {
+                queryClient.setQueryData(ordersQueryKeys.detail(orderId), updatedOrder);
+            }
+            await queryClient.invalidateQueries({ queryKey: ordersQueryKeys.lists() });
             await refreshOrder();
         },
         onError: async (error: unknown) => {
