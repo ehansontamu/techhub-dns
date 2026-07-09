@@ -238,14 +238,14 @@ export default function OrderDetailPage() {
     });
 
     const generatePicklistMutation = useMutation({
-        mutationFn: ({ createPartialLeg }: { createPartialLeg?: boolean } = {}) => {
+        mutationFn: ({ createPartialLeg, expectedUpdatedAt }: { createPartialLeg?: boolean; expectedUpdatedAt?: string } = {}) => {
             if (!orderId || !order) {
                 throw new Error("Order is unavailable");
             }
 
             return ordersApi.generatePicklist(orderId, {
                 generated_by: getUserName(),
-                expected_updated_at: order.updated_at,
+                expected_updated_at: expectedUpdatedAt ?? order.updated_at,
                 create_partial_leg: createPartialLeg,
                 confirm_create_partial_leg: createPartialLeg,
             });
@@ -269,12 +269,39 @@ export default function OrderDetailPage() {
 
             await refreshOrder();
         },
-        onError: async (error: unknown) => {
+        onError: async (error: unknown, variables) => {
             console.error("Failed to generate picklist:", error);
-            if (isAxiosError(error) && error.response?.status === 409) {
-                toast.error("Order changed by another user. Reloaded the latest details.");
-                await refreshOrder();
-                return;
+            if (isAxiosError(error) && error.response?.status === 409 && orderId) {
+                try {
+                    const latestOrder = await queryClient.fetchQuery(getOrderDetailQueryOptions(orderId));
+                    const updatedOrder = await ordersApi.generatePicklist(orderId, {
+                        generated_by: getUserName(),
+                        expected_updated_at: latestOrder.updated_at,
+                        create_partial_leg: variables?.createPartialLeg,
+                        confirm_create_partial_leg: variables?.createPartialLeg,
+                    });
+
+                    await queryClient.invalidateQueries({ queryKey: ["orders"] });
+
+                    const nextOrderId = updatedOrder?.id;
+                    if (nextOrderId && nextOrderId !== orderId) {
+                        await invalidateOrderQueries(queryClient, nextOrderId);
+                        navigate(`/orders/${nextOrderId}`, {
+                            state: locationState ?? undefined,
+                            replace: true,
+                        });
+                        return;
+                    }
+
+                    await refreshOrder();
+                    toast.success("Order refreshed from the latest Inflow update before generating the picklist.");
+                    return;
+                } catch (retryError) {
+                    console.error("Failed to retry picklist generation after refresh:", retryError);
+                    toast.error("Order changed by another user. Reloaded the latest details.");
+                    await refreshOrder();
+                    return;
+                }
             }
 
             const message = extractApiErrorMessage(error, "Failed to generate picklist");
