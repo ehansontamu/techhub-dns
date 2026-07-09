@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 from flask import Blueprint, request, jsonify, abort, send_file, current_app, g
 from flask_socketio import emit
 from sqlalchemy import or_, func
@@ -485,8 +486,441 @@ def get_tag_request_candidates():
 
     with get_db() as db:
         inflow_service = InflowService()
-        order_service = OrderService(db)
+=======
+from flask import Blueprint, request, jsonify, abort, send_file, current_app, g
+from flask_socketio import emit
+from sqlalchemy import or_, func
+from sqlalchemy.orm import Session, object_session
+from typing import Optional, List
+from uuid import UUID
+from pathlib import Path
+from datetime import datetime
+
+from app.database import get_db
+from app.models.user import User
+from app.services.order_service import OrderService
+from app.services.order_splitting import OrderSplittingService
+from app.services.inflow_service import InflowService
+from app.services.audit_service import AuditService
+from app.utils.broadcast_dedup import broadcast_dedup
+
+from app.schemas.order import (
+    OrderResponse,
+    OrderDetailResponse,
+    OrderArchiveRequest,
+    OrderDismissRequest,
+    OrderStatusUpdate,
+    OrderRollbackUpdate,
+    BulkStatusUpdate,
+    OrderUpdate,
+    AssetTagUpdate,
+    PicklistGenerationRequest,
+    QASubmission,
+    SignatureData,
+    ShippingWorkflowUpdateRequest,
+    ShippingWorkflowResponse,
+    PickStatus,
+    PickerOptionResponse,
+    PickerOverrideRequest,
+)
+from app.models.order import OrderStatus
+from app.models.order import Order
+from app.models.delivery_run import VehicleEnum
+from app.schemas.audit import AuditLogResponse
+from app.utils.exceptions import (
+    ConflictError,
+    DNSApiError,
+    NotFoundError,
+    ValidationError,
+)
+from app.utils.display_labels import resolve_runner_display, resolve_user_display
+from app.utils.timezone import to_utc_iso_z
+from app.api.auth_middleware import (
+    get_current_user_display_name,
+    get_current_user_email,
+    get_effective_allowed_user_email_allowlist,
+    require_auth,
+    require_admin,
+)
+import logging
+
+bp = Blueprint("orders", __name__)
+bp.strict_slashes = False
+logger = logging.getLogger(__name__)
+
+# Simple in-memory broadcaster for SocketIO clients
+_order_clients = set()
+
+
+def _resolve_order_user_fields(data: dict, db_session) -> dict:
+    """Resolve raw email/user identifiers to display names in order response data."""
+    if not db_session:
+        return data
+    user_fields = [
+        "assigned_deliverer",
+        "tagged_by",
+        "picklist_generated_by",
+        "qa_completed_by",
+        "shipping_workflow_status_updated_by",
+        "shipped_to_carrier_by",
+    ]
+    for field in user_fields:
+        raw = data.get(field)
+        if raw and isinstance(raw, str) and "@" in raw:
+            data[field] = resolve_user_display(db_session, raw)
+    return data
+
+
+def _resolve_asset_tag_required(
+    data: dict,
+    order,
+    inflow_service: Optional[InflowService] = None,
+    asset_tag_requirement_cache: Optional[dict[tuple[object, ...], bool]] = None,
+) -> dict:
+    inflow_data = getattr(order, "inflow_data", None)
+    if not inflow_data:
+        data["asset_tag_required"] = False
+        return data
+
+    tag_requirement_source = inflow_data
+    if getattr(order, "remainder_order_id", None) and not getattr(
+        order, "parent_order_id", None
+    ):
+        db_session = object_session(order)
+        if db_session is not None:
+            remainder_view = OrderSplittingService(db_session).build_parent_remainder_document_view(
+                order
+            )
+            if remainder_view is not None:
+                tag_requirement_source = remainder_view
+
+    try:
+        if inflow_service is not None and asset_tag_requirement_cache is not None:
+            data["asset_tag_required"] = inflow_service.requires_asset_tags_cached(
+                tag_requirement_source,
+                asset_tag_requirement_cache,
+            )
+        elif inflow_service is not None:
+            data["asset_tag_required"] = inflow_service.requires_asset_tags(
+                tag_requirement_source
+            )
+        else:
+            data["asset_tag_required"] = False
+    except Exception as exc:
+        logger.warning(
+            "Failed to compute asset_tag_required for order %s: %s",
+            getattr(order, "inflow_order_id", None) or getattr(order, "id", None),
+            exc,
+        )
+        data["asset_tag_required"] = False
+
+    return data
+
+
+def _order_response_json(order, db_session=None) -> dict:
+    data = current_app.json.loads(OrderResponse.model_validate(order).model_dump_json())
+    data = _resolve_asset_tag_required(
+        data,
+        order,
+        InflowService() if getattr(order, "inflow_data", None) else None,
+    )
+    return _resolve_order_user_fields(data, db_session)
+
+
+def _order_detail_response_json(order, db_session=None) -> dict:
+    data = current_app.json.loads(
+        OrderDetailResponse.model_validate(order).model_dump_json()
+    )
+    inflow_service = InflowService() if getattr(order, "inflow_data", None) else None
+    if db_session:
+        linked_ids = {
+            "parent_order_id": data.get("parent_order_id"),
+            "remainder_order_id": data.get("remainder_order_id"),
+        }
+        for relation_field, linked_order_id in linked_ids.items():
+            inflow_field = relation_field.replace("_order_id", "_inflow_order_id")
+            if not linked_order_id:
+                data[inflow_field] = None
+                continue
+            linked_order = db_session.query(Order).filter(Order.id == linked_order_id).first()
+            data[inflow_field] = linked_order.inflow_order_id if linked_order else None
+    data = _resolve_asset_tag_required(data, order, inflow_service)
+    return _resolve_order_user_fields(data, db_session)
+
+
+def _get_current_user_display_name() -> str:
+    return get_current_user_display_name()
+
+
+def _order_list_item_json(order, pick_status_data=None) -> str:
+    response_model = OrderResponse.model_validate(order)
+    if pick_status_data is not None:
+        try:
+            response_model = response_model.model_copy(
+                update={"pick_status": PickStatus.model_validate(pick_status_data)}
+            )
+        except Exception as exc:
+            logger.warning(
+                "Skipping invalid pick_status for order %s: %s",
+                getattr(order, "inflow_order_id", None) or getattr(order, "id", None),
+                exc,
+            )
+    return response_model.model_dump_json()
+
+
+def _serialize_utc_datetime(value: Optional[datetime]) -> Optional[str]:
+    if value is None:
+        return None
+    return to_utc_iso_z(value)
+
+
+def _serialize_order_list_item(
+    order,
+    pick_status_data=None,
+    db_session=None,
+    inflow_service: Optional[InflowService] = None,
+    asset_tag_requirement_cache: Optional[dict[tuple[object, ...], bool]] = None,
+) -> dict:
+    latest_job = getattr(order, "latest_picklist_print_job", None)
+    latest_job_payload = None
+    if latest_job is not None:
+        latest_job_payload = {
+            "id": str(latest_job.id),
+            "status": latest_job.status,
+            "trigger_source": latest_job.trigger_source,
+            "requested_by": latest_job.requested_by,
+            "attempt_count": latest_job.attempt_count,
+            "created_at": _serialize_utc_datetime(latest_job.created_at),
+            "completed_at": _serialize_utc_datetime(latest_job.completed_at),
+            "last_error": latest_job.last_error,
+        }
+
+    data = {
+        "id": str(order.id),
+        "inflow_order_id": order.inflow_order_id,
+        "inflow_sales_order_id": order.inflow_sales_order_id,
+        "recipient_name": order.recipient_name,
+        "recipient_contact": order.recipient_contact,
+        "delivery_location": order.delivery_location,
+        "po_number": order.po_number,
+        "status": order.status,
+        "assigned_deliverer": order.assigned_deliverer,
+        "issue_reason": order.issue_reason,
+        "tagged_at": _serialize_utc_datetime(order.tagged_at),
+        "tagged_by": order.tagged_by,
+        "tag_data": order.tag_data,
+        "picklist_generated_at": _serialize_utc_datetime(order.picklist_generated_at),
+        "picklist_generated_by": order.picklist_generated_by,
+        "picklist_path": order.picklist_path,
+        "delivery_run_id": order.delivery_run_id,
+        "delivery_sequence": order.delivery_sequence,
+        "qa_completed_at": _serialize_utc_datetime(order.qa_completed_at),
+        "qa_completed_by": order.qa_completed_by,
+        "qa_data": order.qa_data,
+        "qa_path": order.qa_path,
+        "qa_method": order.qa_method,
+        "signature_captured_at": _serialize_utc_datetime(order.signature_captured_at),
+        "signed_picklist_path": order.signed_picklist_path,
+        "bundle_path": order.bundle_path,
+        "order_details_path": order.order_details_path,
+        "order_details_generated_at": _serialize_utc_datetime(
+            order.order_details_generated_at
+        ),
+        "order_details_email_status": order.order_details_email_status,
+        "order_details_email_status_updated_at": _serialize_utc_datetime(
+            order.order_details_email_status_updated_at
+        ),
+        "shipping_workflow_status": order.shipping_workflow_status,
+        "shipping_workflow_status_updated_at": _serialize_utc_datetime(
+            order.shipping_workflow_status_updated_at
+        ),
+        "shipping_workflow_status_updated_by": order.shipping_workflow_status_updated_by,
+        "shipped_to_carrier_at": _serialize_utc_datetime(order.shipped_to_carrier_at),
+        "shipped_to_carrier_by": order.shipped_to_carrier_by,
+        "carrier_name": order.carrier_name,
+        "tracking_number": order.tracking_number,
+        "parent_order_id": order.parent_order_id,
+        "has_remainder": order.has_remainder,
+        "remainder_order_id": order.remainder_order_id,
+        "created_at": _serialize_utc_datetime(order.created_at),
+        "updated_at": _serialize_utc_datetime(order.updated_at),
+        "pick_status": pick_status_data,
+        "latest_picklist_print_job": latest_job_payload,
+    }
+    data = _resolve_asset_tag_required(
+        data,
+        order,
+        inflow_service,
+        asset_tag_requirement_cache,
+    )
+    return _resolve_order_user_fields(data, db_session)
+
+
+def _broadcast_orders_sync(db_session: Session = None):
+    """Send current orders to all connected clients (sync version)."""
+    if db_session is not None:
+        _do_broadcast_orders(db_session)
+        return
+
+    from app.database import get_db
+
+    with get_db() as db:
+        _do_broadcast_orders(db)
+
+
+def _do_broadcast_orders(db_session):
+    try:
+        service = OrderService(db_session)
+        orders, _ = service.get_orders(limit=1000)
+        payload = []
+        for order in orders:
+            raw_deliverer = order.assigned_deliverer
+            deliverer_label = resolve_user_display(db_session, raw_deliverer, raw_deliverer) if raw_deliverer and "@" in raw_deliverer else raw_deliverer
+            payload.append(
+                {
+                    "id": str(order.id),
+                    "inflow_order_id": order.inflow_order_id,
+                    "recipient_name": order.recipient_name,
+                    "status": order.status,
+                    "updated_at": _serialize_utc_datetime(order.updated_at),
+                    "delivery_location": order.delivery_location,
+                    "assigned_deliverer": deliverer_label,
+                }
+            )
+
+        # Emit via SocketIO to all connected clients in 'orders' room
+        try:
+            from app.main import socketio
+
+            socketio.emit(
+                "orders_update",
+                {"type": "orders_update", "data": payload},
+                room="orders",
+            )
+        except Exception as e:
+            import logging
+
+            logging.getLogger(__name__).error(f"Failed to broadcast orders: {e}")
+    except Exception:
+        logger.exception("Failed to broadcast orders")
+
+
+@bp.route("/", methods=["GET"])
+@require_auth
+def get_orders():
+    """Get orders with filters and pagination"""
+    status = request.args.get("status")
+    search = request.args.get("search")
+    skip = request.args.get("skip", 0, type=int)
+    limit = request.args.get("limit", 100, type=int)
+
+    # Validate limit
+    limit = max(1, min(limit, 200))
+    skip = max(0, skip)
+
+    # Convert status string to enum if provided
+    status_enum = None
+    if status:
+        try:
+            status_enum = OrderStatus(status)
+        except ValueError:
+            pass
+
+    with get_db() as db:
+        service = OrderService(db)
+        inflow_service = InflowService()
         asset_tag_requirement_cache: dict[tuple[object, ...], bool] = {}
+        orders, total = service.get_orders(
+            status=status_enum, search=search, skip=skip, limit=limit
+        )
+
+        # Enrich orders with pick_status for Pre-Delivery queue visibility
+        include_pick_status = status_enum in {
+            OrderStatus.PRE_DELIVERY,
+            OrderStatus.IN_DELIVERY,
+        }
+        result = []
+        for o in orders:
+            pick_status_data = None
+
+            # Compute pick_status from inflow_data if available
+            if include_pick_status and o.inflow_data:
+                try:
+                    pick_status_source = o.inflow_data
+                    if o.remainder_order_id and not o.parent_order_id:
+                        remainder_pick_source = OrderSplittingService(db).build_parent_remainder_pick_status_source(o)
+                        if remainder_pick_source is not None:
+                            pick_status_source = remainder_pick_source
+                    pick_status_data = inflow_service.get_pick_status(pick_status_source)
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to compute pick_status for order %s: %s",
+                        o.inflow_order_id,
+                        exc,
+                    )
+
+            result.append(
+                _serialize_order_list_item(
+                    o,
+                    pick_status_data,
+                    db,
+                    inflow_service,
+                    asset_tag_requirement_cache,
+                )
+            )
+
+        return jsonify({
+            "items": result,
+            "total": total,
+            "skip": skip,
+            "limit": limit,
+        })
+
+
+@bp.route("/resolve", methods=["GET"])
+@require_auth
+def resolve_order_by_number():
+    """Resolve an inFlow order number to internal UUID.
+
+    Query param:
+        order_number: inFlow order id (e.g. "TH3270")
+
+    Returns:
+        {"id": "<uuid>", "order_number": "<inflow_order_id>"}
+    """
+    order_number = (request.args.get("order_number") or "").strip()
+    if not order_number:
+        return jsonify({"error": "order_number is required"}), 400
+
+    normalized = order_number.lower()
+
+    with get_db() as db:
+        order = (
+            db.query(Order)
+            .filter(Order.hidden_from_ops.is_(False))
+            .filter(func.lower(Order.inflow_order_id) == normalized)
+            .first()
+        )
+        if not order:
+            abort(404, description="Order not found")
+
+        return jsonify(
+            {"id": str(order.id), "order_number": str(order.inflow_order_id)}
+        )
+
+
+@bp.route("/tag-request/candidates", methods=["GET"])
+@require_auth
+def get_tag_request_candidates():
+    """Get picked orders that still need a tag request batch."""
+    limit = request.args.get("limit", default=200, type=int)
+    limit = max(1, min(limit, 1000))
+
+    search = (request.args.get("search") or "").strip()
+
+    with get_db() as db:
+>>>>>>> a46707db1e8a458e88771d2128f6b6498619b8ac
+        order_service = OrderService(db)
         query = (
             db.query(Order)
             .filter(Order.hidden_from_ops.is_(False))
@@ -512,10 +946,7 @@ def get_tag_request_candidates():
         for order in candidates:
             if not order.inflow_data:
                 continue
-            if not inflow_service.requires_asset_tags_cached(
-                order.inflow_data,
-                asset_tag_requirement_cache,
-            ):
+            if not order_service._requires_asset_tags(order):
                 continue
             if order_service._parent_remainder_has_unpicked_items(order):
                 continue

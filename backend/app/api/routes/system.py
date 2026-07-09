@@ -23,6 +23,7 @@ from app.services.saml_auth_service import saml_auth_service
 from app.services.canopy_orders_uploader_service import CanopyOrdersUploaderService
 from app.services.graph_service import graph_service
 from app.services.inflow_service import InflowService
+from app.services.order_service import OrderService
 from app.database import get_db_session
 from app.models.system_setting import SystemSetting
 from app.models.order import Order
@@ -1958,7 +1959,7 @@ def upload_canopy_orders():
 
     db = get_db_session()
     try:
-        inflow_service = InflowService()
+        order_service = OrderService(db)
         db_orders = (
             db.query(Order).filter(Order.inflow_order_id.in_(normalized_orders)).all()
         )
@@ -1988,7 +1989,7 @@ def upload_canopy_orders():
                 continue
 
             inflow_data = getattr(order, "inflow_data", None)
-            if not inflow_data or not inflow_service.requires_asset_tags(inflow_data):
+            if not inflow_data or not order_service._requires_asset_tags(order):
                 ineligible_orders.append(
                     {"order": th, "reason": "not asset-tag required"}
                 )
