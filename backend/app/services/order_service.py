@@ -86,6 +86,25 @@ class OrderService:
             for field in ("lines", "subtotal", "total"):
                 if field in current_snapshot:
                     merged[field] = deepcopy(current_snapshot.get(field))
+            # Child shipments should never bleed back into the parent remainder row.
+            # Keep local partial-leg shipment state authoritative for split orders.
+            for field in ("packLines", "shipLines"):
+                if field in current_snapshot:
+                    merged[field] = deepcopy(current_snapshot.get(field))
+            remainder_cycle_started_at = current_snapshot.get(
+                OrderSplittingService.REMAINDER_CYCLE_STARTED_AT_KEY
+            )
+            if remainder_cycle_started_at:
+                merged[OrderSplittingService.REMAINDER_CYCLE_STARTED_AT_KEY] = deepcopy(
+                    remainder_cycle_started_at
+                )
+            for field in (
+                OrderSplittingService.REMAINDER_CYCLE_PICK_BASELINE_KEY,
+                OrderSplittingService.REMAINDER_CYCLE_PENDING_RESET_KEY,
+                OrderSplittingService.REMAINDER_CYCLE_LAST_SUPPRESSED_PICK_FINGERPRINT_KEY,
+            ):
+                if field in current_snapshot:
+                    merged[field] = deepcopy(current_snapshot.get(field))
         return merged
 
     def _requires_asset_tags(self, order: Order) -> bool:
@@ -2376,7 +2395,7 @@ class OrderService:
                 merged_inflow_data = OrderSplittingService(self.db).normalize_partial_remainder_snapshot(
                     existing,
                     merged_inflow_data,
-                    rebuild_lines=False,
+                    rebuild_lines=True,
                 )
 
             if existing.inflow_data != merged_inflow_data:
@@ -2511,7 +2530,7 @@ class OrderService:
                         merged_inflow_data = OrderSplittingService(self.db).normalize_partial_remainder_snapshot(
                             existing,
                             merged_inflow_data,
-                            rebuild_lines=False,
+                            rebuild_lines=True,
                         )
                     existing.inflow_data = merged_inflow_data
                     existing.updated_at = datetime.utcnow()

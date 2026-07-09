@@ -6,6 +6,7 @@ import sys
 from datetime import datetime
 from uuid import uuid4
 from types import SimpleNamespace
+from contextlib import contextmanager
 from unittest.mock import patch
 
 from flask import Flask
@@ -46,8 +47,11 @@ def _make_order():
         qa_method=None,
         signature_captured_at=None,
         signed_picklist_path=None,
+        bundle_path=None,
         order_details_path=None,
         order_details_generated_at=None,
+        order_details_email_status=None,
+        order_details_email_status_updated_at=None,
         shipping_workflow_status=None,
         shipping_workflow_status_updated_at=None,
         shipping_workflow_status_updated_by=None,
@@ -70,6 +74,11 @@ def _make_order():
             ]
         },
     )
+
+
+@contextmanager
+def _fake_db_context():
+    yield SimpleNamespace()
 
 
 def test_order_list_serializer_includes_asset_tag_required_false():
@@ -103,6 +112,182 @@ def test_order_response_json_includes_asset_tag_required_false():
     assert data["asset_tag_required"] is False
 
 
+def test_order_response_json_uses_remainder_pick_status_for_split_parent():
+    order = _make_order()
+    order.has_remainder = "Y"
+    order.remainder_order_id = "child-order-1"
+    order.inflow_data = {
+        "lines": [
+            {
+                "productId": "prod-1",
+                "unitPrice": 149.99,
+                "quantity": {"standardQuantity": 10},
+            }
+        ],
+        "pickLines": [
+            {
+                "productId": "prod-1",
+                "unitPrice": 149.99,
+                "quantity": {"standardQuantity": 2},
+            }
+        ],
+    }
+    remainder_pick_source = {
+        "lines": [
+            {
+                "productId": "prod-1",
+                "unitPrice": 149.99,
+                "quantity": {"standardQuantity": 8},
+            }
+        ],
+        "pickLines": [],
+    }
+
+    class _FakeInflowService:
+        def requires_asset_tags(self, _order):
+            return False
+
+        def get_pick_status(self, order):
+            assert order == remainder_pick_source
+            return {
+                "is_fully_picked": False,
+                "total_ordered": 8,
+                "total_picked": 0,
+                "missing_items": [
+                    {
+                        "product_id": "prod-1",
+                        "product_name": "prod-1",
+                        "ordered": 8,
+                        "picked": 0,
+                    }
+                ],
+            }
+
+    class _FakeSplittingService:
+        def __init__(self, db):
+            self.db = db
+
+        def build_parent_remainder_document_view(self, current_order):
+            assert current_order is order
+            return remainder_pick_source
+
+        def build_parent_remainder_pick_status_source(self, current_order):
+            assert current_order is order
+            return remainder_pick_source
+
+    app = Flask(__name__)
+    with app.app_context():
+        with patch.object(orders_routes, "InflowService", return_value=_FakeInflowService()):
+            with patch.object(orders_routes, "OrderSplittingService", _FakeSplittingService):
+                with patch.object(orders_routes, "object_session", return_value=SimpleNamespace()):
+                    data = orders_routes._order_response_json(order, db_session=SimpleNamespace())
+
+    assert data["pick_status"] == {
+        "is_fully_picked": False,
+        "total_ordered": 8,
+        "total_picked": 0,
+        "missing_items": [
+            {
+                "product_id": "prod-1",
+                "product_name": "prod-1",
+                "ordered": 8,
+                "picked": 0,
+            }
+        ],
+    }
+
+
+def test_get_orders_route_includes_remainder_pick_status_for_picked_status(monkeypatch):
+    order = _make_order()
+    order.has_remainder = "Y"
+    order.remainder_order_id = "child-order-1"
+    order.inflow_data = {
+        "lines": [
+            {
+                "productId": "prod-1",
+                "unitPrice": 149.99,
+                "quantity": {"standardQuantity": 10},
+            }
+        ],
+        "pickLines": [
+            {
+                "productId": "prod-1",
+                "unitPrice": 149.99,
+                "quantity": {"standardQuantity": 2},
+            }
+        ],
+    }
+    remainder_pick_source = {
+        "lines": [
+            {
+                "productId": "prod-1",
+                "unitPrice": 149.99,
+                "quantity": {"standardQuantity": 8},
+            }
+        ],
+        "pickLines": [],
+    }
+
+    class _FakeOrderService:
+        def __init__(self, db):
+            self.db = db
+
+        def get_orders(self, **_kwargs):
+            return [order], 1
+
+    class _FakeInflowService:
+        def get_pick_status(self, current_order):
+            assert current_order == remainder_pick_source
+            return {
+                "is_fully_picked": False,
+                "total_ordered": 8,
+                "total_picked": 0,
+                "missing_items": [],
+            }
+
+    class _FakeSplittingService:
+        def __init__(self, db):
+            self.db = db
+
+        def build_parent_remainder_pick_status_source(self, current_order):
+            assert current_order is order
+            return remainder_pick_source
+
+    monkeypatch.setattr(orders_routes, "get_db", _fake_db_context)
+    monkeypatch.setattr(orders_routes, "OrderService", _FakeOrderService)
+    monkeypatch.setattr(orders_routes, "InflowService", lambda: _FakeInflowService())
+    monkeypatch.setattr(orders_routes, "OrderSplittingService", _FakeSplittingService)
+    monkeypatch.setattr(
+        orders_routes,
+        "_serialize_order_list_item",
+        lambda order, pick_status_data=None, *_args, **_kwargs: {
+            "id": order.id,
+            "pick_status": pick_status_data,
+        },
+    )
+
+    app = Flask(__name__)
+    with app.test_request_context("/orders?status=picked", method="GET"):
+        response = orders_routes.get_orders.__wrapped__()
+
+    assert response.get_json() == {
+        "items": [
+            {
+                "id": order.id,
+                "pick_status": {
+                    "is_fully_picked": False,
+                    "total_ordered": 8,
+                    "total_picked": 0,
+                    "missing_items": [],
+                },
+            }
+        ],
+        "total": 1,
+        "skip": 0,
+        "limit": 100,
+    }
+
+
 def test_laptop_category_prefix_still_requires_asset_tags():
     service = InflowService()
 
@@ -112,5 +297,7 @@ def test_laptop_category_prefix_still_requires_asset_tags():
 if __name__ == "__main__":
     test_order_list_serializer_includes_asset_tag_required_false()
     test_order_response_json_includes_asset_tag_required_false()
+    test_order_response_json_uses_remainder_pick_status_for_split_parent()
+    test_get_orders_route_includes_remainder_pick_status_for_picked_status()
     test_laptop_category_prefix_still_requires_asset_tags()
     print("[SUCCESS] order asset tag regression tests passed")

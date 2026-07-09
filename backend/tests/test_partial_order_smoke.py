@@ -315,11 +315,35 @@ def test_partial_order_smoke_split_to_delivery(monkeypatch):
                     "containers": ["DELIVERY-TH9001-P2-1"],
                 }
             ],
+            "_techhub_partial_leg_pack_lines": [
+                {
+                    "productId": "prod-laptop",
+                    "quantity": {"standardQuantity": "1"},
+                }
+            ],
+            "_techhub_partial_leg_ship_lines": [
+                {
+                    "salesOrderShipLineId": "ship-1",
+                    "carrier": "TechHub",
+                    "containers": ["DELIVERY-TH9001-P2-1"],
+                }
+            ],
         }
         monkeypatch.setattr(
             "app.services.inflow_service.InflowService.fulfill_sales_order",
             AsyncMock(return_value=partial_delivery_payload),
         )
+        expected_recursive_snapshot = {
+            **recursive_child.inflow_data,
+            "packLines": partial_delivery_payload["_techhub_partial_leg_pack_lines"],
+            "shipLines": partial_delivery_payload["_techhub_partial_leg_ship_lines"],
+            "_techhub_partial_leg_pack_lines": partial_delivery_payload[
+                "_techhub_partial_leg_pack_lines"
+            ],
+            "_techhub_partial_leg_ship_lines": partial_delivery_payload[
+                "_techhub_partial_leg_ship_lines"
+            ],
+        }
 
         completed_run = delivery_service.finish_run(
             run.id,
@@ -339,7 +363,7 @@ def test_partial_order_smoke_split_to_delivery(monkeypatch):
         assert recursive_child.qa_path is not None
         assert recursive_child.order_details_path is not None
         assert recursive_child.qa_method == "Delivery"
-        assert recursive_child.inflow_data == partial_delivery_payload
+        assert recursive_child.inflow_data == expected_recursive_snapshot
         assert parent_order.remainder_order_id == recursive_child.id
 
         print("[PASS] partial-order smoke chain split -> docs -> QA -> delivery -> delivered")
