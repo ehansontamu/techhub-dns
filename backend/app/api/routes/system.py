@@ -801,7 +801,7 @@ def _upload_compatibility_editor_staging_json(
     username: str,
     password: str,
 ) -> bool:
-    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    body = (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
     headers = {
         "Content-Type": "application/json; charset=UTF-8",
         "Accept": "application/json, text/plain, */*",
