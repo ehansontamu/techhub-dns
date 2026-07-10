@@ -665,7 +665,7 @@ def test_partial_picklist_leg_creation_links_parent_and_child():
                 {
                     "productId": "prod-1",
                     "description": "Laptop",
-                    "quantity": {"standardQuantity": "2"},
+                    "quantity": {"standardQuantity": "2", "uomQuantity": "5.0000"},
                 },
                 {
                     "productId": "prod-2",
@@ -677,7 +677,7 @@ def test_partial_picklist_leg_creation_links_parent_and_child():
                 {
                     "productId": "prod-1",
                     "description": "Laptop",
-                    "quantity": {"standardQuantity": "1"},
+                    "quantity": {"standardQuantity": "1", "uomQuantity": "2.5000"},
                 }
             ],
             "packLines": [
@@ -710,7 +710,7 @@ def test_partial_picklist_leg_creation_links_parent_and_child():
             {
                 "productId": "prod-1",
                 "description": "Laptop",
-                "quantity": {"standardQuantity": 1.0},
+                "quantity": {"standardQuantity": "1.0", "uomQuantity": "2.5000"},
             },
             {
                 "productId": "prod-2",
@@ -725,14 +725,14 @@ def test_partial_picklist_leg_creation_links_parent_and_child():
             {
                 "productId": "prod-1",
                 "description": "Laptop",
-                "quantity": {"standardQuantity": "1.0"},
+                "quantity": {"standardQuantity": "1.0", "uomQuantity": "2.5000"},
             }
         ]
         assert child_order.inflow_data["pickLines"] == [
             {
                 "productId": "prod-1",
                 "description": "Laptop",
-                "quantity": {"standardQuantity": "1.0"},
+                "quantity": {"standardQuantity": "1.0", "uomQuantity": "2.5000"},
             }
         ]
         assert child_order.inflow_data.get("packLines") == []
