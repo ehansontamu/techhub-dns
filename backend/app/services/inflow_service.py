@@ -45,6 +45,53 @@ class InflowService:
             }
         return self._headers
 
+    @staticmethod
+    def _summarize_line_quantities(lines: Any) -> List[Dict[str, Any]]:
+        if not isinstance(lines, list):
+            return []
+
+        summary: List[Dict[str, Any]] = []
+        for line in lines:
+            if not isinstance(line, dict):
+                continue
+            summary.append(
+                {
+                    "productId": line.get("productId"),
+                    "description": line.get("description"),
+                    "standardQuantity": ((line.get("quantity") or {}).get("standardQuantity")),
+                    "uomQuantity": ((line.get("quantity") or {}).get("uomQuantity")),
+                    "containerNumber": line.get("containerNumber"),
+                }
+            )
+        return summary
+
+    def _build_fulfillment_http_error(
+        self,
+        *,
+        action: str,
+        order_number: str,
+        response: httpx.Response,
+        payload: Optional[Dict[str, Any]] = None,
+    ) -> ValueError:
+        response_text = (response.text or "").strip()
+        message = (
+            f"{action} failed for order {order_number}: "
+            f"{response.status_code} {response.reason_phrase}"
+        )
+        if response_text:
+            message = f"{message} - {response_text[:1000]}"
+
+        if isinstance(payload, dict):
+            logger.error(
+                "%s payload summary for %s: packLines=%s shipLines=%s",
+                action,
+                order_number,
+                self._summarize_line_quantities(payload.get("packLines")),
+                self._summarize_line_quantities(payload.get("shipLines")),
+            )
+
+        return ValueError(message)
+
     def _is_fully_picked(self, order: Dict[str, Any]) -> bool:
         """
         Check if an order is fully picked by comparing ordered lines vs pick lines.
@@ -827,7 +874,15 @@ class InflowService:
         url = f"{self.base_url}/{self.company_id}/sales-orders"
         async with httpx.AsyncClient() as client:
             response = await client.put(url, json=order, headers=self.headers)
-            response.raise_for_status()
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError:
+                raise self._build_fulfillment_http_error(
+                    action="InFlow fulfillment",
+                    order_number=order_number,
+                    response=response,
+                    payload=order,
+                )
             result = response.json()
 
         if isinstance(result, dict) and "items" in result:
@@ -1583,7 +1638,15 @@ class InflowService:
         url = f"{self.base_url}/{self.company_id}/sales-orders"
         with httpx.Client() as client:
             response = client.put(url, json=order, headers=self.headers)
-            response.raise_for_status()
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError:
+                raise self._build_fulfillment_http_error(
+                    action="InFlow fulfillment",
+                    order_number=order_number,
+                    response=response,
+                    payload=order,
+                )
             result = response.json()
 
             if db:
