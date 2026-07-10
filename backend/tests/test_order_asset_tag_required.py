@@ -112,6 +112,103 @@ def test_order_response_json_includes_asset_tag_required_false():
     assert data["asset_tag_required"] is False
 
 
+def test_order_response_json_uses_partial_pick_view_for_asset_tag_requirement():
+    order = _make_order()
+    order.inflow_data = {
+        "lines": [
+            {
+                "productId": "prod-tagged",
+                "product": {
+                    "name": "Dell Pro Max 14 Premium",
+                    "category": {"name": "Laptops Dell"},
+                },
+                "unitPrice": 1500,
+                "quantity": {"standardQuantity": 4},
+            },
+            {
+                "productId": "prod-surge",
+                "product": {
+                    "name": "Outlet Surge Protector",
+                    "category": {"name": "Accessories"},
+                },
+                "unitPrice": 25,
+                "quantity": {"standardQuantity": 4},
+            },
+        ],
+        "pickLines": [
+            {
+                "productId": "prod-surge",
+                "product": {
+                    "name": "Outlet Surge Protector",
+                    "category": {"name": "Accessories"},
+                },
+                "unitPrice": 25,
+                "quantity": {"standardQuantity": 4},
+            }
+        ],
+        "packLines": [],
+        "shipLines": [],
+    }
+    partial_pick_view = {
+        "lines": [
+            {
+                "productId": "prod-surge",
+                "product": {
+                    "name": "Outlet Surge Protector",
+                    "category": {"name": "Accessories"},
+                },
+                "unitPrice": 25,
+                "quantity": {"standardQuantity": 4},
+            }
+        ],
+        "pickLines": [
+            {
+                "productId": "prod-surge",
+                "product": {
+                    "name": "Outlet Surge Protector",
+                    "category": {"name": "Accessories"},
+                },
+                "unitPrice": 25,
+                "quantity": {"standardQuantity": 4},
+            }
+        ],
+        "packLines": [],
+        "shipLines": [],
+    }
+
+    class _FakeInflowService:
+        def get_pick_status(self, current_order, include_services=False):
+            assert include_services is False
+            assert current_order == order.inflow_data or current_order == partial_pick_view
+            return {
+                "is_fully_picked": False,
+                "total_ordered": 8,
+                "total_picked": 4,
+                "missing_items": [],
+            }
+
+        def requires_asset_tags(self, current_order):
+            assert [line["productId"] for line in current_order["lines"]] == ["prod-surge"]
+            return False
+
+    class _FakeSplittingService:
+        def __init__(self, db):
+            self.db = db
+
+        def _build_partial_leg_view(self, current_order):
+            assert current_order == order.inflow_data
+            return partial_pick_view
+
+    app = Flask(__name__)
+    with app.app_context():
+        with patch.object(orders_routes, "InflowService", return_value=_FakeInflowService()):
+            with patch.object(orders_routes, "OrderSplittingService", _FakeSplittingService):
+                with patch.object(orders_routes, "object_session", return_value=SimpleNamespace()):
+                    data = orders_routes._order_response_json(order)
+
+    assert data["asset_tag_required"] is False
+
+
 def test_order_response_json_uses_remainder_pick_status_for_split_parent():
     order = _make_order()
     order.has_remainder = "Y"
