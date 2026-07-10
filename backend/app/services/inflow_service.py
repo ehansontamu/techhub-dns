@@ -727,7 +727,7 @@ class InflowService:
             container_number = f"DELIVERY-{order_number}-{next_suffix}"
 
             for line in source_lines:
-                if not positive_quantity(line):
+                if not positive_quantity(line) or not self._is_pick_required_line(line):
                     continue
                 new_pack_lines.append(
                     {
