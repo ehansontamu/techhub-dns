@@ -91,6 +91,12 @@ class OrderService:
             for field in ("packLines", "shipLines"):
                 if field in current_snapshot:
                     merged[field] = deepcopy(current_snapshot.get(field))
+            # A picked child leg's pickLines were fixed at split time and define
+            # the leg; InFlow's pickLines are cumulative for the combined order
+            # and would bleed the other legs' picks into the child. Remainder
+            # parents keep fresh pickLines (normalized separately).
+            if existing_order.parent_order_id and "pickLines" in current_snapshot:
+                merged["pickLines"] = deepcopy(current_snapshot.get("pickLines"))
             remainder_cycle_started_at = current_snapshot.get(
                 OrderSplittingService.REMAINDER_CYCLE_STARTED_AT_KEY
             )
@@ -105,6 +111,30 @@ class OrderService:
             ):
                 if field in current_snapshot:
                     merged[field] = deepcopy(current_snapshot.get(field))
+        return merged
+
+    def merge_inflow_snapshot_preserving_split(
+        self,
+        order: Order,
+        inflow_data: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """
+        Merge a fresh InFlow snapshot into an order without clobbering partial-split state.
+
+        Any code path that writes an InFlow API response back to ``order.inflow_data``
+        must go through this (or the underlying helpers): InFlow only knows the
+        original combined sales order, so its responses always carry the full item
+        set and would otherwise erase the leg-scoped ``lines`` of split orders.
+        """
+        merged = self._preserve_partial_split_inflow_snapshot(order, inflow_data)
+        if getattr(order, "remainder_order_id", None) and not getattr(
+            order, "parent_order_id", None
+        ):
+            merged = OrderSplittingService(self.db).normalize_partial_remainder_snapshot(
+                order,
+                merged,
+                rebuild_lines=True,
+            )
         return merged
 
     def _requires_asset_tags(self, order: Order) -> bool:
@@ -1677,6 +1707,25 @@ class OrderService:
             )
 
         refreshed_snapshot = deepcopy(inflow_snapshot)
+        is_split_order = bool(
+            getattr(order, "parent_order_id", None)
+            or getattr(order, "remainder_order_id", None)
+            or getattr(order, "has_remainder", None)
+        )
+        if is_split_order:
+            refreshed_snapshot = self._preserve_partial_split_inflow_snapshot(
+                order, refreshed_snapshot
+            )
+            current_snapshot = (
+                order.inflow_data if isinstance(order.inflow_data, dict) else {}
+            )
+            if "pickLines" in current_snapshot:
+                # Each leg's picks are tracked locally; InFlow's pickLines are
+                # cumulative across all legs and would bleed the other legs'
+                # items into this one.
+                refreshed_snapshot["pickLines"] = deepcopy(
+                    current_snapshot.get("pickLines")
+                )
         refreshed_snapshot["packLines"] = []
         refreshed_snapshot["shipLines"] = []
 
@@ -2544,18 +2593,11 @@ class OrderService:
             if data_changed:
                 existing.updated_at = datetime.utcnow()
 
-            merged_inflow_data = self._preserve_partial_split_inflow_snapshot(
+            # Always update to keep latest data without clobbering partial splits
+            merged_inflow_data = self.merge_inflow_snapshot_preserving_split(
                 existing,
                 inflow_data,
-            )  # Always update to keep latest data without clobbering partial splits
-            if getattr(existing, "remainder_order_id", None) and not getattr(
-                existing, "parent_order_id", None
-            ):
-                merged_inflow_data = OrderSplittingService(self.db).normalize_partial_remainder_snapshot(
-                    existing,
-                    merged_inflow_data,
-                    rebuild_lines=True,
-                )
+            )
 
             if existing.inflow_data != merged_inflow_data:
                 existing.inflow_data = merged_inflow_data
@@ -2679,19 +2721,10 @@ class OrderService:
                 # Another request created it — fetch and update instead
                 existing = self.db.query(Order).filter(Order.inflow_order_id == order_number).first()
                 if existing:
-                    merged_inflow_data = self._preserve_partial_split_inflow_snapshot(
+                    existing.inflow_data = self.merge_inflow_snapshot_preserving_split(
                         existing,
                         inflow_data,
                     )
-                    if getattr(existing, "remainder_order_id", None) and not getattr(
-                        existing, "parent_order_id", None
-                    ):
-                        merged_inflow_data = OrderSplittingService(self.db).normalize_partial_remainder_snapshot(
-                            existing,
-                            merged_inflow_data,
-                            rebuild_lines=True,
-                        )
-                    existing.inflow_data = merged_inflow_data
                     existing.updated_at = datetime.utcnow()
                     self.db.commit()
                     self.db.refresh(existing)

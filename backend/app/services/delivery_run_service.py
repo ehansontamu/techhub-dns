@@ -38,7 +38,16 @@ class DeliveryRunService:
         order: Order,
         updated_inflow_order: Dict[str, Any],
     ) -> Dict[str, Any]:
-        if not getattr(order, "parent_order_id", None):
+        # Both child legs (parent_order_id) and remainder parents
+        # (remainder_order_id / has_remainder) carry a leg-scoped item set that
+        # InFlow knows nothing about; the raw InFlow response always has the
+        # full combined order and would erase the split.
+        is_split_leg = bool(
+            getattr(order, "parent_order_id", None)
+            or getattr(order, "remainder_order_id", None)
+            or getattr(order, "has_remainder", None)
+        )
+        if not is_split_leg:
             if isinstance(updated_inflow_order, dict):
                 updated_inflow_order.pop("_techhub_partial_leg_pack_lines", None)
                 updated_inflow_order.pop("_techhub_partial_leg_ship_lines", None)
@@ -674,7 +683,10 @@ class DeliveryRunService:
                             inflow_service, inflow_sales_order_id
                         )
                         if already_fulfilled_order is not None:
-                            order.inflow_data = already_fulfilled_order
+                            order.inflow_data = self._merge_partial_leg_fulfillment_result(
+                                order,
+                                already_fulfilled_order,
+                            )
                             return {
                                 "order_id": str(order.id),
                                 "inflow_order_id": order.inflow_order_id,

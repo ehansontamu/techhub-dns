@@ -634,7 +634,7 @@ def test_partial_picklist_leg_creation_links_parent_and_child():
 
 
 def test_create_order_from_inflow_preserves_existing_split_payload():
-    """Webhook refreshes should preserve split lines but allow fresh pick state through."""
+    """Webhook refreshes preserve split lines and local shipment state but let fresh picks through."""
 
     session, engine = _make_sqlite_session()
 
@@ -758,19 +758,11 @@ def test_create_order_from_inflow_preserves_existing_split_payload():
             "unitPrice": 15,
         }
     ]
-    assert updated.inflow_data["packLines"] == [
-        {
-            "productId": "prod-a",
-            "quantity": {"standardQuantity": "3"},
-            "containerNumber": "DELIVERY-TH3006-1",
-        }
-    ]
-    assert updated.inflow_data["shipLines"] == [
-        {
-            "carrier": "TechHub",
-            "containers": ["DELIVERY-TH3006-1"],
-        }
-    ]
+    # Local shipment state stays authoritative for split orders: the InFlow
+    # payload's pack/ship lines describe the combined order (including the
+    # already-delivered child leg) and must not bleed into the remainder row.
+    assert updated.inflow_data["packLines"] == []
+    assert updated.inflow_data["shipLines"] == []
 
 
 def test_create_order_from_inflow_refreshes_pick_lines_for_split_orders():

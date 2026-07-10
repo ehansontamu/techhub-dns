@@ -121,6 +121,49 @@ describe("getOrderProductTableView", () => {
       },
     ]);
   });
+
+  it("shows only picked items for a partially picked order before the split", () => {
+    const view = getOrderProductTableView({
+      inflow_data: {
+        lines: [
+          { productId: "D", product: { name: "Dock" }, quantity: { standardQuantity: 4 } },
+          { productId: "E", product: { name: "Monitor" }, quantity: { standardQuantity: 2 } },
+        ],
+        pickLines: [
+          { productId: "D", product: { name: "Dock" }, quantity: { standardQuantity: 1, serialNumbers: ["SN1"] } },
+        ],
+      },
+    } as any);
+
+    expect(view.title).toBe("Picked items (partial order)");
+    expect(view.rows).toEqual([
+      {
+        productId: "D",
+        productName: "Dock",
+        quantity: 1,
+        serials: ["SN1"],
+      },
+    ]);
+  });
+
+  it("still shows all items for a fully picked order", () => {
+    const view = getOrderProductTableView({
+      inflow_data: {
+        lines: [{ productId: "F", product: { name: "Cable" }, quantity: { standardQuantity: 2 } }],
+        pickLines: [{ productId: "F", product: { name: "Cable" }, quantity: { standardQuantity: 2 } }],
+      },
+    } as any);
+
+    expect(view.title).toBe("Product table");
+    expect(view.rows).toEqual([
+      {
+        productId: "F",
+        productName: "Cable",
+        quantity: 2,
+        serials: [],
+      },
+    ]);
+  });
 });
 
 describe("canGeneratePicklist", () => {

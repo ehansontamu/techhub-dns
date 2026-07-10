@@ -1196,7 +1196,11 @@ def sign_order(order_id):
         order.signed_picklist_path = signed_picklist_path
         order.bundle_path = bundled_path
         if updated_inflow_order is not None:
-            order.inflow_data = updated_inflow_order
+            # The InFlow response carries the full combined order; merge it so
+            # split partial legs keep their leg-scoped item set.
+            order.inflow_data = service.merge_inflow_snapshot_preserving_split(
+                order, updated_inflow_order
+            )
         order.updated_at = datetime.utcnow()
 
         delivery_vehicle = order.delivery_run.vehicle if order.delivery_run else None
