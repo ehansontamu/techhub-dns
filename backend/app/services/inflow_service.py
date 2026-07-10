@@ -144,6 +144,74 @@ class InflowService:
             return 0.0
 
     @staticmethod
+    def _parse_optional_float(value: Any) -> Optional[float]:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    @classmethod
+    def _normalize_pack_quantity(
+        cls,
+        line: Dict[str, Any],
+        quantity: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        quantity_data = dict((line.get("quantity") or {}))
+        normalized_quantity = (
+            quantity if quantity is not None else cls._parse_standard_quantity(quantity_data)
+        )
+        original_standard_quantity = cls._parse_standard_quantity(quantity_data)
+        original_uom_quantity = cls._parse_optional_float(quantity_data.get("uomQuantity"))
+        existing_uom = str(quantity_data.get("uom") or "").strip()
+
+        product = line.get("product")
+        product_dict = product if isinstance(product, dict) else {}
+        sales_uom = product_dict.get("salesUom")
+        sales_uom_dict = sales_uom if isinstance(sales_uom, dict) else {}
+        resolved_uom = (
+            str(
+                sales_uom_dict.get("name")
+                or sales_uom_dict.get("uom")
+                or product_dict.get("standardUomName")
+                or existing_uom
+                or ""
+            ).strip()
+        )
+
+        quantity_data["standardQuantity"] = str(
+            int(normalized_quantity) if float(normalized_quantity).is_integer() else normalized_quantity
+        )
+
+        if (
+            original_uom_quantity is not None
+            and original_standard_quantity > 0
+            and "uomQuantity" in quantity_data
+        ):
+            raw_uom_quantity = quantity_data.get("uomQuantity")
+            decimal_places = (
+                len(raw_uom_quantity.split(".", 1)[1])
+                if isinstance(raw_uom_quantity, str) and "." in raw_uom_quantity
+                else None
+            )
+            scaled_uom_quantity = original_uom_quantity * (
+                normalized_quantity / original_standard_quantity
+            )
+
+            if resolved_uom:
+                quantity_data["uom"] = resolved_uom
+                if decimal_places is not None:
+                    quantity_data["uomQuantity"] = f"{scaled_uom_quantity:.{decimal_places}f}"
+                else:
+                    quantity_data["uomQuantity"] = scaled_uom_quantity
+            else:
+                if decimal_places is not None:
+                    quantity_data["uomQuantity"] = f"{normalized_quantity:.{decimal_places}f}"
+                else:
+                    quantity_data["uomQuantity"] = str(normalized_quantity)
+
+        return quantity_data
+
+    @staticmethod
     def _normalized_text(value: Any) -> str:
         return " ".join(str(value or "").strip().lower().replace("-", " ").split())
 
@@ -780,7 +848,7 @@ class InflowService:
                     {
                         "salesOrderPackLineId": str(uuid.uuid4()),
                         "productId": line.get("productId"),
-                        "quantity": line.get("quantity"),
+                        "quantity": self._normalize_pack_quantity(line),
                         "description": line.get("description"),
                         "containerNumber": container_number,
                     }
@@ -816,7 +884,7 @@ class InflowService:
                         {
                             "salesOrderPackLineId": str(uuid.uuid4()),
                             "productId": line.get("productId"),
-                            "quantity": line.get("quantity"),
+                            "quantity": self._normalize_pack_quantity(line),
                             "description": line.get("description"),
                             "containerNumber": container_number,
                         }

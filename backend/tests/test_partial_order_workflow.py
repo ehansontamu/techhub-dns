@@ -335,6 +335,138 @@ def test_fulfill_sales_order_ignores_service_lines_in_split_leg_snapshot():
     print("[PASS] Split partial-delivery fulfillment ignores service lines")
 
 
+def test_fulfill_sales_order_normalizes_blank_uom_partial_quantities():
+    """Split partial-delivery fulfillment should not send mismatched blank-UoM quantities."""
+
+    live_order_payload = {
+        "salesOrderId": "sales-order-170",
+        "orderNumber": "TH000170",
+        "customerId": "customer-1",
+        "lines": [
+            {
+                "productId": "prod-accessory",
+                "description": "",
+                "product": {
+                    "name": "Custom Accessory",
+                    "itemType": "stockedProduct",
+                    "salesUom": None,
+                    "standardUomName": "",
+                },
+                "quantity": {
+                    "standardQuantity": "2.0",
+                    "uomQuantity": "5.0000",
+                    "uom": "",
+                },
+            }
+        ],
+        "pickLines": [
+            {
+                "productId": "prod-accessory",
+                "description": "",
+                "product": {
+                    "name": "Custom Accessory",
+                    "itemType": "stockedProduct",
+                    "salesUom": None,
+                    "standardUomName": "",
+                },
+                "quantity": {
+                    "standardQuantity": "2.0",
+                    "uomQuantity": "5.0000",
+                    "uom": "",
+                },
+            }
+        ],
+        "packLines": [],
+        "shipLines": [],
+    }
+    local_leg_snapshot = {
+        "lines": [
+            {
+                "productId": "prod-accessory",
+                "description": "",
+                "product": {
+                    "name": "Custom Accessory",
+                    "itemType": "stockedProduct",
+                    "salesUom": None,
+                    "standardUomName": "",
+                },
+                "quantity": {
+                    "standardQuantity": "1.0",
+                    "uomQuantity": "5.0000",
+                    "uom": "",
+                },
+            }
+        ],
+        "pickLines": [
+            {
+                "productId": "prod-accessory",
+                "description": "",
+                "product": {
+                    "name": "Custom Accessory",
+                    "itemType": "stockedProduct",
+                    "salesUom": None,
+                    "standardUomName": "",
+                },
+                "quantity": {
+                    "standardQuantity": "1.0",
+                    "uomQuantity": "5.0000",
+                    "uom": "",
+                },
+            }
+        ],
+        "packLines": [],
+        "shipLines": [],
+    }
+
+    recorded: dict[str, Any] = {}
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, Any]:
+            return {"items": [recorded["payload"]]}
+
+    class FakeAsyncClient:
+        async def __aenter__(self) -> "FakeAsyncClient":
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb) -> None:
+            return None
+
+        async def put(
+            self, url: str, json: dict[str, Any], headers: dict[str, str]
+        ) -> FakeResponse:
+            recorded["payload"] = json
+            return FakeResponse()
+
+    service = InflowService()
+    service._headers = {
+        "Authorization": "Bearer test",
+        "Content-Type": "application/json",
+    }
+
+    with patch.object(
+        service, "get_order_by_id", AsyncMock(return_value=live_order_payload)
+    ):
+        with patch("app.services.inflow_service.httpx.AsyncClient", FakeAsyncClient):
+            asyncio.run(
+                service.fulfill_sales_order(
+                    "sales-order-170",
+                    only_picked_items=True,
+                    source_order_data=local_leg_snapshot,
+                    source_order_identifier="TH000170-P",
+                )
+            )
+
+    assert recorded["payload"]["packLines"][0]["quantity"] == {
+        "standardQuantity": "1",
+        "uomQuantity": "1.0000",
+        "uom": "",
+    }
+    print("[PASS] Split fulfillment normalizes blank-UoM partial quantities")
+
+
 def test_fulfill_sales_order_falls_back_when_split_leg_snapshot_is_empty():
     """Split delivery legs with missing local lines should fall back to live InFlow picks."""
 
