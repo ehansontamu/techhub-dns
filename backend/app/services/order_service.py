@@ -148,17 +148,35 @@ class OrderService:
 
         from app.services.inflow_service import InflowService
 
+        inflow_service = InflowService()
+        splitting_service = OrderSplittingService(self.db)
+
         tag_requirement_source = order.inflow_data
-        if getattr(order, "remainder_order_id", None) and not getattr(
-            order, "parent_order_id", None
-        ):
-            remainder_view = OrderSplittingService(self.db).build_parent_remainder_document_view(
-                order
-            )
+        if getattr(order, "remainder_order_id", None) and not getattr(order, "parent_order_id", None):
+            remainder_view = splitting_service.build_parent_remainder_document_view(order)
             if remainder_view is not None:
                 tag_requirement_source = remainder_view
 
-        return InflowService().requires_asset_tags(tag_requirement_source)
+        try:
+            pick_status = inflow_service.get_pick_status(
+                tag_requirement_source,
+                include_services=False,
+            )
+        except Exception:
+            pick_status = None
+
+        is_partial_pick = bool(
+            pick_status
+            and pick_status.get("total_ordered", 0) > 0
+            and pick_status.get("total_picked", 0) > 0
+            and pick_status.get("total_picked", 0) < pick_status.get("total_ordered", 0)
+        )
+        if is_partial_pick and not getattr(order, "parent_order_id", None):
+            tag_requirement_source = splitting_service._build_partial_leg_view(
+                tag_requirement_source
+            )
+
+        return inflow_service.requires_asset_tags(tag_requirement_source)
 
     @staticmethod
     def _apply_order_search(query, search: str):

@@ -2521,6 +2521,71 @@ def test_fully_picked_remainder_still_requires_asset_tags_after_prior_pack_lines
     engine.dispose()
 
 
+def test_partial_parent_non_taggable_picks_do_not_require_asset_tags():
+    """A mixed order should not request tags when only non-taggable picked items are in the partial leg."""
+
+    session, engine = _make_sqlite_session()
+    parent_order = Order(
+        id="order-parent-non-taggable-partial",
+        inflow_order_id="TH5001",
+        inflow_sales_order_id="sales-order-5001",
+        recipient_name="User Mixed",
+        recipient_contact="user.mixed@example.com",
+        delivery_location="Building 501",
+        po_number="PO-5001",
+        status=OrderStatus.PICKED.value,
+        inflow_data={
+            "orderNumber": "TH5001",
+            "lines": [
+                {
+                    "productId": "prod-tagged",
+                    "product": {
+                        "name": "Dell Pro Max 14 Premium",
+                        "category": {"name": "Laptops Dell"},
+                    },
+                    "unitPrice": 1500,
+                    "quantity": {"standardQuantity": "4"},
+                },
+                {
+                    "productId": "prod-surge",
+                    "product": {
+                        "name": "Outlet Surge Protector",
+                        "category": {"name": "Accessories"},
+                    },
+                    "unitPrice": 25,
+                    "quantity": {"standardQuantity": "4"},
+                },
+            ],
+            "pickLines": [
+                {
+                    "productId": "prod-surge",
+                    "product": {
+                        "name": "Outlet Surge Protector",
+                        "category": {"name": "Accessories"},
+                    },
+                    "unitPrice": 25,
+                    "quantity": {"standardQuantity": "4"},
+                }
+            ],
+            "packLines": [],
+            "shipLines": [],
+        },
+    )
+    session.add(parent_order)
+    session.commit()
+
+    order_service = OrderService(session)
+
+    with patch(
+        "app.services.order_service.SystemSettingService.is_setting_enabled",
+        return_value=True,
+    ):
+        assert order_service._requires_asset_tags(parent_order) is False
+
+    session.close()
+    engine.dispose()
+
+
 def test_parent_remainder_document_view_keeps_current_remainder_snapshot_for_same_product_split():
     """A remainder leg should keep its own picked items even when the split uses the same product IDs."""
 
