@@ -97,6 +97,19 @@ def _resolve_asset_tag_required(
     tag_requirement_source = inflow_data
     db_session = object_session(order)
     splitting_service = OrderSplittingService(db_session) if db_session is not None else None
+
+    # Unsplit parent orders should gate asset tags on the currently picked subset,
+    # not on the full order payload that may still contain unpicked tagged items.
+    pick_lines = inflow_data.get("pickLines", []) if isinstance(inflow_data, dict) else []
+    if (
+        splitting_service is not None
+        and not getattr(order, "parent_order_id", None)
+        and not getattr(order, "remainder_order_id", None)
+        and isinstance(pick_lines, list)
+        and len(pick_lines) > 0
+    ):
+        tag_requirement_source = splitting_service._build_partial_leg_view(inflow_data)
+
     if getattr(order, "remainder_order_id", None) and not getattr(
         order, "parent_order_id", None
     ):

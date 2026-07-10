@@ -209,6 +209,94 @@ def test_order_response_json_uses_partial_pick_view_for_asset_tag_requirement():
     assert data["asset_tag_required"] is False
 
 
+def test_order_list_serializer_uses_partial_pick_view_for_asset_tag_requirement():
+    order = _make_order()
+    order.inflow_data = {
+        "lines": [
+            {
+                "productId": "prod-tagged",
+                "product": {
+                    "name": "Dell Pro Max 14 Premium",
+                    "category": {"name": "Laptops Dell"},
+                },
+                "unitPrice": 1500,
+                "quantity": {"standardQuantity": 4},
+            },
+            {
+                "productId": "prod-surge",
+                "product": {
+                    "name": "Outlet Surge Protector",
+                    "category": {"name": "Accessories"},
+                },
+                "unitPrice": 25,
+                "quantity": {"standardQuantity": 4},
+            },
+        ],
+        "pickLines": [
+            {
+                "productId": "prod-surge",
+                "product": {
+                    "name": "Outlet Surge Protector",
+                    "category": {"name": "Accessories"},
+                },
+                "unitPrice": 25,
+                "quantity": {"standardQuantity": 4},
+            }
+        ],
+        "packLines": [],
+        "shipLines": [],
+    }
+    partial_pick_view = {
+        "lines": [
+            {
+                "productId": "prod-surge",
+                "product": {
+                    "name": "Outlet Surge Protector",
+                    "category": {"name": "Accessories"},
+                },
+                "unitPrice": 25,
+                "quantity": {"standardQuantity": 4},
+            }
+        ],
+        "pickLines": [
+            {
+                "productId": "prod-surge",
+                "product": {
+                    "name": "Outlet Surge Protector",
+                    "category": {"name": "Accessories"},
+                },
+                "unitPrice": 25,
+                "quantity": {"standardQuantity": 4},
+            }
+        ],
+        "packLines": [],
+        "shipLines": [],
+    }
+
+    class _FakeInflowService:
+        def requires_asset_tags_cached(self, current_order, _cache):
+            assert [line["productId"] for line in current_order["lines"]] == ["prod-surge"]
+            return False
+
+    class _FakeSplittingService:
+        def __init__(self, db):
+            self.db = db
+
+        def _build_partial_leg_view(self, current_order):
+            assert current_order == order.inflow_data
+            return partial_pick_view
+
+    with patch.object(orders_routes, "OrderSplittingService", _FakeSplittingService):
+        with patch.object(orders_routes, "object_session", return_value=SimpleNamespace()):
+            data = orders_routes._serialize_order_list_item(
+                order,
+                inflow_service=_FakeInflowService(),
+                asset_tag_requirement_cache={},
+            )
+
+    assert data["asset_tag_required"] is False
+
+
 def test_order_response_json_uses_remainder_pick_status_for_split_parent():
     order = _make_order()
     order.has_remainder = "Y"
@@ -394,6 +482,7 @@ def test_laptop_category_prefix_still_requires_asset_tags():
 if __name__ == "__main__":
     test_order_list_serializer_includes_asset_tag_required_false()
     test_order_response_json_includes_asset_tag_required_false()
+    test_order_list_serializer_uses_partial_pick_view_for_asset_tag_requirement()
     test_order_response_json_uses_remainder_pick_status_for_split_parent()
     test_get_orders_route_includes_remainder_pick_status_for_picked_status()
     test_laptop_category_prefix_still_requires_asset_tags()
