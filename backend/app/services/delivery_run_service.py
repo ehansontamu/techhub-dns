@@ -29,9 +29,22 @@ ALLOWED_DISPATCH_TARGETS = DELIVERY_RUN_VEHICLES | {PICKUP_DISPATCH_MODE}
 
 class DeliveryRunService:
     INFLOW_FULFILLMENT_CONCURRENCY = 3
+    PARTIAL_ORDER_TRACKING_NUMBER = "12345"
 
     def __init__(self, db: Session):
         self.db = db
+
+    @staticmethod
+    def _is_partial_order_leg(order: Order) -> bool:
+        has_remainder = getattr(order, "has_remainder", None)
+        if isinstance(has_remainder, str):
+            has_remainder = has_remainder.strip().lower() in {"y", "yes", "true", "1"}
+
+        return bool(
+            getattr(order, "parent_order_id", None)
+            or getattr(order, "remainder_order_id", None)
+            or has_remainder
+        )
 
     def _merge_partial_leg_fulfillment_result(
         self,
@@ -662,6 +675,11 @@ class DeliveryRunService:
                             only_picked_items=True,
                             source_order_data=order.inflow_data,
                             source_order_identifier=order.inflow_order_id,
+                            shipment_tracking_number=(
+                                self.PARTIAL_ORDER_TRACKING_NUMBER
+                                if self._is_partial_order_leg(order)
+                                else None
+                            ),
                         )
                         order.inflow_data = self._merge_partial_leg_fulfillment_result(
                             order,

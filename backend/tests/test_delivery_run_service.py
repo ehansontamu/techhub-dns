@@ -46,6 +46,12 @@ def test_fulfill_orders_persists_updated_inflow_payload():
     assert len(successes) == 1
     assert successes[0]["inflow_sales_order_id"] == "sales-order-1"
     assert order.inflow_data == updated_payload
+    assert (
+        inflow_service_cls.return_value.fulfill_sales_order.await_args.kwargs[
+            "shipment_tracking_number"
+        ]
+        is None
+    )
     print("[PASS] DeliveryRunService persists updated InFlow payload")
 
 
@@ -100,6 +106,12 @@ def test_fulfill_orders_preserve_split_leg_snapshot_after_partial_success():
         {"productId": "prod-1", "quantity": {"standardQuantity": "1"}}
     ]
     assert order.inflow_data["shipLines"] == [{"salesOrderShipLineId": "ship-leg-1"}]
+    assert (
+        inflow_service_cls.return_value.fulfill_sales_order.await_args.kwargs[
+            "shipment_tracking_number"
+        ]
+        == service.PARTIAL_ORDER_TRACKING_NUMBER
+    )
     print("[PASS] DeliveryRunService preserves split-leg snapshots after fulfillment")
 
 
@@ -167,6 +179,12 @@ def test_fulfill_orders_preserve_remainder_parent_snapshot_after_fulfillment():
         {"productId": "prod-2", "quantity": {"standardQuantity": "2"}}
     ]
     assert order.inflow_data["shipLines"] == [{"salesOrderShipLineId": "ship-leg-2"}]
+    assert (
+        inflow_service_cls.return_value.fulfill_sales_order.await_args.kwargs[
+            "shipment_tracking_number"
+        ]
+        == service.PARTIAL_ORDER_TRACKING_NUMBER
+    )
     print("[PASS] DeliveryRunService preserves remainder-parent snapshots after fulfillment")
 
 

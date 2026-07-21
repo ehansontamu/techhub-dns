@@ -215,13 +215,21 @@ def test_fulfill_sales_order_uses_local_split_leg_snapshot_for_partial_delivery(
                     only_picked_items=True,
                     source_order_data=local_leg_snapshot,
                     source_order_identifier="TH1004-P2",
+                    shipment_tracking_number="12345",
                 )
             )
 
     assert len(recorded["payload"]["packLines"]) == 2
     assert recorded["payload"]["packLines"][1]["quantity"]["standardQuantity"] == "1"
+    assert recorded["payload"]["shipLines"][1]["trackingNumber"] == "12345"
     assert result["_techhub_partial_leg_pack_lines"][0]["quantity"]["standardQuantity"] == "1"
-    assert result["_techhub_partial_leg_ship_lines"][0]["containers"] == ["DELIVERY-TH1004-2"]
+    assert result["_techhub_partial_leg_ship_lines"][0] == {
+        "salesOrderShipLineId": recorded["payload"]["shipLines"][1]["salesOrderShipLineId"],
+        "carrier": "TechHub",
+        "containers": ["DELIVERY-TH1004-2"],
+        "shippedDate": recorded["payload"]["shipLines"][1]["shippedDate"],
+        "trackingNumber": "12345",
+    }
     print("[PASS] Split partial-delivery legs use the local leg snapshot")
 
 

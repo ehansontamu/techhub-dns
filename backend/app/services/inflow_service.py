@@ -734,6 +734,7 @@ class InflowService:
         only_picked_items: bool = False,
         source_order_data: Optional[Dict[str, Any]] = None,
         source_order_identifier: Optional[str] = None,
+        shipment_tracking_number: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Fulfill a sales order by ensuring pickLines, packLines, and shipLines are populated.
@@ -749,6 +750,7 @@ class InflowService:
                               and the "fully picked" validation is skipped.
             source_order_data: Optional local order snapshot to use as the source for partial-leg fulfillment.
             source_order_identifier: Optional local order number/identifier for split-leg detection.
+            shipment_tracking_number: Optional tracking number to place on the newly created shipment.
         """
         from app.services.audit_service import AuditService
 
@@ -869,6 +871,11 @@ class InflowService:
                     "carrier": "TechHub",
                     "containers": [container_number],
                     "shippedDate": now,
+                    **(
+                        {"trackingNumber": shipment_tracking_number}
+                        if shipment_tracking_number
+                        else {}
+                    ),
                 }
             ]
             order["packLines"] = pack_lines + new_pack_lines
