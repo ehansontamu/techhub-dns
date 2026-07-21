@@ -45,6 +45,53 @@ class InflowService:
             }
         return self._headers
 
+    @staticmethod
+    def _summarize_line_quantities(lines: Any) -> List[Dict[str, Any]]:
+        if not isinstance(lines, list):
+            return []
+
+        summary: List[Dict[str, Any]] = []
+        for line in lines:
+            if not isinstance(line, dict):
+                continue
+            summary.append(
+                {
+                    "productId": line.get("productId"),
+                    "description": line.get("description"),
+                    "standardQuantity": ((line.get("quantity") or {}).get("standardQuantity")),
+                    "uomQuantity": ((line.get("quantity") or {}).get("uomQuantity")),
+                    "containerNumber": line.get("containerNumber"),
+                }
+            )
+        return summary
+
+    def _build_fulfillment_http_error(
+        self,
+        *,
+        action: str,
+        order_number: str,
+        response: httpx.Response,
+        payload: Optional[Dict[str, Any]] = None,
+    ) -> ValueError:
+        response_text = (response.text or "").strip()
+        message = (
+            f"{action} failed for order {order_number}: "
+            f"{response.status_code} {response.reason_phrase}"
+        )
+        if response_text:
+            message = f"{message} - {response_text[:1000]}"
+
+        if isinstance(payload, dict):
+            logger.error(
+                "%s payload summary for %s: packLines=%s shipLines=%s",
+                action,
+                order_number,
+                self._summarize_line_quantities(payload.get("packLines")),
+                self._summarize_line_quantities(payload.get("shipLines")),
+            )
+
+        return ValueError(message)
+
     def _is_fully_picked(self, order: Dict[str, Any]) -> bool:
         """
         Check if an order is fully picked by comparing ordered lines vs pick lines.
@@ -95,6 +142,74 @@ class InflowService:
             return float(value or 0)
         except (TypeError, ValueError):
             return 0.0
+
+    @staticmethod
+    def _parse_optional_float(value: Any) -> Optional[float]:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    @classmethod
+    def _normalize_pack_quantity(
+        cls,
+        line: Dict[str, Any],
+        quantity: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        quantity_data = dict((line.get("quantity") or {}))
+        normalized_quantity = (
+            quantity if quantity is not None else cls._parse_standard_quantity(quantity_data)
+        )
+        original_standard_quantity = cls._parse_standard_quantity(quantity_data)
+        original_uom_quantity = cls._parse_optional_float(quantity_data.get("uomQuantity"))
+        existing_uom = str(quantity_data.get("uom") or "").strip()
+
+        product = line.get("product")
+        product_dict = product if isinstance(product, dict) else {}
+        sales_uom = product_dict.get("salesUom")
+        sales_uom_dict = sales_uom if isinstance(sales_uom, dict) else {}
+        resolved_uom = (
+            str(
+                sales_uom_dict.get("name")
+                or sales_uom_dict.get("uom")
+                or product_dict.get("standardUomName")
+                or existing_uom
+                or ""
+            ).strip()
+        )
+
+        quantity_data["standardQuantity"] = str(
+            int(normalized_quantity) if float(normalized_quantity).is_integer() else normalized_quantity
+        )
+
+        if (
+            original_uom_quantity is not None
+            and original_standard_quantity > 0
+            and "uomQuantity" in quantity_data
+        ):
+            raw_uom_quantity = quantity_data.get("uomQuantity")
+            decimal_places = (
+                len(raw_uom_quantity.split(".", 1)[1])
+                if isinstance(raw_uom_quantity, str) and "." in raw_uom_quantity
+                else None
+            )
+            scaled_uom_quantity = original_uom_quantity * (
+                normalized_quantity / original_standard_quantity
+            )
+
+            if resolved_uom:
+                quantity_data["uom"] = resolved_uom
+                if decimal_places is not None:
+                    quantity_data["uomQuantity"] = f"{scaled_uom_quantity:.{decimal_places}f}"
+                else:
+                    quantity_data["uomQuantity"] = scaled_uom_quantity
+            else:
+                if decimal_places is not None:
+                    quantity_data["uomQuantity"] = f"{normalized_quantity:.{decimal_places}f}"
+                else:
+                    quantity_data["uomQuantity"] = str(normalized_quantity)
+
+        return quantity_data
 
     @staticmethod
     def _normalized_text(value: Any) -> str:
@@ -619,6 +734,7 @@ class InflowService:
         only_picked_items: bool = False,
         source_order_data: Optional[Dict[str, Any]] = None,
         source_order_identifier: Optional[str] = None,
+        shipment_tracking_number: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Fulfill a sales order by ensuring pickLines, packLines, and shipLines are populated.
@@ -634,6 +750,7 @@ class InflowService:
                               and the "fully picked" validation is skipped.
             source_order_data: Optional local order snapshot to use as the source for partial-leg fulfillment.
             source_order_identifier: Optional local order number/identifier for split-leg detection.
+            shipment_tracking_number: Optional tracking number to place on the newly created shipment.
         """
         from app.services.audit_service import AuditService
 
@@ -727,13 +844,13 @@ class InflowService:
             container_number = f"DELIVERY-{order_number}-{next_suffix}"
 
             for line in source_lines:
-                if not positive_quantity(line):
+                if not positive_quantity(line) or not self._is_pick_required_line(line):
                     continue
                 new_pack_lines.append(
                     {
                         "salesOrderPackLineId": str(uuid.uuid4()),
                         "productId": line.get("productId"),
-                        "quantity": line.get("quantity"),
+                        "quantity": self._normalize_pack_quantity(line),
                         "description": line.get("description"),
                         "containerNumber": container_number,
                     }
@@ -754,6 +871,11 @@ class InflowService:
                     "carrier": "TechHub",
                     "containers": [container_number],
                     "shippedDate": now,
+                    **(
+                        {"trackingNumber": shipment_tracking_number}
+                        if shipment_tracking_number
+                        else {}
+                    ),
                 }
             ]
             order["packLines"] = pack_lines + new_pack_lines
@@ -769,7 +891,7 @@ class InflowService:
                         {
                             "salesOrderPackLineId": str(uuid.uuid4()),
                             "productId": line.get("productId"),
-                            "quantity": line.get("quantity"),
+                            "quantity": self._normalize_pack_quantity(line),
                             "description": line.get("description"),
                             "containerNumber": container_number,
                         }
@@ -827,7 +949,15 @@ class InflowService:
         url = f"{self.base_url}/{self.company_id}/sales-orders"
         async with httpx.AsyncClient() as client:
             response = await client.put(url, json=order, headers=self.headers)
-            response.raise_for_status()
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError:
+                raise self._build_fulfillment_http_error(
+                    action="InFlow fulfillment",
+                    order_number=order_number,
+                    response=response,
+                    payload=order,
+                )
             result = response.json()
 
         if isinstance(result, dict) and "items" in result:
@@ -1583,7 +1713,15 @@ class InflowService:
         url = f"{self.base_url}/{self.company_id}/sales-orders"
         with httpx.Client() as client:
             response = client.put(url, json=order, headers=self.headers)
-            response.raise_for_status()
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError:
+                raise self._build_fulfillment_http_error(
+                    action="InFlow fulfillment",
+                    order_number=order_number,
+                    response=response,
+                    payload=order,
+                )
             result = response.json()
 
             if db:

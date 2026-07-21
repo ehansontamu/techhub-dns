@@ -16,7 +16,7 @@ import StatusTransition from "../components/StatusTransition";
 import { Button } from "../components/ui/button";
 import { useOrdersWebSocket } from "../hooks/useOrdersWebSocket";
 
-import { getOrderAuditQueryOptions, getOrderDetailQueryOptions, getOrdersListQueryOptions, invalidateOrderQueries } from "../queries/orders";
+import { getOrderAuditQueryOptions, getOrderDetailQueryOptions, getOrdersListQueryOptions, invalidateOrderQueries, ordersQueryKeys } from "../queries/orders";
 import { OrderStatus } from "../types/order";
 import { extractApiErrorMessage, shouldThrowToBoundary } from "../utils/apiErrors";
 import { isValidOrderId } from "../utils/orderIds";
@@ -176,6 +176,40 @@ export default function OrderDetailPage() {
         },
     });
 
+    const rmaReopenMutation = useMutation({
+        mutationFn: ({ reason, expectedUpdatedAt }: {
+            reason: string;
+            expectedUpdatedAt?: string;
+        }) => {
+            if (!orderId) {
+                throw new Error("Order id is required");
+            }
+
+            return ordersApi.rmaReopenOrder(orderId, {
+                reason,
+                expected_updated_at: expectedUpdatedAt,
+            });
+        },
+        onSuccess: async (updatedOrder) => {
+            if (orderId) {
+                queryClient.setQueryData(ordersQueryKeys.detail(orderId), updatedOrder);
+            }
+            await queryClient.invalidateQueries({ queryKey: ordersQueryKeys.lists() });
+            await refreshOrder();
+        },
+        onError: async (error: unknown) => {
+            console.error("Failed to reopen order for RMA:", error);
+            if (isAxiosError(error) && error.response?.status === 409) {
+                toast.error("Order changed by another user. Reloaded the latest details.");
+                await refreshOrder();
+                return;
+            }
+
+            const message = extractApiErrorMessage(error, "Failed to reopen order for RMA");
+            toast.error(message);
+        },
+    });
+
     const tagOrderMutation = useMutation({
         mutationFn: (tagIds: string[]) => {
             if (!orderId || !order) {
@@ -204,14 +238,14 @@ export default function OrderDetailPage() {
     });
 
     const generatePicklistMutation = useMutation({
-        mutationFn: ({ createPartialLeg }: { createPartialLeg?: boolean } = {}) => {
+        mutationFn: ({ createPartialLeg, expectedUpdatedAt }: { createPartialLeg?: boolean; expectedUpdatedAt?: string } = {}) => {
             if (!orderId || !order) {
                 throw new Error("Order is unavailable");
             }
 
             return ordersApi.generatePicklist(orderId, {
                 generated_by: getUserName(),
-                expected_updated_at: order.updated_at,
+                expected_updated_at: expectedUpdatedAt ?? order.updated_at,
                 create_partial_leg: createPartialLeg,
                 confirm_create_partial_leg: createPartialLeg,
             });
@@ -235,12 +269,39 @@ export default function OrderDetailPage() {
 
             await refreshOrder();
         },
-        onError: async (error: unknown) => {
+        onError: async (error: unknown, variables) => {
             console.error("Failed to generate picklist:", error);
-            if (isAxiosError(error) && error.response?.status === 409) {
-                toast.error("Order changed by another user. Reloaded the latest details.");
-                await refreshOrder();
-                return;
+            if (isAxiosError(error) && error.response?.status === 409 && orderId) {
+                try {
+                    const latestOrder = await queryClient.fetchQuery(getOrderDetailQueryOptions(orderId));
+                    const updatedOrder = await ordersApi.generatePicklist(orderId, {
+                        generated_by: getUserName(),
+                        expected_updated_at: latestOrder.updated_at,
+                        create_partial_leg: variables?.createPartialLeg,
+                        confirm_create_partial_leg: variables?.createPartialLeg,
+                    });
+
+                    await queryClient.invalidateQueries({ queryKey: ["orders"] });
+
+                    const nextOrderId = updatedOrder?.id;
+                    if (nextOrderId && nextOrderId !== orderId) {
+                        await invalidateOrderQueries(queryClient, nextOrderId);
+                        navigate(`/orders/${nextOrderId}`, {
+                            state: locationState ?? undefined,
+                            replace: true,
+                        });
+                        return;
+                    }
+
+                    await refreshOrder();
+                    toast.success("Order refreshed from the latest Inflow update before generating the picklist.");
+                    return;
+                } catch (retryError) {
+                    console.error("Failed to retry picklist generation after refresh:", retryError);
+                    toast.error("Order changed by another user. Reloaded the latest details.");
+                    await refreshOrder();
+                    return;
+                }
             }
 
             const message = extractApiErrorMessage(error, "Failed to generate picklist");
@@ -424,6 +485,14 @@ export default function OrderDetailPage() {
         await dismissOrderMutation.mutateAsync({ reason, removeSharePointFiles });
     };
 
+    const handleRmaReopen = async (reason: string) => {
+        if (!order) return;
+        await rmaReopenMutation.mutateAsync({
+            reason,
+            expectedUpdatedAt: order.updated_at,
+        });
+    };
+
     const handleArchiveOrder = async (reason: string) => {
         if (!order) return;
         await archiveOrderMutation.mutateAsync({ reason });
@@ -507,6 +576,7 @@ export default function OrderDetailPage() {
                             canDismissOrder={isAdmin}
                             onDismissOrder={handleDismissOrder}
                             onArchiveOrder={handleArchiveOrder}
+                            onRmaReopen={handleRmaReopen}
                             onStatusChange={handleStatusChange}
                             onRollbackStatus={handleRollbackStatus}
                             onTagOrder={handleTagOrder}

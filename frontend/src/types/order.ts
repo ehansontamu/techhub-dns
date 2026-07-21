@@ -150,6 +150,11 @@ export interface OrderRollbackUpdate {
   expected_updated_at?: string;
 }
 
+export interface OrderRmaReopenUpdate {
+  reason: string;
+  expected_updated_at?: string;
+}
+
 export interface OrderMutationPayload {
   expected_updated_at?: string;
 }

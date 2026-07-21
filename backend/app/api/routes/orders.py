@@ -22,6 +22,7 @@ from app.schemas.order import (
     OrderDismissRequest,
     OrderStatusUpdate,
     OrderRollbackUpdate,
+    OrderRmaReopenRequest,
     BulkStatusUpdate,
     OrderUpdate,
     AssetTagUpdate,
@@ -94,16 +95,52 @@ def _resolve_asset_tag_required(
         return data
 
     tag_requirement_source = inflow_data
+    db_session = object_session(order)
+    splitting_service = OrderSplittingService(db_session) if db_session is not None else None
+
+    # Unsplit parent orders should gate asset tags on the currently picked subset,
+    # not on the full order payload that may still contain unpicked tagged items.
+    pick_lines = inflow_data.get("pickLines", []) if isinstance(inflow_data, dict) else []
+    if (
+        splitting_service is not None
+        and not getattr(order, "parent_order_id", None)
+        and not getattr(order, "remainder_order_id", None)
+        and isinstance(pick_lines, list)
+        and len(pick_lines) > 0
+    ):
+        tag_requirement_source = splitting_service._build_partial_leg_view(inflow_data)
+
     if getattr(order, "remainder_order_id", None) and not getattr(
         order, "parent_order_id", None
     ):
-        db_session = object_session(order)
-        if db_session is not None:
-            remainder_view = OrderSplittingService(db_session).build_parent_remainder_document_view(
-                order
-            )
+        if splitting_service is not None:
+            remainder_view = splitting_service.build_parent_remainder_document_view(order)
             if remainder_view is not None:
                 tag_requirement_source = remainder_view
+
+    try:
+        pick_status = None
+        if inflow_service is not None:
+            pick_status = inflow_service.get_pick_status(
+                tag_requirement_source,
+                include_services=False,
+            )
+        is_partial_pick = bool(
+            pick_status
+            and pick_status.get("total_ordered", 0) > 0
+            and pick_status.get("total_picked", 0) > 0
+            and pick_status.get("total_picked", 0) < pick_status.get("total_ordered", 0)
+        )
+        if is_partial_pick and not getattr(order, "parent_order_id", None) and splitting_service is not None:
+            tag_requirement_source = splitting_service._build_partial_leg_view(
+                tag_requirement_source
+            )
+    except Exception as exc:
+        logger.warning(
+            "Failed to compute partial tag requirement source for order %s: %s",
+            getattr(order, "inflow_order_id", None) or getattr(order, "id", None),
+            exc,
+        )
 
     try:
         if inflow_service is not None and asset_tag_requirement_cache is not None:
@@ -683,8 +720,10 @@ def get_order(order_id):
                 if remainder_pick_source is not None:
                     pick_status_source = remainder_pick_source
             response_data["inflow_data"] = order_view
-            response_data["asset_tag_required"] = inflow_service.requires_asset_tags(
-                order_view
+            response_data = _resolve_asset_tag_required(
+                response_data,
+                order,
+                inflow_service,
             )
             response_data["asset_tag_serials"] = inflow_service.get_asset_tag_serials(
                 order_view
@@ -811,6 +850,28 @@ def rollback_order_status(order_id):
             changed_by=changed_by,
             reason=rollback_update.reason,
             expected_updated_at=rollback_update.expected_updated_at,
+        )
+
+        broadcast_dedup.request_broadcast(_broadcast_orders_sync)
+
+        return jsonify(_order_response_json(order, db))
+
+
+@bp.route("/<order_id>/rma-reopen", methods=["PATCH"])
+@require_auth
+def rma_reopen_order(order_id):
+    """Refresh a delivered order from Inflow and reopen it to picked for RMA processing."""
+    data = request.get_json() or {}
+    changed_by = request.args.get("changed_by") or get_current_user_display_name()
+
+    with get_db() as db:
+        service = OrderService(db)
+        reopen_request = OrderRmaReopenRequest(**data)
+        order = service.rma_reopen_order(
+            order_id=order_id,
+            changed_by=changed_by,
+            reason=reopen_request.reason,
+            expected_updated_at=reopen_request.expected_updated_at,
         )
 
         broadcast_dedup.request_broadcast(_broadcast_orders_sync)
@@ -1173,7 +1234,11 @@ def sign_order(order_id):
         order.signed_picklist_path = signed_picklist_path
         order.bundle_path = bundled_path
         if updated_inflow_order is not None:
-            order.inflow_data = updated_inflow_order
+            # The InFlow response carries the full combined order; merge it so
+            # split partial legs keep their leg-scoped item set.
+            order.inflow_data = service.merge_inflow_snapshot_preserving_split(
+                order, updated_inflow_order
+            )
         order.updated_at = datetime.utcnow()
 
         delivery_vehicle = order.delivery_run.vehicle if order.delivery_run else None

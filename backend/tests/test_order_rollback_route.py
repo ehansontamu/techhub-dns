@@ -78,6 +78,56 @@ def test_rollback_route_calls_service_and_serializes_response(monkeypatch):
     assert response.get_json() == {"id": "order-1", "status": "qa"}
 
 
+def test_rma_reopen_route_calls_service_and_serializes_response(monkeypatch):
+    captured = {}
+
+    class FakeRmaRequest:
+        def __init__(self, **data):
+            captured["parsed_payload"] = data
+            self.reason = data.get("reason")
+            self.expected_updated_at = data.get("expected_updated_at")
+
+    class FakeService:
+        def __init__(self, db):
+            captured["db"] = db
+
+        def rma_reopen_order(self, **kwargs):
+            captured["service_args"] = kwargs
+            return SimpleNamespace(id="order-1")
+
+    def fake_response_json(order, db=None):
+        captured["serialized_order"] = order
+        return {"id": order.id, "status": "picked"}
+
+    fake_broadcast = MagicMock()
+
+    monkeypatch.setattr(orders_routes, "get_db", _fake_db_context)
+    monkeypatch.setattr(orders_routes, "OrderRmaReopenRequest", FakeRmaRequest)
+    monkeypatch.setattr(orders_routes, "OrderService", FakeService)
+    monkeypatch.setattr(orders_routes, "_order_response_json", fake_response_json)
+    monkeypatch.setattr(orders_routes.broadcast_dedup, "request_broadcast", fake_broadcast)
+    monkeypatch.setattr(orders_routes, "get_current_user_display_name", lambda: "Display User")
+
+    from flask import Flask
+
+    app = Flask(__name__)
+    with app.test_request_context(
+        "/orders/order-1/rma-reopen?changed_by=ops@example.com",
+        method="PATCH",
+        json={"reason": "Returned item replaced", "expected_updated_at": "2026-07-09T20:00:00Z"},
+    ):
+        response = orders_routes.rma_reopen_order.__wrapped__("order-1")
+
+    assert captured["parsed_payload"]["reason"] == "Returned item replaced"
+    assert captured["service_args"]["order_id"] == "order-1"
+    assert captured["service_args"]["changed_by"] == "ops@example.com"
+    assert captured["service_args"]["reason"] == "Returned item replaced"
+    assert captured["service_args"]["expected_updated_at"] == "2026-07-09T20:00:00Z"
+    assert fake_broadcast.call_count == 1
+    assert response.get_json() == {"id": "order-1", "status": "picked"}
+
+
 if __name__ == "__main__":
     test_rollback_route_calls_service_and_serializes_response()
+    test_rma_reopen_route_calls_service_and_serializes_response()
     print("[SUCCESS] order rollback route test passed")

@@ -283,6 +283,17 @@ export const getOrderProductTableView = (order: PartialOrderSource): OrderProduc
     };
   }
 
+  if (partialInfo.isPartial) {
+    const pickLines = Array.isArray(inflowData.pickLines) ? inflowData.pickLines : [];
+    return {
+      title: "Picked items (partial order)",
+      description:
+        "Only the items picked so far. The remaining items will stay on this order when the picked subset is split off at picklist generation.",
+      rows: buildOrderProductRows(pickLines),
+      emptyState: "No items have been picked yet on this order.",
+    };
+  }
+
   return {
     title: "Product table",
     description: "All items on this order.",

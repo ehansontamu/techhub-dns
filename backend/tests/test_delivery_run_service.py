@@ -46,6 +46,12 @@ def test_fulfill_orders_persists_updated_inflow_payload():
     assert len(successes) == 1
     assert successes[0]["inflow_sales_order_id"] == "sales-order-1"
     assert order.inflow_data == updated_payload
+    assert (
+        inflow_service_cls.return_value.fulfill_sales_order.await_args.kwargs[
+            "shipment_tracking_number"
+        ]
+        is None
+    )
     print("[PASS] DeliveryRunService persists updated InFlow payload")
 
 
@@ -100,7 +106,150 @@ def test_fulfill_orders_preserve_split_leg_snapshot_after_partial_success():
         {"productId": "prod-1", "quantity": {"standardQuantity": "1"}}
     ]
     assert order.inflow_data["shipLines"] == [{"salesOrderShipLineId": "ship-leg-1"}]
+    assert (
+        inflow_service_cls.return_value.fulfill_sales_order.await_args.kwargs[
+            "shipment_tracking_number"
+        ]
+        == service.PARTIAL_ORDER_TRACKING_NUMBER
+    )
     print("[PASS] DeliveryRunService preserves split-leg snapshots after fulfillment")
+
+
+def test_fulfill_orders_preserve_remainder_parent_snapshot_after_fulfillment():
+    """A remainder parent keeps its leg-scoped lines when its own delivery is fulfilled."""
+
+    order = SimpleNamespace(
+        id="order-remainder-parent-1",
+        inflow_order_id="TH1005",
+        inflow_sales_order_id="sales-order-5",
+        parent_order_id=None,
+        remainder_order_id="child-order-1",
+        has_remainder="Y",
+        inflow_data={
+            "lines": [{"productId": "prod-2", "quantity": {"standardQuantity": "2"}}],
+            "pickLines": [{"productId": "prod-2", "quantity": {"standardQuantity": "2"}}],
+            "packLines": [],
+            "shipLines": [],
+        },
+    )
+    # InFlow only knows the original combined order, so its response carries
+    # the full item set (including the child leg that was already delivered).
+    updated_payload = {
+        "orderNumber": "TH1005",
+        "inventoryStatus": "fulfilled",
+        "lines": [
+            {"productId": "prod-1", "quantity": {"standardQuantity": "1"}},
+            {"productId": "prod-2", "quantity": {"standardQuantity": "2"}},
+        ],
+        "pickLines": [
+            {"productId": "prod-1", "quantity": {"standardQuantity": "1"}},
+            {"productId": "prod-2", "quantity": {"standardQuantity": "2"}},
+        ],
+        "packLines": [
+            {"productId": "prod-1"},
+            {"productId": "prod-2"},
+        ],
+        "shipLines": [{"salesOrderShipLineId": "ship-live"}],
+        "_techhub_partial_leg_pack_lines": [
+            {"productId": "prod-2", "quantity": {"standardQuantity": "2"}}
+        ],
+        "_techhub_partial_leg_ship_lines": [{"salesOrderShipLineId": "ship-leg-2"}],
+    }
+
+    service = DeliveryRunService(db=cast(Any, object()))
+
+    with patch("app.services.delivery_run_service.InflowService") as inflow_service_cls:
+        inflow_service_cls.return_value.fulfill_sales_order = AsyncMock(
+            return_value=updated_payload
+        )
+
+        successes, failures = service._fulfill_orders_in_inflow(
+            cast(Any, [order]), user_id="user-1"
+        )
+
+    assert failures == []
+    assert len(successes) == 1
+    assert order.inflow_data["lines"] == [
+        {"productId": "prod-2", "quantity": {"standardQuantity": "2"}}
+    ]
+    assert order.inflow_data["pickLines"] == [
+        {"productId": "prod-2", "quantity": {"standardQuantity": "2"}}
+    ]
+    assert order.inflow_data["packLines"] == [
+        {"productId": "prod-2", "quantity": {"standardQuantity": "2"}}
+    ]
+    assert order.inflow_data["shipLines"] == [{"salesOrderShipLineId": "ship-leg-2"}]
+    assert (
+        inflow_service_cls.return_value.fulfill_sales_order.await_args.kwargs[
+            "shipment_tracking_number"
+        ]
+        == service.PARTIAL_ORDER_TRACKING_NUMBER
+    )
+    print("[PASS] DeliveryRunService preserves remainder-parent snapshots after fulfillment")
+
+
+def test_fulfill_orders_already_fulfilled_preserves_split_snapshot():
+    """The already-fulfilled retry path must not clobber split-leg item sets either."""
+
+    order = SimpleNamespace(
+        id="order-split-fulfilled",
+        inflow_order_id="TH2002-P",
+        inflow_sales_order_id="sales-order-split-fulfilled",
+        parent_order_id="parent-order-2",
+        remainder_order_id=None,
+        has_remainder=None,
+        inflow_data={
+            "orderNumber": "TH2002-P",
+            "lines": [{"productId": "prod-1", "quantity": {"standardQuantity": "1"}}],
+            "pickLines": [{"productId": "prod-1", "quantity": {"standardQuantity": "1"}}],
+            "packLines": [{"productId": "prod-1", "quantity": {"standardQuantity": "1"}}],
+            "shipLines": [{"salesOrderShipLineId": "ship-leg-1"}],
+        },
+    )
+    fulfilled_payload = {
+        "id": "sales-order-split-fulfilled",
+        "orderNumber": "TH2002",
+        "inventoryStatus": "fulfilled",
+        "lines": [
+            {"productId": "prod-1", "quantity": {"standardQuantity": "1"}},
+            {"productId": "prod-2", "quantity": {"standardQuantity": "4"}},
+        ],
+        "pickLines": [
+            {"productId": "prod-1", "quantity": {"standardQuantity": "1"}},
+            {"productId": "prod-2", "quantity": {"standardQuantity": "4"}},
+        ],
+        "packLines": [{"productId": "prod-1"}, {"productId": "prod-2"}],
+        "shipLines": [{"salesOrderShipLineId": "ship-live"}],
+    }
+
+    service = DeliveryRunService(db=cast(Any, object()))
+
+    with patch("app.services.delivery_run_service.InflowService") as inflow_service_cls:
+        inflow_service = inflow_service_cls.return_value
+        inflow_service.fulfill_sales_order = AsyncMock(
+            side_effect=ValueError("Order TH2002 has no newly picked items to fulfill in InFlow")
+        )
+        inflow_service.get_order_by_id = AsyncMock(return_value=fulfilled_payload)
+
+        successes, failures = service._fulfill_orders_in_inflow(
+            cast(Any, [order]), user_id="user-1"
+        )
+
+    assert failures == []
+    assert len(successes) == 1
+    assert successes[0]["already_fulfilled"] is True
+    assert order.inflow_data["lines"] == [
+        {"productId": "prod-1", "quantity": {"standardQuantity": "1"}}
+    ]
+    assert order.inflow_data["pickLines"] == [
+        {"productId": "prod-1", "quantity": {"standardQuantity": "1"}}
+    ]
+    assert order.inflow_data["packLines"] == [
+        {"productId": "prod-1", "quantity": {"standardQuantity": "1"}}
+    ]
+    assert order.inflow_data["shipLines"] == [{"salesOrderShipLineId": "ship-leg-1"}]
+    assert order.inflow_data["inventoryStatus"] == "fulfilled"
+    print("[PASS] DeliveryRunService keeps split snapshots on already-fulfilled retries")
 
 
 def test_fulfill_orders_accepts_already_fulfilled_inflow_order():

@@ -91,6 +91,12 @@ class OrderService:
             for field in ("packLines", "shipLines"):
                 if field in current_snapshot:
                     merged[field] = deepcopy(current_snapshot.get(field))
+            # A picked child leg's pickLines were fixed at split time and define
+            # the leg; InFlow's pickLines are cumulative for the combined order
+            # and would bleed the other legs' picks into the child. Remainder
+            # parents keep fresh pickLines (normalized separately).
+            if existing_order.parent_order_id and "pickLines" in current_snapshot:
+                merged["pickLines"] = deepcopy(current_snapshot.get("pickLines"))
             remainder_cycle_started_at = current_snapshot.get(
                 OrderSplittingService.REMAINDER_CYCLE_STARTED_AT_KEY
             )
@@ -107,6 +113,30 @@ class OrderService:
                     merged[field] = deepcopy(current_snapshot.get(field))
         return merged
 
+    def merge_inflow_snapshot_preserving_split(
+        self,
+        order: Order,
+        inflow_data: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """
+        Merge a fresh InFlow snapshot into an order without clobbering partial-split state.
+
+        Any code path that writes an InFlow API response back to ``order.inflow_data``
+        must go through this (or the underlying helpers): InFlow only knows the
+        original combined sales order, so its responses always carry the full item
+        set and would otherwise erase the leg-scoped ``lines`` of split orders.
+        """
+        merged = self._preserve_partial_split_inflow_snapshot(order, inflow_data)
+        if getattr(order, "remainder_order_id", None) and not getattr(
+            order, "parent_order_id", None
+        ):
+            merged = OrderSplittingService(self.db).normalize_partial_remainder_snapshot(
+                order,
+                merged,
+                rebuild_lines=True,
+            )
+        return merged
+
     def _requires_asset_tags(self, order: Order) -> bool:
         if not SystemSettingService.is_setting_enabled(
             SETTING_REQUIRE_ASSET_TAGS_BEFORE_PICKLIST
@@ -118,17 +148,35 @@ class OrderService:
 
         from app.services.inflow_service import InflowService
 
+        inflow_service = InflowService()
+        splitting_service = OrderSplittingService(self.db)
+
         tag_requirement_source = order.inflow_data
-        if getattr(order, "remainder_order_id", None) and not getattr(
-            order, "parent_order_id", None
-        ):
-            remainder_view = OrderSplittingService(self.db).build_parent_remainder_document_view(
-                order
-            )
+        if getattr(order, "remainder_order_id", None) and not getattr(order, "parent_order_id", None):
+            remainder_view = splitting_service.build_parent_remainder_document_view(order)
             if remainder_view is not None:
                 tag_requirement_source = remainder_view
 
-        return InflowService().requires_asset_tags(tag_requirement_source)
+        try:
+            pick_status = inflow_service.get_pick_status(
+                tag_requirement_source,
+                include_services=False,
+            )
+        except Exception:
+            pick_status = None
+
+        is_partial_pick = bool(
+            pick_status
+            and pick_status.get("total_ordered", 0) > 0
+            and pick_status.get("total_picked", 0) > 0
+            and pick_status.get("total_picked", 0) < pick_status.get("total_ordered", 0)
+        )
+        if is_partial_pick and not getattr(order, "parent_order_id", None):
+            tag_requirement_source = splitting_service._build_partial_leg_view(
+                tag_requirement_source
+            )
+
+        return inflow_service.requires_asset_tags(tag_requirement_source)
 
     @staticmethod
     def _apply_order_search(query, search: str):
@@ -1630,6 +1678,184 @@ class OrderService:
 
         return order
 
+    def rma_reopen_order(
+        self,
+        order_id: Union[UUID, str],
+        *,
+        changed_by: Optional[str],
+        reason: str,
+        expected_updated_at: Optional[datetime] = None,
+    ) -> Order:
+        """Refresh a delivered order from Inflow and reopen it to picked for an RMA workflow."""
+        order = self._resolve_order(str(order_id), lock=True)
+        if not order:
+            raise NotFoundError("Order", str(order_id))
+
+        self.assert_not_stale(order, expected_updated_at)
+
+        if order.status != OrderStatus.DELIVERED.value:
+            raise ValidationError(
+                "RMA reopen is only available for delivered orders",
+                details={
+                    "order_id": order.inflow_order_id,
+                    "current_status": order.status,
+                },
+            )
+
+        reason = reason.strip()
+        if not reason:
+            raise ValidationError("Reason is required when reopening an order for RMA")
+
+        from app.services.inflow_service import InflowService
+
+        inflow_service = InflowService()
+        inflow_snapshot = None
+        if order.inflow_sales_order_id:
+            inflow_snapshot = inflow_service.get_order_by_id_sync(
+                str(order.inflow_sales_order_id)
+            )
+        if inflow_snapshot is None and order.inflow_order_id:
+            inflow_snapshot = inflow_service.get_order_by_number_sync(
+                order.inflow_order_id
+            )
+        if inflow_snapshot is None:
+            raise ValidationError(
+                "Unable to refresh the latest Inflow order snapshot for this RMA reopen",
+                details={"order_id": order.inflow_order_id},
+            )
+
+        refreshed_snapshot = deepcopy(inflow_snapshot)
+        is_split_order = bool(
+            getattr(order, "parent_order_id", None)
+            or getattr(order, "remainder_order_id", None)
+            or getattr(order, "has_remainder", None)
+        )
+        if is_split_order:
+            refreshed_snapshot = self._preserve_partial_split_inflow_snapshot(
+                order, refreshed_snapshot
+            )
+            current_snapshot = (
+                order.inflow_data if isinstance(order.inflow_data, dict) else {}
+            )
+            if "pickLines" in current_snapshot:
+                # Each leg's picks are tracked locally; InFlow's pickLines are
+                # cumulative across all legs and would bleed the other legs'
+                # items into this one.
+                refreshed_snapshot["pickLines"] = deepcopy(
+                    current_snapshot.get("pickLines")
+                )
+        refreshed_snapshot["packLines"] = []
+        refreshed_snapshot["shipLines"] = []
+
+        old_status = order.status
+        prior_state = {
+            "status": order.status,
+            "delivery_run_id": order.delivery_run_id,
+            "delivery_sequence": order.delivery_sequence,
+            "picklist_generated_at": to_utc_iso_z(order.picklist_generated_at),
+            "picklist_path": order.picklist_path,
+            "qa_completed_at": to_utc_iso_z(order.qa_completed_at),
+            "signature_captured_at": to_utc_iso_z(order.signature_captured_at),
+            "shipping_workflow_status": order.shipping_workflow_status,
+            "tagged_at": to_utc_iso_z(order.tagged_at),
+        }
+
+        order.inflow_data = refreshed_snapshot
+        order.status = OrderStatus.PICKED.value
+        order.updated_at = datetime.utcnow()
+        order.issue_reason = None
+        order.delivery_run_id = None
+        order.delivery_sequence = None
+        order.assigned_deliverer = None
+
+        order.shipping_workflow_status = ShippingWorkflowStatus.WORK_AREA.value
+        order.shipping_workflow_status_updated_at = None
+        order.shipping_workflow_status_updated_by = None
+        order.shipped_to_carrier_at = None
+        order.shipped_to_carrier_by = None
+        order.carrier_name = None
+        order.tracking_number = None
+
+        order.signature_captured_at = None
+        order.signed_picklist_path = None
+        order.bundle_path = None
+
+        order.tagged_at = None
+        order.tagged_by = None
+        order.tag_data = None
+
+        order.picklist_generated_at = None
+        order.picklist_generated_by = None
+        order.picklist_path = None
+
+        order.order_details_path = None
+        order.order_details_generated_at = None
+        order.order_details_email_status = None
+        order.order_details_email_status_updated_at = None
+
+        order.qa_completed_at = None
+        order.qa_completed_by = None
+        order.qa_data = None
+        order.qa_path = None
+        order.qa_method = None
+
+        audit_log = AuditLog(
+            order_id=order.id,
+            changed_by=changed_by,
+            from_status=old_status,
+            to_status=OrderStatus.PICKED.value,
+            reason=reason,
+            timestamp=datetime.utcnow(),
+            extra_metadata={
+                "action": "rma_reopen",
+                "refreshed_from_inflow": True,
+                "cleared_pack_lines": True,
+                "cleared_ship_lines": True,
+                "pick_line_count": len(refreshed_snapshot.get("pickLines", []) or []),
+            },
+        )
+        self.db.add(audit_log)
+        self._record_status_history(
+            order=order,
+            from_status=old_status,
+            to_status=OrderStatus.PICKED.value,
+            actor_identifier=changed_by,
+            metadata={
+                "reason": reason,
+                "rma_reopen": True,
+                "refreshed_from_inflow": True,
+                "cleared_pack_lines": True,
+                "cleared_ship_lines": True,
+            },
+        )
+
+        audit_service = AuditService(self.db)
+        audit_service.log_order_action(
+            order_id=str(order.id),
+            action="rma_reopen",
+            user_id=changed_by or "system",
+            description="Delivered order reopened to picked for RMA processing",
+            old_value=prior_state,
+            new_value={
+                "status": order.status,
+                "delivery_run_id": order.delivery_run_id,
+                "delivery_sequence": order.delivery_sequence,
+                "shipping_workflow_status": order.shipping_workflow_status,
+                "pick_line_count": len(refreshed_snapshot.get("pickLines", []) or []),
+                "pack_line_count": len(refreshed_snapshot.get("packLines", []) or []),
+                "ship_line_count": len(refreshed_snapshot.get("shipLines", []) or []),
+            },
+            audit_metadata={
+                "reason": reason,
+                "refreshed_from_inflow": True,
+                "inflow_order_id": order.inflow_order_id,
+            },
+        )
+
+        self.db.commit()
+        self.db.refresh(order)
+        return order
+
     def _is_valid_transition(self, from_status: str, to_status: str) -> bool:
         """Validate status transition"""
         valid_transitions = {
@@ -2385,18 +2611,11 @@ class OrderService:
             if data_changed:
                 existing.updated_at = datetime.utcnow()
 
-            merged_inflow_data = self._preserve_partial_split_inflow_snapshot(
+            # Always update to keep latest data without clobbering partial splits
+            merged_inflow_data = self.merge_inflow_snapshot_preserving_split(
                 existing,
                 inflow_data,
-            )  # Always update to keep latest data without clobbering partial splits
-            if getattr(existing, "remainder_order_id", None) and not getattr(
-                existing, "parent_order_id", None
-            ):
-                merged_inflow_data = OrderSplittingService(self.db).normalize_partial_remainder_snapshot(
-                    existing,
-                    merged_inflow_data,
-                    rebuild_lines=True,
-                )
+            )
 
             if existing.inflow_data != merged_inflow_data:
                 existing.inflow_data = merged_inflow_data
@@ -2520,19 +2739,10 @@ class OrderService:
                 # Another request created it — fetch and update instead
                 existing = self.db.query(Order).filter(Order.inflow_order_id == order_number).first()
                 if existing:
-                    merged_inflow_data = self._preserve_partial_split_inflow_snapshot(
+                    existing.inflow_data = self.merge_inflow_snapshot_preserving_split(
                         existing,
                         inflow_data,
                     )
-                    if getattr(existing, "remainder_order_id", None) and not getattr(
-                        existing, "parent_order_id", None
-                    ):
-                        merged_inflow_data = OrderSplittingService(self.db).normalize_partial_remainder_snapshot(
-                            existing,
-                            merged_inflow_data,
-                            rebuild_lines=True,
-                        )
-                    existing.inflow_data = merged_inflow_data
                     existing.updated_at = datetime.utcnow()
                     self.db.commit()
                     self.db.refresh(existing)

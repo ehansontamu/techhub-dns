@@ -215,14 +215,264 @@ def test_fulfill_sales_order_uses_local_split_leg_snapshot_for_partial_delivery(
                     only_picked_items=True,
                     source_order_data=local_leg_snapshot,
                     source_order_identifier="TH1004-P2",
+                    shipment_tracking_number="12345",
                 )
             )
 
     assert len(recorded["payload"]["packLines"]) == 2
     assert recorded["payload"]["packLines"][1]["quantity"]["standardQuantity"] == "1"
+    assert recorded["payload"]["shipLines"][1]["trackingNumber"] == "12345"
     assert result["_techhub_partial_leg_pack_lines"][0]["quantity"]["standardQuantity"] == "1"
-    assert result["_techhub_partial_leg_ship_lines"][0]["containers"] == ["DELIVERY-TH1004-2"]
+    assert result["_techhub_partial_leg_ship_lines"][0] == {
+        "salesOrderShipLineId": recorded["payload"]["shipLines"][1]["salesOrderShipLineId"],
+        "carrier": "TechHub",
+        "containers": ["DELIVERY-TH1004-2"],
+        "shippedDate": recorded["payload"]["shipLines"][1]["shippedDate"],
+        "trackingNumber": "12345",
+    }
     print("[PASS] Split partial-delivery legs use the local leg snapshot")
+
+
+def test_fulfill_sales_order_ignores_service_lines_in_split_leg_snapshot():
+    """Split delivery legs should not create pack lines for service-only rows."""
+
+    live_order_payload = {
+        "salesOrderId": "sales-order-4a",
+        "orderNumber": "TH0170",
+        "customerId": "customer-1",
+        "lines": [
+            {
+                "productId": "prod-laptop",
+                "description": "Laptop",
+                "quantity": {"standardQuantity": "1"},
+            },
+            {
+                "productId": "prod-imaging",
+                "description": "Computer Imaging",
+                "product": {"name": "Computer Imaging", "sku": "SERVICE"},
+                "quantity": {"standardQuantity": "1"},
+            },
+        ],
+        "pickLines": [
+            {
+                "productId": "prod-laptop",
+                "description": "Laptop",
+                "quantity": {"standardQuantity": "1"},
+            }
+        ],
+        "packLines": [],
+        "shipLines": [],
+    }
+    local_leg_snapshot = {
+        "lines": [
+            {
+                "productId": "prod-laptop",
+                "description": "Laptop",
+                "quantity": {"standardQuantity": "1"},
+            },
+            {
+                "productId": "prod-imaging",
+                "description": "Computer Imaging",
+                "product": {"name": "Computer Imaging", "sku": "SERVICE"},
+                "quantity": {"standardQuantity": "1"},
+            },
+        ],
+        "pickLines": [
+            {
+                "productId": "prod-laptop",
+                "description": "Laptop",
+                "quantity": {"standardQuantity": "1"},
+            },
+            {
+                "productId": "prod-imaging",
+                "description": "Computer Imaging",
+                "product": {"name": "Computer Imaging", "sku": "SERVICE"},
+                "quantity": {"standardQuantity": "1"},
+            },
+        ],
+        "packLines": [],
+        "shipLines": [],
+    }
+
+    recorded: dict[str, Any] = {}
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, Any]:
+            return {"items": [recorded["payload"]]}
+
+    class FakeAsyncClient:
+        async def __aenter__(self) -> "FakeAsyncClient":
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb) -> None:
+            return None
+
+        async def put(
+            self, url: str, json: dict[str, Any], headers: dict[str, str]
+        ) -> FakeResponse:
+            recorded["payload"] = json
+            return FakeResponse()
+
+    service = InflowService()
+    service._headers = {
+        "Authorization": "Bearer test",
+        "Content-Type": "application/json",
+    }
+
+    with patch.object(
+        service, "get_order_by_id", AsyncMock(return_value=live_order_payload)
+    ):
+        with patch("app.services.inflow_service.httpx.AsyncClient", FakeAsyncClient):
+            result = asyncio.run(
+                service.fulfill_sales_order(
+                    "sales-order-4a",
+                    only_picked_items=True,
+                    source_order_data=local_leg_snapshot,
+                    source_order_identifier="TH0170-P",
+                )
+            )
+
+    assert len(recorded["payload"]["packLines"]) == 1
+    assert recorded["payload"]["packLines"][0]["productId"] == "prod-laptop"
+    assert result["_techhub_partial_leg_pack_lines"] == [
+        recorded["payload"]["packLines"][0]
+    ]
+    print("[PASS] Split partial-delivery fulfillment ignores service lines")
+
+
+def test_fulfill_sales_order_normalizes_blank_uom_partial_quantities():
+    """Split partial-delivery fulfillment should not send mismatched blank-UoM quantities."""
+
+    live_order_payload = {
+        "salesOrderId": "sales-order-170",
+        "orderNumber": "TH000170",
+        "customerId": "customer-1",
+        "lines": [
+            {
+                "productId": "prod-accessory",
+                "description": "",
+                "product": {
+                    "name": "Custom Accessory",
+                    "itemType": "stockedProduct",
+                    "salesUom": None,
+                    "standardUomName": "",
+                },
+                "quantity": {
+                    "standardQuantity": "2.0",
+                    "uomQuantity": "5.0000",
+                    "uom": "",
+                },
+            }
+        ],
+        "pickLines": [
+            {
+                "productId": "prod-accessory",
+                "description": "",
+                "product": {
+                    "name": "Custom Accessory",
+                    "itemType": "stockedProduct",
+                    "salesUom": None,
+                    "standardUomName": "",
+                },
+                "quantity": {
+                    "standardQuantity": "2.0",
+                    "uomQuantity": "5.0000",
+                    "uom": "",
+                },
+            }
+        ],
+        "packLines": [],
+        "shipLines": [],
+    }
+    local_leg_snapshot = {
+        "lines": [
+            {
+                "productId": "prod-accessory",
+                "description": "",
+                "product": {
+                    "name": "Custom Accessory",
+                    "itemType": "stockedProduct",
+                    "salesUom": None,
+                    "standardUomName": "",
+                },
+                "quantity": {
+                    "standardQuantity": "1.0",
+                    "uomQuantity": "5.0000",
+                    "uom": "",
+                },
+            }
+        ],
+        "pickLines": [
+            {
+                "productId": "prod-accessory",
+                "description": "",
+                "product": {
+                    "name": "Custom Accessory",
+                    "itemType": "stockedProduct",
+                    "salesUom": None,
+                    "standardUomName": "",
+                },
+                "quantity": {
+                    "standardQuantity": "1.0",
+                    "uomQuantity": "5.0000",
+                    "uom": "",
+                },
+            }
+        ],
+        "packLines": [],
+        "shipLines": [],
+    }
+
+    recorded: dict[str, Any] = {}
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, Any]:
+            return {"items": [recorded["payload"]]}
+
+    class FakeAsyncClient:
+        async def __aenter__(self) -> "FakeAsyncClient":
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb) -> None:
+            return None
+
+        async def put(
+            self, url: str, json: dict[str, Any], headers: dict[str, str]
+        ) -> FakeResponse:
+            recorded["payload"] = json
+            return FakeResponse()
+
+    service = InflowService()
+    service._headers = {
+        "Authorization": "Bearer test",
+        "Content-Type": "application/json",
+    }
+
+    with patch.object(
+        service, "get_order_by_id", AsyncMock(return_value=live_order_payload)
+    ):
+        with patch("app.services.inflow_service.httpx.AsyncClient", FakeAsyncClient):
+            asyncio.run(
+                service.fulfill_sales_order(
+                    "sales-order-170",
+                    only_picked_items=True,
+                    source_order_data=local_leg_snapshot,
+                    source_order_identifier="TH000170-P",
+                )
+            )
+
+    assert recorded["payload"]["packLines"][0]["quantity"] == {
+        "standardQuantity": "1",
+        "uomQuantity": "1.0000",
+        "uom": "",
+    }
+    print("[PASS] Split fulfillment normalizes blank-UoM partial quantities")
 
 
 def test_fulfill_sales_order_falls_back_when_split_leg_snapshot_is_empty():
@@ -555,7 +805,11 @@ def test_partial_picklist_leg_creation_links_parent_and_child():
                 {
                     "productId": "prod-1",
                     "description": "Laptop",
-                    "quantity": {"standardQuantity": "2"},
+                    "quantity": {
+                        "standardQuantity": "2",
+                        "uomQuantity": "5.0000",
+                        "uom": "",
+                    },
                 },
                 {
                     "productId": "prod-2",
@@ -567,7 +821,11 @@ def test_partial_picklist_leg_creation_links_parent_and_child():
                 {
                     "productId": "prod-1",
                     "description": "Laptop",
-                    "quantity": {"standardQuantity": "1"},
+                    "quantity": {
+                        "standardQuantity": "1",
+                        "uomQuantity": "5.0000",
+                        "uom": "",
+                    },
                 }
             ],
             "packLines": [
@@ -600,7 +858,7 @@ def test_partial_picklist_leg_creation_links_parent_and_child():
             {
                 "productId": "prod-1",
                 "description": "Laptop",
-                "quantity": {"standardQuantity": 1.0},
+                "quantity": {"standardQuantity": "1.0", "uomQuantity": "1.0000", "uom": ""},
             },
             {
                 "productId": "prod-2",
@@ -615,14 +873,14 @@ def test_partial_picklist_leg_creation_links_parent_and_child():
             {
                 "productId": "prod-1",
                 "description": "Laptop",
-                "quantity": {"standardQuantity": "1.0"},
+                "quantity": {"standardQuantity": "1.0", "uomQuantity": "1.0000", "uom": ""},
             }
         ]
         assert child_order.inflow_data["pickLines"] == [
             {
                 "productId": "prod-1",
                 "description": "Laptop",
-                "quantity": {"standardQuantity": "1.0"},
+                "quantity": {"standardQuantity": "1.0", "uomQuantity": "1.0000", "uom": ""},
             }
         ]
         assert child_order.inflow_data.get("packLines") == []
@@ -634,7 +892,7 @@ def test_partial_picklist_leg_creation_links_parent_and_child():
 
 
 def test_create_order_from_inflow_preserves_existing_split_payload():
-    """Webhook refreshes should preserve split lines but allow fresh pick state through."""
+    """Webhook refreshes preserve split lines and local shipment state but let fresh picks through."""
 
     session, engine = _make_sqlite_session()
 
@@ -758,19 +1016,11 @@ def test_create_order_from_inflow_preserves_existing_split_payload():
             "unitPrice": 15,
         }
     ]
-    assert updated.inflow_data["packLines"] == [
-        {
-            "productId": "prod-a",
-            "quantity": {"standardQuantity": "3"},
-            "containerNumber": "DELIVERY-TH3006-1",
-        }
-    ]
-    assert updated.inflow_data["shipLines"] == [
-        {
-            "carrier": "TechHub",
-            "containers": ["DELIVERY-TH3006-1"],
-        }
-    ]
+    # Local shipment state stays authoritative for split orders: the InFlow
+    # payload's pack/ship lines describe the combined order (including the
+    # already-delivered child leg) and must not bleed into the remainder row.
+    assert updated.inflow_data["packLines"] == []
+    assert updated.inflow_data["shipLines"] == []
 
 
 def test_create_order_from_inflow_refreshes_pick_lines_for_split_orders():
@@ -2274,6 +2524,71 @@ def test_fully_picked_remainder_still_requires_asset_tags_after_prior_pack_lines
         return_value=True,
     ):
         assert order_service._requires_asset_tags(parent_order) is True
+
+    session.close()
+    engine.dispose()
+
+
+def test_partial_parent_non_taggable_picks_do_not_require_asset_tags():
+    """A mixed order should not request tags when only non-taggable picked items are in the partial leg."""
+
+    session, engine = _make_sqlite_session()
+    parent_order = Order(
+        id="order-parent-non-taggable-partial",
+        inflow_order_id="TH5001",
+        inflow_sales_order_id="sales-order-5001",
+        recipient_name="User Mixed",
+        recipient_contact="user.mixed@example.com",
+        delivery_location="Building 501",
+        po_number="PO-5001",
+        status=OrderStatus.PICKED.value,
+        inflow_data={
+            "orderNumber": "TH5001",
+            "lines": [
+                {
+                    "productId": "prod-tagged",
+                    "product": {
+                        "name": "Dell Pro Max 14 Premium",
+                        "category": {"name": "Laptops Dell"},
+                    },
+                    "unitPrice": 1500,
+                    "quantity": {"standardQuantity": "4"},
+                },
+                {
+                    "productId": "prod-surge",
+                    "product": {
+                        "name": "Outlet Surge Protector",
+                        "category": {"name": "Accessories"},
+                    },
+                    "unitPrice": 25,
+                    "quantity": {"standardQuantity": "4"},
+                },
+            ],
+            "pickLines": [
+                {
+                    "productId": "prod-surge",
+                    "product": {
+                        "name": "Outlet Surge Protector",
+                        "category": {"name": "Accessories"},
+                    },
+                    "unitPrice": 25,
+                    "quantity": {"standardQuantity": "4"},
+                }
+            ],
+            "packLines": [],
+            "shipLines": [],
+        },
+    )
+    session.add(parent_order)
+    session.commit()
+
+    order_service = OrderService(session)
+
+    with patch(
+        "app.services.order_service.SystemSettingService.is_setting_enabled",
+        return_value=True,
+    ):
+        assert order_service._requires_asset_tags(parent_order) is False
 
     session.close()
     engine.dispose()

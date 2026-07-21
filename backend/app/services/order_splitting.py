@@ -90,7 +90,6 @@ class OrderSplittingService:
                 # Create a copy of the line with remaining quantity
                 remaining_line = deepcopy(line)
                 quantity_data = dict(remaining_line.get("quantity") or {})
-                quantity_data["standardQuantity"] = remaining_qty
 
                 source_serials = [
                     str(serial_number)
@@ -113,7 +112,11 @@ class OrderSplittingService:
                         if serial_number not in picked_serials
                     ]
 
-                remaining_line["quantity"] = quantity_data
+                remaining_line["quantity"] = self._set_quantity_values(
+                    quantity_data,
+                    remaining_qty,
+                    serial_numbers=quantity_data.get("serialNumbers"),
+                )
                 remaining_lines.append(remaining_line)
 
         return remaining_lines, lines
@@ -128,15 +131,78 @@ class OrderSplittingService:
             return 0.0
 
     @staticmethod
+    def _parse_optional_float(value: Any) -> Optional[float]:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    @classmethod
+    def _set_quantity_values(
+        cls,
+        quantity_data: Dict[str, Any],
+        quantity: float,
+        uom_hint: Optional[str] = None,
+        serial_numbers: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        updated_quantity = dict(quantity_data or {})
+        original_standard_quantity = cls._parse_standard_quantity(updated_quantity)
+        original_uom_quantity = cls._parse_optional_float(updated_quantity.get("uomQuantity"))
+        existing_uom = str(updated_quantity.get("uom") or "").strip()
+        resolved_uom = str(uom_hint or "").strip() or existing_uom
+
+        updated_quantity["standardQuantity"] = str(quantity)
+        if serial_numbers is not None:
+            updated_quantity["serialNumbers"] = list(serial_numbers)
+
+        if (
+            original_uom_quantity is not None
+            and original_standard_quantity > 0
+            and "uomQuantity" in updated_quantity
+        ):
+            scaled_uom_quantity = original_uom_quantity * (quantity / original_standard_quantity)
+            raw_uom_quantity = updated_quantity.get("uomQuantity")
+            decimal_places = (
+                len(raw_uom_quantity.split(".", 1)[1])
+                if isinstance(raw_uom_quantity, str) and "." in raw_uom_quantity
+                else None
+            )
+            if resolved_uom:
+                updated_quantity["uom"] = resolved_uom
+                if decimal_places is not None:
+                    updated_quantity["uomQuantity"] = f"{scaled_uom_quantity:.{decimal_places}f}"
+                else:
+                    updated_quantity["uomQuantity"] = scaled_uom_quantity
+            else:
+                if decimal_places is not None:
+                    updated_quantity["uomQuantity"] = f"{quantity:.{decimal_places}f}"
+                else:
+                    updated_quantity["uomQuantity"] = str(quantity)
+
+        return updated_quantity
+
+    @classmethod
     def _copy_line_with_quantity(
-        line: Dict[str, Any], quantity: float, serial_numbers: Optional[List[str]] = None
+        cls, line: Dict[str, Any], quantity: float, serial_numbers: Optional[List[str]] = None
     ) -> Dict[str, Any]:
         copied_line = deepcopy(line)
         quantity_data = dict(copied_line.get("quantity") or {})
-        quantity_data["standardQuantity"] = str(quantity)
-        if serial_numbers is not None:
-            quantity_data["serialNumbers"] = list(serial_numbers)
-        copied_line["quantity"] = quantity_data
+        product = copied_line.get("product")
+        product_dict = product if isinstance(product, dict) else {}
+        sales_uom = product_dict.get("salesUom")
+        sales_uom_dict = sales_uom if isinstance(sales_uom, dict) else {}
+        uom_hint = (
+            sales_uom_dict.get("name")
+            or sales_uom_dict.get("uom")
+            or product_dict.get("standardUomName")
+            or copied_line.get("uom")
+        )
+        copied_line["quantity"] = cls._set_quantity_values(
+            quantity_data,
+            quantity,
+            uom_hint=str(uom_hint or "").strip() or None,
+            serial_numbers=serial_numbers,
+        )
         return copied_line
 
     @staticmethod

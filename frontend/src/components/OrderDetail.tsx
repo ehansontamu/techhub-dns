@@ -58,6 +58,7 @@ interface OrderDetailProps {
   notifications: TeamsNotification[];
   canDismissOrder: boolean;
   onStatusChange: (newStatus: OrderStatus, reason?: string) => void;
+  onRmaReopen: (reason: string) => Promise<void>;
   onDismissOrder: (reason: string, removeSharePointFiles: boolean) => Promise<void>;
   onArchiveOrder: (reason: string) => Promise<void>;
   onRollbackStatus: (newStatus: OrderStatus) => void;
@@ -72,6 +73,7 @@ export default function OrderDetail({
   auditLogs,
   notifications,
   canDismissOrder,
+  onRmaReopen,
   onDismissOrder,
   onArchiveOrder,
   onTagOrder,
@@ -90,6 +92,7 @@ export default function OrderDetail({
 
   const [issueDialogOpen, setIssueDialogOpen] = useState(false);
   const [issueReason, setIssueReason] = useState("");
+  const [rmaReopening, setRmaReopening] = useState(false);
   const [dismissDialogOpen, setDismissDialogOpen] = useState(false);
   const [dismissReason, setDismissReason] = useState("");
   const [removeSharePointFiles, setRemoveSharePointFiles] = useState(true);
@@ -123,6 +126,7 @@ export default function OrderDetail({
     !order.tagged_at &&
     Boolean(order.inflow_order_id) &&
     !remainderLegWaitingOnPickup;
+  const canStartRmaReopen = order.status === OrderStatus.DELIVERED;
 
 
 
@@ -221,6 +225,25 @@ export default function OrderDetail({
     }
   };
 
+  const handleRmaReopen = async () => {
+    const trimmedReason = issueReason.trim();
+    if (!trimmedReason) {
+      toast.error("RMA reason is required");
+      return;
+    }
+
+    setRmaReopening(true);
+    try {
+      await onRmaReopen(trimmedReason);
+      setIssueDialogOpen(false);
+      setIssueReason("");
+    } catch (_error) {
+      // Error toast handled by parent mutation callback.
+    } finally {
+      setRmaReopening(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <section className="rounded-2xl border border-transparent bg-card p-6 shadow-none">
@@ -305,13 +328,15 @@ export default function OrderDetail({
 
                 {/* Issue Reason Dialog */}
                 <Dialog open={issueDialogOpen} onOpenChange={setIssueDialogOpen}>
-                  <DialogContent>
-                    <DialogHeader>
-                      <DialogTitle>Raise Issue</DialogTitle>
-                      <DialogDescription>
-                        Provide a reason for flagging this order as an issue. This will pause the workflow until resolved.
-                      </DialogDescription>
-                    </DialogHeader>
+                    <DialogContent>
+                      <DialogHeader>
+                        <DialogTitle>Raise Issue</DialogTitle>
+                        <DialogDescription>
+                        {canStartRmaReopen
+                          ? "Provide a reason for this delivered-order exception. You can either flag it as an issue or reopen it to picked for an RMA refresh from Inflow."
+                          : "Provide a reason for flagging this order as an issue. This will pause the workflow until resolved."}
+                        </DialogDescription>
+                      </DialogHeader>
                     <div className="py-4">
                       <label htmlFor="issue-reason" className="text-sm font-medium text-foreground">
                         Reason
@@ -326,9 +351,20 @@ export default function OrderDetail({
                       />
                     </div>
                     <DialogFooter>
-                      <Button variant="outline" onClick={() => setIssueDialogOpen(false)}>
+                      <Button variant="outline" onClick={() => setIssueDialogOpen(false)} disabled={rmaReopening}>
                         Cancel
                       </Button>
+                      {canStartRmaReopen && (
+                        <Button
+                          variant="secondary"
+                          onClick={() => {
+                            void handleRmaReopen();
+                          }}
+                          disabled={!issueReason.trim() || rmaReopening}
+                        >
+                          {rmaReopening ? "Reopening..." : "Start RMA Reopen"}
+                        </Button>
+                      )}
                       <Button
                         variant="destructive"
                         onClick={() => {
@@ -336,6 +372,7 @@ export default function OrderDetail({
                           setIssueDialogOpen(false);
                           setIssueReason("");
                         }}
+                        disabled={rmaReopening}
                       >
                         Confirm Issue
                       </Button>

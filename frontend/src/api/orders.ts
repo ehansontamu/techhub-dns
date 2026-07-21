@@ -1,5 +1,5 @@
 import apiClient from "./client";
-import { Order, OrderDetail, OrderStatus, OrderStatusUpdate, OrderRollbackUpdate, BulkStatusUpdate, AuditLog, ShippingWorkflowStatus, OrderDismissUpdate, OrderArchiveUpdate } from "../types/order";
+import { Order, OrderDetail, OrderStatus, OrderStatusUpdate, OrderRollbackUpdate, OrderRmaReopenUpdate, BulkStatusUpdate, AuditLog, ShippingWorkflowStatus, OrderDismissUpdate, OrderArchiveUpdate } from "../types/order";
 import { normalizeExpectedUpdatedAt } from "./expectedUpdatedAt";
 
 function safeArray<T>(value: unknown): T[] {
@@ -59,6 +59,17 @@ export const ordersApi = {
   rollbackOrderStatus: async (orderId: string, update: OrderRollbackUpdate, changedBy?: string): Promise<Order> => {
     const response = await apiClient.patch<Order>(
       `/orders/${orderId}/rollback`,
+      normalizeExpectedUpdatedAt(update),
+      {
+        params: changedBy ? { changed_by: changedBy } : undefined,
+      }
+    );
+    return response.data;
+  },
+
+  rmaReopenOrder: async (orderId: string, update: OrderRmaReopenUpdate, changedBy?: string): Promise<Order> => {
+    const response = await apiClient.patch<Order>(
+      `/orders/${orderId}/rma-reopen`,
       normalizeExpectedUpdatedAt(update),
       {
         params: changedBy ? { changed_by: changedBy } : undefined,
