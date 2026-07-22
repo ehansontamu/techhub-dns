@@ -116,7 +116,7 @@ export default function Shipping() {
                 </div>
 
                 <section className="overflow-hidden rounded-2xl border border-border/70 bg-card/80 shadow-none">
-                    <div className="px-5 pb-5 sm:px-6 sm:pb-6">
+                    <div className="p-5 sm:p-6">
                         {shipmentOrders.length > 0 && (
                             <div className="mb-4">
                                 <Input
