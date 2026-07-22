@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { AlertTriangle, Archive, ChevronDown, Eye } from "lucide-react";
+import { AlertTriangle, Archive, ChevronDown, ClipboardCopy, Eye } from "lucide-react";
 import { toast } from "sonner";
 
 import StatusBadge from "./StatusBadge";
@@ -119,6 +119,17 @@ export default function OrderDetail({
     order.tag_data?.canopyorders_request_sent_at || order.tag_data?.tag_request_sent_at;
   const requestSentBy = order.tag_data?.canopyorders_request_sent_by;
   const requestSent = Boolean(requestSentAt || order.tag_data?.tag_request_status === "sent");
+
+  const handleCopyInflowPayload = async () => {
+    if (!order.inflow_data) return;
+
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(order.inflow_data, null, 2));
+      toast.success("Inflow payload copied");
+    } catch (_error) {
+      toast.error("Failed to copy Inflow payload");
+    }
+  };
 
   const canRequestTags =
     assetTagRequired &&
@@ -874,17 +885,29 @@ export default function OrderDetail({
 
       {order.inflow_data && (
         <section className="rounded-2xl border border-border/70 bg-card/80 p-5 shadow-none">
-          <details className="group">
-            <summary className="cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden">
-              <div className="relative pr-10">
-                <h3 className="text-lg font-semibold tracking-tight">Inflow Data</h3>
-                <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground transition-transform group-open:rotate-180" />
-              </div>
-            </summary>
-            <pre className="mt-4 rounded-md bg-muted/50 p-4 overflow-auto text-sm">
+          <div className="flex items-start gap-3">
+            <details className="group min-w-0 flex-1">
+              <summary className="cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden">
+                <div className="relative pr-10">
+                  <h3 className="text-lg font-semibold tracking-tight">Inflow Data</h3>
+                  <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground transition-transform group-open:rotate-180" />
+                </div>
+              </summary>
+              <pre className="mt-4 overflow-auto rounded-md bg-muted/50 p-4 text-sm">
                 {JSON.stringify(order.inflow_data, null, 2)}
               </pre>
-          </details>
+            </details>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => void handleCopyInflowPayload()}
+              aria-label="Copy Inflow payload"
+            >
+              <ClipboardCopy className="mr-2 h-4 w-4" />
+              Copy payload
+            </Button>
+          </div>
         </section>
       )}
 
