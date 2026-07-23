@@ -3,16 +3,195 @@
 
 import asyncio
 import sys
+import tempfile
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, patch
 
+from flask import Flask, g
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
 
 backend_path = Path(__file__).parent.parent
 sys.path.append(str(backend_path))
 
+from app import models  # noqa: F401  # ensure all mapped models are registered
+from app.database import Base
+from app.models.audit_log import AuditLog, SystemAuditLog
+from app.models.delivery_run import DeliveryRun, DeliveryRunStatus
+from app.models.order import Order, OrderStatus
+from app.models.order_status_history import OrderStatusHistory
+from app.models.user import User
 from app.services.delivery_run_service import DeliveryRunService
+from app.utils.exceptions import ValidationError
+
+
+def _make_delivery_run_session():
+    temp_dir = tempfile.TemporaryDirectory()
+    db_path = Path(temp_dir.name) / "delivery-run.sqlite"
+    engine = create_engine(f"sqlite:///{db_path}")
+    testing_session = sessionmaker(
+        bind=engine,
+        autoflush=False,
+        autocommit=False,
+    )
+    Base.metadata.create_all(engine)
+    return temp_dir, engine, testing_session
+
+
+def test_append_orders_to_active_run_assigns_final_sequences_and_audits():
+    temp_dir, engine, session_factory = _make_delivery_run_session()
+    app = Flask(__name__)
+
+    try:
+        db = session_factory()
+        user = User(
+            id="user-1",
+            tamu_oid="oid-1",
+            email="runner@example.com",
+            display_name="Runner One",
+        )
+        run = DeliveryRun(
+            id="run-1",
+            name="Run 1",
+            runner="Runner One",
+            vehicle="van",
+            status=DeliveryRunStatus.ACTIVE.value,
+            start_time=datetime.utcnow(),
+        )
+        existing_order = Order(
+            id="existing-order",
+            inflow_order_id="TH1",
+            status=OrderStatus.IN_DELIVERY.value,
+            delivery_run_id=run.id,
+            delivery_sequence=4,
+        )
+        first_added = Order(
+            id="first-added",
+            inflow_order_id="TH9",
+            status=OrderStatus.PRE_DELIVERY.value,
+        )
+        second_added = Order(
+            id="second-added",
+            inflow_order_id="TH10",
+            status=OrderStatus.PRE_DELIVERY.value,
+        )
+        db.add_all([user, run, existing_order, first_added, second_added])
+        db.commit()
+        expected_updated_at = run.updated_at
+
+        with app.test_request_context():
+            g.user_id = user.id
+            g.user_email = user.email
+            g.user_data = {"display_name": user.display_name}
+            updated_run = DeliveryRunService(db).append_orders_to_run(
+                run.id,
+                [first_added.id, second_added.id],
+                expected_updated_at=expected_updated_at,
+            )
+
+        db.refresh(first_added)
+        db.refresh(second_added)
+
+        assert updated_run.status == DeliveryRunStatus.ACTIVE.value
+        assert first_added.status == OrderStatus.IN_DELIVERY.value
+        assert second_added.status == OrderStatus.IN_DELIVERY.value
+        assert first_added.delivery_run_id == run.id
+        assert second_added.delivery_run_id == run.id
+        assert first_added.delivery_sequence == 5
+        assert second_added.delivery_sequence == 6
+
+        audit_rows = (
+            db.query(AuditLog)
+            .filter(AuditLog.order_id.in_([first_added.id, second_added.id]))
+            .all()
+        )
+        assert len(audit_rows) == 2
+        assert {row.changed_by for row in audit_rows} == {"Runner One"}
+
+        history_rows = (
+            db.query(OrderStatusHistory)
+            .filter(
+                OrderStatusHistory.order_id.in_([first_added.id, second_added.id])
+            )
+            .all()
+        )
+        assert len(history_rows) == 2
+        assert {
+            row.status_metadata["delivery_sequence"] for row in history_rows
+        } == {5, 6}
+
+        run_audit = (
+            db.query(SystemAuditLog)
+            .filter(
+                SystemAuditLog.entity_type == "delivery_run",
+                SystemAuditLog.entity_id == run.id,
+                SystemAuditLog.action == "orders_added",
+            )
+            .one()
+        )
+        assert run_audit.audit_metadata["order_ids"] == [
+            first_added.id,
+            second_added.id,
+        ]
+    finally:
+        db.close()
+        engine.dispose()
+        temp_dir.cleanup()
+
+
+def test_append_orders_to_active_run_rejects_stale_ineligible_order():
+    temp_dir, engine, session_factory = _make_delivery_run_session()
+    app = Flask(__name__)
+
+    try:
+        db = session_factory()
+        user = User(
+            id="user-2",
+            tamu_oid="oid-2",
+            email="runner2@example.com",
+            display_name="Runner Two",
+        )
+        run = DeliveryRun(
+            id="run-2",
+            name="Run 2",
+            runner="Runner Two",
+            vehicle="golf_cart",
+            status=DeliveryRunStatus.ACTIVE.value,
+        )
+        stale_order = Order(
+            id="stale-order",
+            inflow_order_id="TH11",
+            status=OrderStatus.IN_DELIVERY.value,
+        )
+        db.add_all([user, run, stale_order])
+        db.commit()
+
+        with app.test_request_context():
+            g.user_id = user.id
+            g.user_email = user.email
+            g.user_data = {"display_name": user.display_name}
+
+            try:
+                DeliveryRunService(db).append_orders_to_run(
+                    run.id,
+                    [stale_order.id],
+                )
+                raise AssertionError("Expected an ineligible-order validation error")
+            except ValidationError as exc:
+                assert "no longer eligible" in str(exc)
+
+        db.refresh(stale_order)
+        assert stale_order.delivery_run_id is None
+        assert stale_order.delivery_sequence is None
+        assert stale_order.status == OrderStatus.IN_DELIVERY.value
+    finally:
+        db.close()
+        engine.dispose()
+        temp_dir.cleanup()
 
 
 def test_fulfill_orders_persists_updated_inflow_payload():
@@ -456,6 +635,8 @@ if __name__ == "__main__":
     print("Running DeliveryRunService tests...")
     print()
 
+    test_append_orders_to_active_run_assigns_final_sequences_and_audits()
+    test_append_orders_to_active_run_rejects_stale_ineligible_order()
     test_fulfill_orders_persists_updated_inflow_payload()
     test_fulfill_orders_accepts_already_fulfilled_inflow_order()
     test_fulfill_orders_preserves_unconfirmed_inflow_failure()

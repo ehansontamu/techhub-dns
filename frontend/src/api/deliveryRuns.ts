@@ -15,6 +15,11 @@ export interface RecallOrderRequest {
   expected_updated_at?: string;
 }
 
+export interface AppendOrdersRequest {
+  order_ids: string[];
+  expected_updated_at?: string;
+}
+
 export interface DeliveryRunResponse {
   id: string;
   name: string;
@@ -83,6 +88,21 @@ export const deliveryRunsApi = {
         reason,
         expected_updated_at: expectedUpdatedAt ?? undefined,
       } satisfies RecallOrderRequest)
+    );
+    return response.data;
+  },
+
+  appendOrders: async (
+    runId: string,
+    orderIds: string[],
+    expectedUpdatedAt?: string | null
+  ): Promise<DeliveryRunResponse> => {
+    const response = await apiClient.post<DeliveryRunResponse>(
+      `/delivery-runs/${runId}/orders`,
+      normalizeExpectedUpdatedAt({
+        order_ids: orderIds,
+        expected_updated_at: expectedUpdatedAt ?? undefined,
+      } satisfies AppendOrdersRequest),
     );
     return response.data;
   },

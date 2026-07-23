@@ -9,6 +9,7 @@ from app.api.auth_middleware import require_auth
 from app.api.vehicle_status_events import broadcast_vehicle_status_update_sync
 from app.services.delivery_run_service import DeliveryRunService
 from app.schemas.delivery_run import (
+    AppendDeliveryRunOrdersRequest,
     CreateDeliveryRunRequest,
     DeliveryRunResponse,
     FinishDeliveryRunRequest,
@@ -305,6 +306,52 @@ def recall_run_order(run_id, order_id):
 
         broadcast_dedup.request_broadcast(_broadcast_active_runs_sync)
         broadcast_dedup.request_broadcast(broadcast_vehicle_status_update_sync)
+
+        response = _delivery_run_response(run, db)
+        return jsonify(response)
+
+
+@bp.route("/<run_id>/orders", methods=["POST"])
+@require_auth
+def append_run_orders(run_id):
+    """Append one or more eligible orders to an active delivery run."""
+    data = request.get_json() or {}
+
+    try:
+        req = AppendDeliveryRunOrdersRequest(**data)
+    except PydanticValidationError as exc:
+        raise ValidationError(
+            "Invalid append orders request", details={"errors": exc.errors()}
+        )
+
+    with get_db() as db:
+        service = DeliveryRunService(db)
+        run = service.append_orders_to_run(
+            UUID(run_id),
+            order_ids=req.order_ids,
+            expected_updated_at=req.expected_updated_at,
+        )
+
+        added_order_ids = {str(order_id) for order_id in req.order_ids}
+        added_orders = [
+            order for order in run.orders if str(order.id) in added_order_ids
+        ]
+
+        broadcast_dedup.request_broadcast(_broadcast_active_runs_sync)
+        from app.api.routes.orders import _broadcast_orders_sync
+
+        broadcast_dedup.request_broadcast(_broadcast_orders_sync)
+
+        try:
+            from app.services.teams_recipient_service import teams_recipient_service
+
+            teams_recipient_service.notify_orders_in_delivery(added_orders)
+        except Exception as e:
+            from app.api.routes.orders import logger as order_logger
+
+            order_logger.error(
+                f"Failed to trigger Teams notifications for appended delivery orders: {e}"
+            )
 
         response = _delivery_run_response(run, db)
         return jsonify(response)

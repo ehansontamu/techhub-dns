@@ -56,6 +56,11 @@ class RecallDeliveryRunOrderRequest(BaseModel):
     expected_updated_at: Optional[datetime] = None
 
 
+class AppendDeliveryRunOrdersRequest(BaseModel):
+    order_ids: List[UUID] = Field(min_length=1)
+    expected_updated_at: Optional[datetime] = None
+
+
 class ReorderDeliveryRunOrdersRequest(BaseModel):
     order_ids: List[UUID] = Field(default_factory=list)
     expected_updated_at: Optional[datetime] = None

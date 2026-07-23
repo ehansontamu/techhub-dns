@@ -2,16 +2,18 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import axios from "axios";
 import { toast } from "sonner";
-import { AlertCircle, ArrowDown, ArrowLeft, ArrowUp, CheckCircle, Clock, Package, Truck, User } from "lucide-react";
+import { AlertCircle, ArrowDown, ArrowLeft, ArrowUp, CheckCircle, Clock, Package, Plus, Truck, User } from "lucide-react";
 
 import { deliveryRunsApi } from "../api/deliveryRuns";
+import { ordersApi } from "../api/orders";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
+import { Checkbox } from "../components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../components/ui/dialog";
 import { Input } from "../components/ui/input";
 import { useDeliveryRun } from "../hooks/useDeliveryRun";
-import { OrderStatus } from "../types/order";
-import { isValidOrderId } from "../utils/orderIds";
+import { OrderStatus, type Order } from "../types/order";
+import { compareOrderNumbers, isValidOrderId } from "../utils/orderIds";
 import { extractApiErrorMessage } from "../utils/apiErrors";
 import { formatToCentralTime } from "../utils/timezone";
 
@@ -101,6 +103,12 @@ export default function DeliveryRunDetailPage() {
   const [reorderMode, setReorderMode] = useState(false);
   const [orderedOrderIds, setOrderedOrderIds] = useState<string[]>([]);
   const [savingOrder, setSavingOrder] = useState(false);
+  const [addOrdersDialogOpen, setAddOrdersDialogOpen] = useState(false);
+  const [availableOrders, setAvailableOrders] = useState<Order[]>([]);
+  const [availableOrdersLoading, setAvailableOrdersLoading] = useState(false);
+  const [addOrdersSearch, setAddOrdersSearch] = useState("");
+  const [selectedAddOrderIds, setSelectedAddOrderIds] = useState<Set<string>>(new Set());
+  const [addingOrders, setAddingOrders] = useState(false);
 
   const locationState = location.state as DeliveryDetailLocationState | null;
   const backTo = locationState?.from ?? "/delivery/dispatch";
@@ -157,6 +165,115 @@ export default function DeliveryRunDetailPage() {
     }
     return ordered;
   }, [run, orderedOrderIds]);
+
+  const filteredAvailableOrders = useMemo(() => {
+    const search = addOrdersSearch.trim().toLowerCase();
+    if (!search) return availableOrders;
+
+    return availableOrders.filter((order) =>
+      [
+        order.inflow_order_id,
+        order.recipient_name,
+        order.delivery_location,
+      ]
+        .filter((value): value is string => typeof value === "string" && value.length > 0)
+        .join(" ")
+        .toLowerCase()
+        .includes(search)
+    );
+  }, [addOrdersSearch, availableOrders]);
+
+  const loadAvailableOrders = async () => {
+    setAvailableOrdersLoading(true);
+    try {
+      const pageSize = 200;
+      const firstPage = await ordersApi.getOrders({
+        status: OrderStatus.PRE_DELIVERY,
+        skip: 0,
+        limit: pageSize,
+      });
+      const allOrders = [...firstPage.items];
+
+      while (allOrders.length < firstPage.total) {
+        const nextPage = await ordersApi.getOrders({
+          status: OrderStatus.PRE_DELIVERY,
+          skip: allOrders.length,
+          limit: pageSize,
+        });
+        if (nextPage.items.length === 0) break;
+        allOrders.push(...nextPage.items);
+      }
+
+      setAvailableOrders(
+        allOrders.sort((left, right) => {
+          const orderNumberComparison = compareOrderNumbers(
+            left.inflow_order_id,
+            right.inflow_order_id,
+          );
+          return orderNumberComparison || left.id.localeCompare(right.id);
+        }),
+      );
+    } catch (error: unknown) {
+      toast.error(extractApiErrorMessage(error, "Failed to load available orders."));
+      setAvailableOrders([]);
+    } finally {
+      setAvailableOrdersLoading(false);
+    }
+  };
+
+  const openAddOrdersDialog = async () => {
+    setAddOrdersSearch("");
+    setSelectedAddOrderIds(new Set());
+    setAddOrdersDialogOpen(true);
+    await loadAvailableOrders();
+  };
+
+  const toggleAddOrder = (orderId: string) => {
+    setSelectedAddOrderIds((previous) => {
+      const next = new Set(previous);
+      if (next.has(orderId)) {
+        next.delete(orderId);
+      } else {
+        next.add(orderId);
+      }
+      return next;
+    });
+  };
+
+  const handleAddOrders = async () => {
+    if (!run || selectedAddOrderIds.size === 0) return;
+
+    const orderedSelectedIds = availableOrders
+      .filter((order) => selectedAddOrderIds.has(order.id))
+      .map((order) => order.id);
+
+    setAddingOrders(true);
+    try {
+      await deliveryRunsApi.appendOrders(
+        run.id,
+        orderedSelectedIds,
+        run.updated_at ?? undefined,
+      );
+      toast.success(
+        `${orderedSelectedIds.length} order${orderedSelectedIds.length === 1 ? "" : "s"} added to the run`,
+      );
+      setAddOrdersDialogOpen(false);
+      setSelectedAddOrderIds(new Set());
+      setAddOrdersSearch("");
+      await refetch();
+    } catch (error: unknown) {
+      setErrorMessage(
+        extractApiErrorMessage(
+          error,
+          "Could not add the selected orders. The run or an order may have changed.",
+        ),
+      );
+      setErrorDialogOpen(true);
+      await Promise.all([refetch(), loadAvailableOrders()]);
+    } finally {
+      setAddingOrders(false);
+    }
+  };
 
   const handleCompleteRun = async () => {
     if (!run || !allOrdersDelivered) return;
@@ -303,10 +420,20 @@ export default function DeliveryRunDetailPage() {
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Button variant="outline" onClick={() => void refetch()}>
             Refresh Status
           </Button>
+          {runIsActive ? (
+            <Button
+              variant="outline"
+              onClick={() => void openAddOrdersDialog()}
+              disabled={finishing || savingOrder || addingOrders}
+            >
+              <Plus className="mr-2 h-4 w-4" />
+              Add Orders
+            </Button>
+          ) : null}
           {runIsActive && run.orders.length > 1 ? (
             reorderMode ? (
               <>
@@ -586,12 +713,142 @@ export default function DeliveryRunDetailPage() {
         </div>
       </section>
 
+      <Dialog
+        open={addOrdersDialogOpen}
+        onOpenChange={(open) => {
+          if (addingOrders) return;
+          setAddOrdersDialogOpen(open);
+        }}
+      >
+        <DialogContent className="sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Add Orders to {run.name}</DialogTitle>
+            <DialogDescription>
+              Select one or more Pre-Delivery orders. They will be appended to the end of the current stop list.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3">
+            <Input
+              value={addOrdersSearch}
+              onChange={(event) => setAddOrdersSearch(event.target.value)}
+              placeholder="Search order, recipient, or location..."
+              aria-label="Search available orders"
+              disabled={addingOrders}
+            />
+
+            <div className="flex items-center justify-between gap-3 text-sm">
+              <span className="text-muted-foreground">
+                {selectedAddOrderIds.size} selected
+              </span>
+              {filteredAvailableOrders.length > 0 ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    const visibleOrderIds = filteredAvailableOrders.map((order) => order.id);
+                    const allVisibleSelected = visibleOrderIds.every((orderId) =>
+                      selectedAddOrderIds.has(orderId)
+                    );
+                    setSelectedAddOrderIds((previous) => {
+                      const next = new Set(previous);
+                      for (const orderId of visibleOrderIds) {
+                        if (allVisibleSelected) {
+                          next.delete(orderId);
+                        } else {
+                          next.add(orderId);
+                        }
+                      }
+                      return next;
+                    });
+                  }}
+                  disabled={addingOrders}
+                >
+                  {filteredAvailableOrders.every((order) => selectedAddOrderIds.has(order.id))
+                    ? "Clear visible"
+                    : "Select visible"}
+                </Button>
+              ) : null}
+            </div>
+
+            <div className="max-h-[360px] overflow-y-auto rounded-lg border border-border">
+              {availableOrdersLoading ? (
+                <div className="p-6 text-center text-sm text-muted-foreground">
+                  Loading available orders...
+                </div>
+              ) : filteredAvailableOrders.length === 0 ? (
+                <div className="p-6 text-center text-sm text-muted-foreground">
+                  {availableOrders.length === 0
+                    ? "No Pre-Delivery orders are currently available."
+                    : "No orders match your search."}
+                </div>
+              ) : (
+                <div className="divide-y divide-border">
+                  {filteredAvailableOrders.map((order) => (
+                    <div
+                      key={order.id}
+                      className="flex items-start gap-3 px-4 py-3 hover:bg-muted/30"
+                    >
+                      <Checkbox
+                        id={`add-order-${order.id}`}
+                        checked={selectedAddOrderIds.has(order.id)}
+                        onChange={() => toggleAddOrder(order.id)}
+                        disabled={addingOrders}
+                        aria-label={`Select order ${order.inflow_order_id || order.id}`}
+                      />
+                      <label
+                        htmlFor={`add-order-${order.id}`}
+                        className="min-w-0 flex-1 cursor-pointer"
+                      >
+                        <span className="block font-medium text-foreground">
+                          {order.inflow_order_id || order.id}
+                        </span>
+                        <span className="block truncate text-xs text-muted-foreground">
+                          {[order.recipient_name, order.delivery_location]
+                            .filter(Boolean)
+                            .join(" — ") || "No recipient or location"}
+                        </span>
+                      </label>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setAddOrdersDialogOpen(false)}
+              disabled={addingOrders}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() => void handleAddOrders()}
+              disabled={
+                addingOrders ||
+                availableOrdersLoading ||
+                selectedAddOrderIds.size === 0
+              }
+            >
+              {addingOrders
+                ? "Adding..."
+                : selectedAddOrderIds.size > 0
+                  ? `Add ${selectedAddOrderIds.size} Order${selectedAddOrderIds.size === 1 ? "" : "s"}`
+                  : "Add Orders"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={errorDialogOpen} onOpenChange={setErrorDialogOpen}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-destructive">
               <AlertCircle className="h-5 w-5" />
-              Cannot Complete Delivery
+              Delivery Run Action Failed
             </DialogTitle>
             <DialogDescription className="pt-2">{errorMessage}</DialogDescription>
           </DialogHeader>
