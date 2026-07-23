@@ -4,3 +4,15 @@ const ORDER_NUMBER_RE = /^TH\d+(?:-(?:P(?:\d+)?|R))?$/i;
 export function isValidOrderId(value: unknown): value is string {
   return typeof value === "string" && (ORDER_ID_RE.test(value.trim()) || ORDER_NUMBER_RE.test(value.trim()));
 }
+
+const orderIdCollator = new Intl.Collator("en-US", {
+  numeric: true,
+  sensitivity: "base",
+});
+
+export function compareOrderNumbers(
+  left: string | null | undefined,
+  right: string | null | undefined,
+): number {
+  return orderIdCollator.compare((left || "").trim(), (right || "").trim());
+}

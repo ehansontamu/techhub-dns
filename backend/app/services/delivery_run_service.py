@@ -1037,6 +1037,171 @@ class DeliveryRunService:
         self.db.refresh(run)
         return run
 
+    def append_orders_to_run(
+        self,
+        run_id: Union[UUID, str],
+        order_ids: Sequence[Union[UUID, str]],
+        expected_updated_at: Optional[datetime] = None,
+    ) -> DeliveryRun:
+        """Append eligible Pre-Delivery orders to the end of an active run."""
+        run_id_str = str(run_id)
+        requested_order_ids = [str(order_id) for order_id in order_ids]
+
+        if not requested_order_ids:
+            raise ValidationError("order_ids is required", field="order_ids")
+
+        if len(set(requested_order_ids)) != len(requested_order_ids):
+            raise ValidationError(
+                "order_ids must not contain duplicates",
+                field="order_ids",
+            )
+
+        run = (
+            self.db.query(DeliveryRun)
+            .filter(DeliveryRun.id == run_id_str)
+            .with_for_update()
+            .first()
+        )
+        if not run:
+            raise NotFoundError("DeliveryRun", run_id_str)
+
+        if run.status != DeliveryRunStatus.ACTIVE.value:
+            raise ValidationError(
+                "Only active runs support adding orders",
+                details={"run_id": run_id_str, "current_status": run.status},
+            )
+
+        if expected_updated_at is not None and run.updated_at is not None:
+            expected_utc = self._normalize_stale_timestamp(expected_updated_at)
+            current_utc = self._normalize_stale_timestamp(run.updated_at)
+
+            if expected_utc != current_utc:
+                raise ConflictError(
+                    "Delivery run has changed since it was loaded. Refresh and try again.",
+                    details={
+                        "run_id": run_id_str,
+                        "expected_updated_at": to_utc_iso_z(expected_utc),
+                        "current_updated_at": to_utc_iso_z(current_utc),
+                    },
+                )
+
+        orders = (
+            self.db.query(Order)
+            .filter(Order.id.in_(requested_order_ids))
+            .with_for_update()
+            .all()
+        )
+        order_lookup = {str(order.id): order for order in orders}
+        missing_order_ids = [
+            order_id for order_id in requested_order_ids if order_id not in order_lookup
+        ]
+        if missing_order_ids:
+            raise ValidationError(
+                "One or more orders were not found",
+                details={"missing_order_ids": missing_order_ids},
+            )
+
+        ineligible_orders = []
+        for order_id in requested_order_ids:
+            order = order_lookup[order_id]
+            reason = None
+            if getattr(order, "hidden_from_ops", False):
+                reason = "order is hidden"
+            elif order.status != OrderStatus.PRE_DELIVERY.value:
+                reason = f"status={order.status}"
+            elif order.delivery_run_id is not None:
+                reason = f"already assigned to run {order.delivery_run_id}"
+
+            if reason:
+                ineligible_orders.append(
+                    {
+                        "order_id": order_id,
+                        "inflow_order_id": order.inflow_order_id,
+                        "reason": reason,
+                    }
+                )
+
+        if ineligible_orders:
+            raise ValidationError(
+                "One or more orders are no longer eligible to add to this run",
+                details={"ineligible_orders": ineligible_orders},
+            )
+
+        current_max_sequence = (
+            self.db.query(func.max(Order.delivery_sequence))
+            .filter(Order.delivery_run_id == run_id_str)
+            .scalar()
+            or 0
+        )
+        actor_user_id, actor_display_name, _ = self._get_authenticated_actor()
+        actor = self._format_actor_display(actor_display_name)
+        changed_at = datetime.utcnow()
+        audit_service = AuditService(self.db)
+
+        for offset, order_id in enumerate(requested_order_ids, start=1):
+            order = order_lookup[order_id]
+            previous_status = order.status
+            order.delivery_run_id = run.id
+            order.delivery_sequence = current_max_sequence + offset
+            order.status = OrderStatus.IN_DELIVERY.value
+            order.updated_at = changed_at
+
+            self.db.add(
+                AuditLog(
+                    order_id=order.id,
+                    changed_by=actor,
+                    from_status=previous_status,
+                    to_status=OrderStatus.IN_DELIVERY.value,
+                    reason=f"Added to active delivery run: {run.name}",
+                    timestamp=changed_at,
+                )
+            )
+            self._record_status_history(
+                order=order,
+                from_status=previous_status,
+                to_status=OrderStatus.IN_DELIVERY.value,
+                actor_user_id=actor_user_id,
+                metadata={
+                    "delivery_run_id": run_id_str,
+                    "delivery_sequence": order.delivery_sequence,
+                    "source": "active_run_append",
+                },
+                changed_at=changed_at,
+            )
+            audit_service.log_order_action(
+                order_id=order_id,
+                action="added_to_delivery_run",
+                user_id=actor_user_id,
+                description=f"Order added to active run {run.name}",
+                old_value={
+                    "status": previous_status,
+                    "delivery_run_id": None,
+                    "delivery_sequence": None,
+                },
+                new_value={
+                    "status": OrderStatus.IN_DELIVERY.value,
+                    "delivery_run_id": run_id_str,
+                    "delivery_sequence": order.delivery_sequence,
+                },
+            )
+
+        run.updated_at = changed_at
+        audit_service.log_delivery_run_action(
+            run_id=run_id_str,
+            action="orders_added",
+            user_id=actor_user_id,
+            description=f"{len(requested_order_ids)} order(s) added to active run",
+            audit_metadata={
+                "order_ids": requested_order_ids,
+                "order_count": len(requested_order_ids),
+                "first_added_sequence": current_max_sequence + 1,
+            },
+        )
+
+        self.db.commit()
+        self.db.refresh(run)
+        return run
+
     def reorder_run_orders(
         self,
         run_id: Union[UUID, str],

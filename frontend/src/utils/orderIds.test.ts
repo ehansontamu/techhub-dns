@@ -1,5 +1,6 @@
-import { describe, it, expect } from "vitest";
-import { isValidOrderId } from "./orderIds";
+import { describe, expect, it } from "vitest";
+
+import { compareOrderNumbers, isValidOrderId } from "./orderIds";
 
 describe("isValidOrderId", () => {
   it("accepts valid UUID", () => {
@@ -24,5 +25,20 @@ describe("isValidOrderId", () => {
     expect(isValidOrderId("TH000140-P2")).toBe(true);
     expect(isValidOrderId("TH000140-P10")).toBe(true);
     expect(isValidOrderId("TH000140-R")).toBe(true);
+  });
+});
+
+describe("compareOrderNumbers", () => {
+  it("sorts Inflow order numbers naturally, including partial legs", () => {
+    const orderNumbers = ["TH100", "TH9-P2", "TH10", "TH9-P", "TH9", "TH2"];
+
+    expect(orderNumbers.sort(compareOrderNumbers)).toEqual([
+      "TH2",
+      "TH9",
+      "TH9-P",
+      "TH9-P2",
+      "TH10",
+      "TH100",
+    ]);
   });
 });
