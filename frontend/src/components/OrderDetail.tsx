@@ -592,12 +592,12 @@ export default function OrderDetail({
                     {partialOrderInfo.missingItems.length > 0 ? (
                       <details className="group">
                         <summary className="cursor-pointer select-none text-sm font-medium text-foreground">
-                          View missing items
+                          View items still needed
                         </summary>
                         <ul className="mt-2 space-y-1 text-sm text-muted-foreground">
                           {partialOrderInfo.missingItems.map((item) => (
                             <li key={item.product_id}>
-                              {item.product_name}: {item.picked}/{item.ordered}
+                              {Math.max(item.ordered - item.picked, 0)} × {item.product_name}
                             </li>
                           ))}
                         </ul>
@@ -1003,7 +1003,7 @@ export default function OrderDetail({
               <ul className="mt-2 space-y-1 text-sm text-muted-foreground">
                 {partialOrderInfo.missingItems.map((item) => (
                   <li key={item.product_id}>
-                    {item.product_name}: {item.picked}/{item.ordered}
+                    {Math.max(item.ordered - item.picked, 0)} × {item.product_name}
                   </li>
                 ))}
               </ul>
