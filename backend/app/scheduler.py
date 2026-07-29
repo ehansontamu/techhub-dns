@@ -1,10 +1,13 @@
 from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import asyncio
 from app.database import get_db_session
 from app.services.inflow_service import InflowService
+from app.services.inventory_reorder_service import InventoryReorderService
 from app.models.inflow_webhook import InflowWebhook, WebhookStatus
 from app.config import settings
 from app.api.routes.inflow import _run_inflow_sync
@@ -16,11 +19,13 @@ logger = logging.getLogger(__name__)
 _WEBHOOK_HEALTH_STALE_THRESHOLD = timedelta(hours=2)
 _WEBHOOK_RECONCILE_INTERVAL_MINUTES = 30
 _WEBHOOK_HEALTH_CHECK_INTERVAL_MINUTES = 60
+_DEFAULT_INVENTORY_REORDER_REFRESH_TIMES = "7:30,12:00,15:00"
 _INFLOW_EVENT_MAPPING = {
     "orderCreated": "salesOrder.created",
     "orderUpdated": "salesOrder.updated",
     "orderStatusChanged": "salesOrder.updated",
 }
+inventory_reorder_service = InventoryReorderService(settings)
 
 
 def _normalize_webhook_url(url: str | None) -> str:
@@ -94,6 +99,111 @@ def sync_inflow_orders():
         _run_inflow_sync()
     except Exception as e:
         logger.error(f"Inflow sync failed: {e}", exc_info=True)
+
+
+def _get_configured_inventory_reorder_refresh_times() -> str:
+    configured_times = getattr(
+        settings, "inventory_reorder_scheduled_refresh_times", None
+    )
+    if configured_times:
+        return str(configured_times)
+
+    legacy_hours = getattr(settings, "inventory_reorder_scheduled_refresh_hours", None)
+    if legacy_hours:
+        return str(legacy_hours)
+
+    return _DEFAULT_INVENTORY_REORDER_REFRESH_TIMES
+
+
+def _parse_inventory_reorder_refresh_times(raw_value: str | None) -> list[tuple[int, int]]:
+    raw = (raw_value or "").strip()
+    if not raw:
+        raw = _DEFAULT_INVENTORY_REORDER_REFRESH_TIMES
+
+    times: list[tuple[int, int]] = []
+    for item in raw.split(","):
+        trimmed = item.strip()
+        if not trimmed:
+            continue
+
+        parts = trimmed.split(":", 1)
+        try:
+            hour = int(parts[0])
+            minute = int(parts[1]) if len(parts) == 2 else 0
+        except ValueError:
+            logger.warning(
+                "Invalid inventory reorder scheduled refresh time %r; using default %s",
+                trimmed,
+                _DEFAULT_INVENTORY_REORDER_REFRESH_TIMES,
+            )
+            return _parse_inventory_reorder_refresh_times(
+                _DEFAULT_INVENTORY_REORDER_REFRESH_TIMES
+            )
+
+        if hour < 0 or hour > 23 or minute < 0 or minute > 59:
+            logger.warning(
+                "Inventory reorder scheduled refresh time %s is out of range; using default %s",
+                trimmed,
+                _DEFAULT_INVENTORY_REORDER_REFRESH_TIMES,
+            )
+            return _parse_inventory_reorder_refresh_times(
+                _DEFAULT_INVENTORY_REORDER_REFRESH_TIMES
+            )
+
+        candidate = (hour, minute)
+        if candidate not in times:
+            times.append(candidate)
+
+    return times or _parse_inventory_reorder_refresh_times(
+        _DEFAULT_INVENTORY_REORDER_REFRESH_TIMES
+    )
+
+
+def _get_inventory_reorder_refresh_timezone():
+    timezone_name = (
+        settings.inventory_reorder_scheduled_refresh_timezone or "America/Chicago"
+    ).strip()
+    try:
+        return ZoneInfo(timezone_name)
+    except ZoneInfoNotFoundError:
+        logger.warning(
+            "Unknown inventory reorder scheduled refresh timezone %r; using America/Chicago",
+            timezone_name,
+        )
+        return ZoneInfo("America/Chicago")
+
+
+def scheduled_inventory_reorder_refresh():
+    """Background task to refresh the cached inventory reorder summary."""
+    cooldown = inventory_reorder_service.get_refresh_cooldown()
+    if cooldown["active"]:
+        logger.info(
+            "Scheduled inventory reorder refresh skipped because cooldown is active: remaining_seconds=%s",
+            cooldown["remaining_seconds"],
+        )
+        return
+
+    job = inventory_reorder_service.run_refresh_sync()
+    if job.get("status") == "done":
+        logger.info(
+            "Scheduled inventory reorder refresh completed: job_id=%s result_path=%s",
+            job.get("job_id"),
+            job.get("result_path"),
+        )
+        return
+
+    if job.get("status") in {"queued", "running"}:
+        logger.info(
+            "Scheduled inventory reorder refresh skipped because a refresh is already running: job_id=%s",
+            job.get("job_id"),
+        )
+        return
+
+    logger.error(
+        "Scheduled inventory reorder refresh failed: job_id=%s error=%s",
+        job.get("job_id"),
+        job.get("error"),
+    )
 
 
 def _has_active_webhook(db: Session) -> bool:
@@ -368,6 +478,33 @@ def start_scheduler():
             name="Webhook health check",
             replace_existing=True,
             next_run_time=datetime.now() + timedelta(minutes=_WEBHOOK_HEALTH_CHECK_INTERVAL_MINUTES),
+        )
+
+    if settings.inventory_reorder_scheduled_refresh_enabled:
+        refresh_times = _parse_inventory_reorder_refresh_times(
+            _get_configured_inventory_reorder_refresh_times()
+        )
+        refresh_timezone = _get_inventory_reorder_refresh_timezone()
+        for hour, minute in refresh_times:
+            scheduler.add_job(
+                scheduled_inventory_reorder_refresh,
+                trigger=CronTrigger(
+                    hour=hour,
+                    minute=minute,
+                    timezone=refresh_timezone,
+                ),
+                id=f"inventory_reorder_refresh_{hour:02d}_{minute:02d}",
+                name=f"Refresh inventory reorder summary ({hour:02d}:{minute:02d})",
+                replace_existing=True,
+            )
+        logger.info(
+            "Inventory reorder scheduled refresh enabled at time(s) %s timezone=%s",
+            ", ".join(f"{hour:02d}:{minute:02d}" for hour, minute in refresh_times),
+            settings.inventory_reorder_scheduled_refresh_timezone,
+        )
+    else:
+        logger.info(
+            "Inventory reorder scheduled refresh disabled via INVENTORY_REORDER_SCHEDULED_REFRESH_ENABLED"
         )
 
     scheduler.start()

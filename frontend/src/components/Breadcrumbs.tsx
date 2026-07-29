@@ -14,6 +14,7 @@ const LABELS: Record<string, string> = {
   shipping: "Shipping",
   "vetting-editor": "Vetting Editor",
   "compatibility-editor": "Compatibility Editor",
+  "inventory-reorder": "Inventory Reorder",
   settings: "Settings",
   admin: "Admin Tools",
   sessions: "Sessions",
