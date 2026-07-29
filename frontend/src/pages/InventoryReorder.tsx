@@ -43,6 +43,33 @@ const formatTimestamp = (value: string | null | undefined): string => {
   return date.toLocaleString();
 };
 
+const formatDuration = (seconds: number): string => {
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  return `${minutes}:${String(remainingSeconds).padStart(2, "0")}`;
+};
+
+const formatScheduleTimes = (times: string): string => {
+  const labels = times
+    .split(",")
+    .map((value) => {
+      const [rawHour, rawMinute] = value.trim().split(":");
+      return {
+        hour: Number(rawHour),
+        minute: rawMinute == null ? 0 : Number(rawMinute),
+      };
+    })
+    .filter(({ hour, minute }) => Number.isInteger(hour) && hour >= 0 && hour <= 23 && Number.isInteger(minute) && minute >= 0 && minute <= 59)
+    .map(({ hour, minute }) => {
+      const suffix = minute === 0 ? "" : `:${String(minute).padStart(2, "0")}`;
+      if (hour === 0) return "12 AM";
+      if (hour === 12) return `12${suffix} PM`;
+      return hour > 12 ? `${hour - 12}${suffix} PM` : `${hour}${suffix} AM`;
+    });
+
+  return labels.length > 0 ? labels.join(", ") : "7:30 AM, 12 PM, 3 PM";
+};
+
 const compareRows = (left: InventoryReorderRow, right: InventoryReorderRow, sortKey: SortKey) => {
   if (sortKey === "name" || sortKey === "sku") {
     return String(left[sortKey] ?? "").localeCompare(String(right[sortKey] ?? ""));
@@ -73,14 +100,17 @@ export default function InventoryReorder() {
   const [activeJob, setActiveJob] = useState<InventoryReorderJob | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [downloading, setDownloading] = useState(false);
+  const [nowMs, setNowMs] = useState(() => Date.now());
 
-  const loadData = useCallback(async () => {
+  const loadData = useCallback(async (options?: { silent?: boolean }) => {
     if (!isAdmin) {
       setLoading(false);
       return;
     }
 
-    setLoading(true);
+    if (!options?.silent) {
+      setLoading(true);
+    }
     try {
       const payload = await inventoryReorderApi.getData(showAll);
       setData(payload);
@@ -88,11 +118,15 @@ export default function InventoryReorder() {
         setActiveJob(payload.latest_job);
       }
     } catch (error: unknown) {
-      const message = extractApiErrorMessage(error, "Failed to load inventory reorder data.");
-      toast.error("Failed to load Inventory Reorder", { description: message });
-      setData(null);
+      if (!options?.silent) {
+        const message = extractApiErrorMessage(error, "Failed to load inventory reorder data.");
+        toast.error("Failed to load Inventory Reorder", { description: message });
+        setData(null);
+      }
     } finally {
-      setLoading(false);
+      if (!options?.silent) {
+        setLoading(false);
+      }
     }
   }, [isAdmin, showAll]);
 
@@ -129,6 +163,30 @@ export default function InventoryReorder() {
     return () => window.clearInterval(interval);
   }, [activeJob, loadData]);
 
+  useEffect(() => {
+    if (!isAdmin) {
+      return;
+    }
+
+    const interval = window.setInterval(() => {
+      if (!isRunningJob(activeJob)) {
+        void loadData({ silent: true });
+      }
+    }, 60000);
+
+    return () => window.clearInterval(interval);
+  }, [activeJob, isAdmin, loadData]);
+
+  useEffect(() => {
+    const endsAt = data?.cooldown.ends_at;
+    if (!endsAt) {
+      return;
+    }
+
+    const interval = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(interval);
+  }, [data?.cooldown.ends_at]);
+
   const startRefresh = async () => {
     setRefreshing(true);
     try {
@@ -138,6 +196,7 @@ export default function InventoryReorder() {
     } catch (error: unknown) {
       const message = extractApiErrorMessage(error, "Failed to start inventory refresh.");
       toast.error("Failed to start Inventory Reorder refresh", { description: message });
+      void loadData({ silent: true });
     } finally {
       setRefreshing(false);
     }
@@ -182,6 +241,13 @@ export default function InventoryReorder() {
   const job = activeJob ?? data?.latest_job ?? null;
   const refreshRunning = isRunningJob(job);
   const configMissing = data?.config.configured === false;
+  const scheduledRefresh = data?.config.scheduled_refresh;
+  const cooldownEndsAtMs = data?.cooldown.ends_at ? new Date(data.cooldown.ends_at).getTime() : Number.NaN;
+  const cooldownRemainingSeconds = Number.isFinite(cooldownEndsAtMs)
+    ? Math.max(Math.ceil((cooldownEndsAtMs - nowMs) / 1000), 0)
+    : Math.max(data?.cooldown.remaining_seconds ?? 0, 0);
+  const cooldownActive = cooldownRemainingSeconds > 0;
+  const refreshDisabled = refreshing || refreshRunning || cooldownActive;
 
   if (authLoading || loading) {
     return (
@@ -220,6 +286,16 @@ export default function InventoryReorder() {
         <div className="space-y-1">
           <h1 className="text-2xl font-semibold tracking-tight text-foreground">Inventory Reorder</h1>
           <p className="text-sm text-muted-foreground">InFlow availability, BigCommerce status 9 demand, and reorder thresholds.</p>
+          {scheduledRefresh?.enabled ? (
+            <p className="text-xs text-muted-foreground">
+              Auto-refreshes daily at {formatScheduleTimes(scheduledRefresh.times ?? scheduledRefresh.hours ?? "7:30,12:00,15:00")} {scheduledRefresh.timezone}.
+            </p>
+          ) : (
+            <p className="text-xs text-muted-foreground">Automatic refresh is disabled. Use Refresh Inventory to update data.</p>
+          )}
+          <p className="text-xs text-muted-foreground">
+            Manual refresh has a {Math.round((data?.cooldown.cooldown_seconds ?? 180) / 60)} minute cooldown.
+          </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Button type="button" variant="outline" onClick={() => void loadData()} disabled={refreshing || refreshRunning}>
@@ -230,9 +306,9 @@ export default function InventoryReorder() {
             {downloading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}
             Download JSON
           </Button>
-          <Button type="button" onClick={() => void startRefresh()} disabled={refreshing || refreshRunning} className="btn-lift">
+          <Button type="button" onClick={() => void startRefresh()} disabled={refreshDisabled} className="btn-lift">
             {refreshing || refreshRunning ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
-            Refresh Inventory
+            {cooldownActive ? `Cooldown ${formatDuration(cooldownRemainingSeconds)}` : "Refresh Inventory"}
           </Button>
         </div>
       </div>

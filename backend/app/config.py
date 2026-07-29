@@ -264,6 +264,10 @@ class Settings(BaseSettings):
     )
     inventory_reorder_batch_size: int = 100
     inventory_reorder_request_delay_seconds: float = 0.2
+    inventory_reorder_refresh_cooldown_seconds: int = 180
+    inventory_reorder_scheduled_refresh_enabled: bool = True
+    inventory_reorder_scheduled_refresh_times: str = "7:30,12:00,15:00"
+    inventory_reorder_scheduled_refresh_timezone: str = "America/Chicago"
 
     model_config = SettingsConfigDict(
         env_file=".env", case_sensitive=False, extra="ignore"

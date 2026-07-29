@@ -1633,9 +1633,24 @@ def get_inventory_reorder_data():
 @bp.route("/inventory-reorder/refresh", methods=["POST"])
 @require_admin
 def refresh_inventory_reorder_data():
+    cooldown = inventory_reorder_service.get_refresh_cooldown()
+    if cooldown["active"]:
+        return jsonify(
+            {
+                "error": "Inventory refresh is cooling down. Please wait before starting another refresh.",
+                "cooldown": cooldown,
+            }
+        ), 409
+
     job, created = inventory_reorder_service.start_refresh()
     status_code = 202 if created else 200
-    return jsonify({"job": job, "created": created}), status_code
+    return jsonify(
+        {
+            "job": job,
+            "created": created,
+            "cooldown": inventory_reorder_service.get_refresh_cooldown(),
+        }
+    ), status_code
 
 
 @bp.route("/inventory-reorder/jobs/<job_id>", methods=["GET"])

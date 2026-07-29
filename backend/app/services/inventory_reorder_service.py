@@ -3,7 +3,7 @@ import logging
 import threading
 import time
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Optional
 from uuid import uuid4
@@ -38,6 +38,18 @@ class InventoryReorderConfigError(RuntimeError):
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _parse_utc_iso(value: Any) -> Optional[datetime]:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def _to_int(value: Any, default: int = 0) -> int:
@@ -108,7 +120,72 @@ class InventoryReorderService:
         if not (self._settings.inventory_reorder_bigcommerce_store_id or "").strip():
             missing.append("BC_STORE_HASH (or INVENTORY_REORDER_BIGCOMMERCE_STORE_ID/BC_STORE_ID)")
 
-        return {"configured": not missing, "missing": missing}
+        return {
+            "configured": not missing,
+            "missing": missing,
+            "scheduled_refresh": {
+                "enabled": bool(
+                    getattr(
+                        self._settings,
+                        "inventory_reorder_scheduled_refresh_enabled",
+                        True,
+                    )
+                ),
+                "times": str(
+                    getattr(
+                        self._settings,
+                        "inventory_reorder_scheduled_refresh_times",
+                        "7:30,12:00,15:00",
+                    )
+                    or "7:30,12:00,15:00"
+                ),
+                "timezone": str(
+                    getattr(
+                        self._settings,
+                        "inventory_reorder_scheduled_refresh_timezone",
+                        "America/Chicago",
+                    )
+                    or "America/Chicago"
+                ),
+            },
+        }
+
+    def get_refresh_cooldown(self) -> dict[str, Any]:
+        cooldown_seconds = max(
+            int(getattr(self._settings, "inventory_reorder_refresh_cooldown_seconds", 180) or 0),
+            0,
+        )
+        if cooldown_seconds <= 0:
+            return {
+                "active": False,
+                "cooldown_seconds": 0,
+                "remaining_seconds": 0,
+                "ends_at": None,
+            }
+
+        latest_started_at: Optional[datetime] = None
+        with self._lock:
+            for job in self._jobs.values():
+                started_at = _parse_utc_iso(job.get("started_at"))
+                if started_at and (latest_started_at is None or started_at > latest_started_at):
+                    latest_started_at = started_at
+
+        if latest_started_at is None:
+            return {
+                "active": False,
+                "cooldown_seconds": cooldown_seconds,
+                "remaining_seconds": 0,
+                "ends_at": None,
+            }
+
+        ends_at = latest_started_at + timedelta(seconds=cooldown_seconds)
+        remaining = max(int((ends_at - datetime.now(timezone.utc)).total_seconds()), 0)
+        return {
+            "active": remaining > 0,
+            "cooldown_seconds": cooldown_seconds,
+            "remaining_seconds": remaining,
+            "ends_at": ends_at.isoformat().replace("+00:00", "Z"),
+        }
 
     def start_refresh(self) -> tuple[JobStatus, bool]:
         existing = self._get_running_job()
@@ -132,6 +209,28 @@ class InventoryReorderService:
         thread = threading.Thread(target=self._run_job, args=(job_id,), daemon=True)
         thread.start()
         return self.get_job(job_id) or job, True
+
+    def run_refresh_sync(self) -> JobStatus:
+        existing = self._get_running_job()
+        if existing:
+            return existing
+
+        job_id = uuid4().hex
+        job: JobStatus = {
+            "job_id": job_id,
+            "status": "queued",
+            "progress": 0.0,
+            "message": "Queued",
+            "error": None,
+            "started_at": None,
+            "finished_at": None,
+            "result_path": None,
+        }
+        with self._lock:
+            self._jobs[job_id] = job
+
+        self._run_job(job_id)
+        return self.get_job(job_id) or job
 
     def get_job(self, job_id: str) -> Optional[JobStatus]:
         with self._lock:
@@ -169,6 +268,7 @@ class InventoryReorderService:
                 "latest_job": self.latest_job(),
                 "has_data": False,
                 "config": self.get_config_status(),
+                "cooldown": self.get_refresh_cooldown(),
             }
 
         with summary_path.open("r", encoding="utf-8") as handle:
@@ -184,6 +284,7 @@ class InventoryReorderService:
             "latest_job": self.latest_job(),
             "has_data": True,
             "config": self.get_config_status(),
+            "cooldown": self.get_refresh_cooldown(),
         }
 
     def latest_summary_path(self) -> Optional[Path]:

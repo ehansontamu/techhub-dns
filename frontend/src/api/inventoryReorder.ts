@@ -16,6 +16,19 @@ export interface InventoryReorderJob {
 export interface InventoryReorderConfigStatus {
   configured: boolean;
   missing: string[];
+  scheduled_refresh: {
+    enabled: boolean;
+    times?: string;
+    hours?: string;
+    timezone: string;
+  };
+}
+
+export interface InventoryReorderCooldown {
+  active: boolean;
+  cooldown_seconds: number;
+  remaining_seconds: number;
+  ends_at: string | null;
 }
 
 export interface InventoryReorderRow {
@@ -48,6 +61,7 @@ export interface InventoryReorderResponse {
   latest_job: InventoryReorderJob | null;
   has_data: boolean;
   config: InventoryReorderConfigStatus;
+  cooldown: InventoryReorderCooldown;
 }
 
 export const inventoryReorderApi = {
@@ -58,7 +72,7 @@ export const inventoryReorderApi = {
     return response.data;
   },
 
-  async refresh(): Promise<{ job: InventoryReorderJob; created: boolean }> {
+  async refresh(): Promise<{ job: InventoryReorderJob; created: boolean; cooldown: InventoryReorderCooldown }> {
     const response = await apiClient.post("/system/inventory-reorder/refresh");
     return response.data;
   },

@@ -1,8 +1,13 @@
 import sys
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 sys.path.append(".")
 
-from app.services.inventory_reorder_service import compute_inventory_reorder_rows
+from app.services.inventory_reorder_service import (
+    InventoryReorderService,
+    compute_inventory_reorder_rows,
+)
 
 
 def test_compute_inventory_reorder_rows_flags_reorder_items_first():
@@ -88,3 +93,24 @@ def test_compute_inventory_reorder_rows_hides_zero_reorder_quantity_by_default()
 
     assert rows == []
     assert all_rows[0]["sku"] == "ZERO1"
+
+
+def test_inventory_reorder_refresh_cooldown_uses_latest_start_time():
+    service = InventoryReorderService(
+        SimpleNamespace(inventory_reorder_refresh_cooldown_seconds=180)
+    )
+    started_at = (datetime.now(timezone.utc) - timedelta(seconds=60)).isoformat().replace("+00:00", "Z")
+    service._jobs["job-1"] = {"started_at": started_at}
+
+    cooldown = service.get_refresh_cooldown()
+
+    assert cooldown["active"] is True
+    assert 0 < cooldown["remaining_seconds"] <= 120
+
+
+if __name__ == "__main__":
+    test_compute_inventory_reorder_rows_flags_reorder_items_first()
+    test_compute_inventory_reorder_rows_marks_negative_final_qty_critical()
+    test_compute_inventory_reorder_rows_hides_zero_reorder_quantity_by_default()
+    test_inventory_reorder_refresh_cooldown_uses_latest_start_time()
+    print("[PASS] inventory reorder service tests passed")
