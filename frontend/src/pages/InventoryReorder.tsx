@@ -17,7 +17,7 @@ import { cn } from "../lib/utils";
 import { extractApiErrorMessage } from "../utils/apiErrors";
 import { getUserDisplayName } from "../utils/userDisplay";
 
-type SortKey = "name" | "sku" | "available" | "status9" | "finalQty" | "onOrder" | "combined" | "reorderPoint" | "reorderQty";
+type SortKey = "name" | "sku" | "available" | "status9" | "finalQty" | "onOrder" | "combined" | "reorderPoint" | "reorderQty" | "status";
 type SortDirection = "asc" | "desc";
 
 const sortableColumns: Array<{ key: SortKey; label: string; align?: "right" }> = [
@@ -30,6 +30,7 @@ const sortableColumns: Array<{ key: SortKey; label: string; align?: "right" }> =
   { key: "combined", label: "Final + On Order", align: "right" },
   { key: "reorderPoint", label: "Reorder Point", align: "right" },
   { key: "reorderQty", label: "Reorder Qty", align: "right" },
+  { key: "status", label: "Status" },
 ];
 
 const isRunningJob = (job: InventoryReorderJob | null): boolean =>
@@ -45,6 +46,16 @@ const formatTimestamp = (value: string | null | undefined): string => {
 const compareRows = (left: InventoryReorderRow, right: InventoryReorderRow, sortKey: SortKey) => {
   if (sortKey === "name" || sortKey === "sku") {
     return String(left[sortKey] ?? "").localeCompare(String(right[sortKey] ?? ""));
+  }
+
+  if (sortKey === "status") {
+    const getRank = (row: InventoryReorderRow) => {
+      if (row.critical) return 0;
+      if (row.needsReorder) return 1;
+      return 2;
+    };
+
+    return getRank(left) - getRank(right);
   }
 
   return Number(left[sortKey] ?? 0) - Number(right[sortKey] ?? 0);
@@ -165,7 +176,7 @@ export default function InventoryReorder() {
       return;
     }
     setSortKey(key);
-    setSortDirection(key === "name" || key === "sku" ? "asc" : "desc");
+    setSortDirection(key === "name" || key === "sku" || key === "status" ? "asc" : "desc");
   };
 
   const job = activeJob ?? data?.latest_job ?? null;
@@ -290,7 +301,10 @@ export default function InventoryReorder() {
                 className="pl-9"
               />
             </div>
-            <Checkbox checked={showAll} onChange={(event) => setShowAll(event.target.checked)} label="Show all items" />
+            <div className="space-y-1">
+              <Checkbox checked={showAll} onChange={(event) => setShowAll(event.target.checked)} label="Show all items" />
+              <p className="text-xs text-muted-foreground">Includes products with reorder qty 0.</p>
+            </div>
           </div>
         </div>
 
@@ -318,7 +332,6 @@ export default function InventoryReorder() {
                       </button>
                     </TableHead>
                   ))}
-                  <TableHead>Status</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
