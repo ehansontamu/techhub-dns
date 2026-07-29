@@ -38,9 +38,10 @@ describe("Sidebar", () => {
         );
 
         expect(document.documentElement.style.getPropertyValue("--sidebar-width")).toBe("0px");
-        expect(screen.getByLabelText("Open sidebar")).toBeInTheDocument();
+        const mobileSidebarLauncher = screen.getAllByLabelText("Open sidebar")[0];
+        expect(mobileSidebarLauncher).toBeInTheDocument();
 
-        fireEvent.click(screen.getByLabelText("Open sidebar"));
+        fireEvent.click(mobileSidebarLauncher);
         expect(screen.getByLabelText("Close sidebar overlay")).toBeInTheDocument();
 
         currentMatches = false;
@@ -56,6 +57,25 @@ describe("Sidebar", () => {
         expect(screen.queryByLabelText("Open sidebar")).not.toBeInTheDocument();
         expect(screen.getByLabelText("Collapse sidebar")).toBeInTheDocument();
         expect(screen.queryByLabelText("Close sidebar overlay")).not.toBeInTheDocument();
-        expect(container.querySelector("aside")).toHaveStyle({ transform: "translateX(0px)" });
+        await waitFor(() => {
+            expect(container.querySelector("aside")).toHaveStyle({ transform: "none", width: "256px" });
+        });
+    });
+
+    it.each([
+        ["/", "Dashboard"],
+        ["/settings", "Settings"],
+    ])("uses the maroon selected style for %s", (path, label) => {
+        render(
+            <MemoryRouter initialEntries={[path]}>
+                <Sidebar />
+            </MemoryRouter>
+        );
+
+        expect(screen.getByRole("link", { name: label })).toHaveClass(
+            "bg-accent",
+            "text-accent-foreground",
+            "shadow-accent/25"
+        );
     });
 });
