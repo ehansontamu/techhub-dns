@@ -43,6 +43,8 @@ const adminItems = [
   { path: "/sessions", label: "Sessions", icon: Users },
 ];
 
+const activeNavItemClassName = "bg-accent text-accent-foreground shadow-lg shadow-accent/25";
+
 export function Sidebar({ className }: { className?: string }) {
   const [collapsed, setCollapsed] = useState(() => {
     if (typeof window === "undefined") return false;
@@ -236,7 +238,7 @@ export function Sidebar({ className }: { className?: string }) {
                   "flex min-h-[44px] items-center rounded-lg py-2.5 text-sm font-medium transition-colors",
                   showExpandedContent ? "gap-3 px-3" : "justify-center px-0",
                   active
-                    ? "bg-secondary text-foreground"
+                    ? activeNavItemClassName
                     : "text-muted-foreground hover:bg-muted/50 hover:text-foreground"
                 )}
               >
@@ -260,7 +262,7 @@ export function Sidebar({ className }: { className?: string }) {
                     "flex min-h-[44px] items-center rounded-lg py-2.5 text-sm font-medium transition-colors",
                     showExpandedContent ? "gap-3 px-3" : "justify-center px-0",
                     isCurrentVettingEditor
-                      ? "bg-accent text-accent-foreground shadow-lg shadow-accent/25"
+                      ? activeNavItemClassName
                       : "text-muted-foreground hover:bg-muted/50 hover:text-foreground"
                   )
                 }
@@ -279,7 +281,7 @@ export function Sidebar({ className }: { className?: string }) {
                     "flex min-h-[44px] items-center rounded-lg py-2.5 text-sm font-medium transition-colors",
                     showExpandedContent ? "gap-3 px-3" : "justify-center px-0",
                     isCurrentCompatibilityEditor
-                      ? "bg-accent text-accent-foreground shadow-lg shadow-accent/25"
+                      ? activeNavItemClassName
                       : "text-muted-foreground hover:bg-muted/50 hover:text-foreground"
                   )
                 }
@@ -298,7 +300,7 @@ export function Sidebar({ className }: { className?: string }) {
                     "flex min-h-[44px] items-center rounded-lg py-2.5 text-sm font-medium transition-colors",
                     showExpandedContent ? "gap-3 px-3" : "justify-center px-0",
                     isCurrentInventoryReorder
-                      ? "bg-accent text-accent-foreground shadow-lg shadow-accent/25"
+                      ? activeNavItemClassName
                       : "text-muted-foreground hover:bg-muted/50 hover:text-foreground"
                   )
                 }
@@ -323,7 +325,7 @@ export function Sidebar({ className }: { className?: string }) {
                   "flex min-h-[44px] items-center rounded-lg py-2.5 text-sm font-medium transition-colors",
                   showExpandedContent ? "gap-3 px-3" : "justify-center px-0",
                   active
-                    ? "bg-secondary text-foreground"
+                    ? activeNavItemClassName
                     : "text-muted-foreground hover:bg-muted/50 hover:text-foreground"
                 )}
               >
