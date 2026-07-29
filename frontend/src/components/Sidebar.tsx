@@ -14,6 +14,7 @@ import {
   Users,
   FilePenLine,
   Cable,
+  PackageSearch,
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "../lib/utils";
@@ -285,6 +286,25 @@ export function Sidebar({ className }: { className?: string }) {
               >
                 <Cable className="h-5 w-5 flex-shrink-0" />
                 {showExpandedContent && <span className="overflow-hidden whitespace-nowrap">Compatibility Editor</span>}
+              </NavLink>
+
+              <NavLink
+                key="/inventory-reorder"
+                to="/inventory-reorder"
+                aria-label="Inventory Reorder"
+                title="Inventory Reorder"
+                className={({ isActive: isCurrentInventoryReorder }) =>
+                  cn(
+                    "flex min-h-[44px] items-center rounded-lg py-2.5 text-sm font-medium transition-colors",
+                    showExpandedContent ? "gap-3 px-3" : "justify-center px-0",
+                    isCurrentInventoryReorder
+                      ? "bg-accent text-accent-foreground shadow-lg shadow-accent/25"
+                      : "text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+                  )
+                }
+              >
+                <PackageSearch className="h-5 w-5 flex-shrink-0" />
+                {showExpandedContent && <span className="overflow-hidden whitespace-nowrap">Inventory Reorder</span>}
               </NavLink>
             </>
           )}

@@ -23,6 +23,7 @@ from app.services.saml_auth_service import saml_auth_service
 from app.services.canopy_orders_uploader_service import CanopyOrdersUploaderService
 from app.services.graph_service import graph_service
 from app.services.inflow_service import InflowService
+from app.services.inventory_reorder_service import InventoryReorderService
 from app.services.order_service import OrderService
 from app.database import get_db_session
 from app.models.system_setting import SystemSetting
@@ -41,6 +42,7 @@ import logging
 bp = Blueprint("system", __name__, url_prefix="/api/system")
 
 logger = logging.getLogger(__name__)
+inventory_reorder_service = InventoryReorderService(settings)
 
 from app.services.system_setting_service import (
     SystemSettingService,
@@ -1609,6 +1611,55 @@ def save_compatibility_editor_staging_data():
         ), 502
 
     return jsonify({"success": True})
+
+
+# ============ Inventory Reorder Tool Endpoints ============
+
+
+@bp.route("/inventory-reorder", methods=["GET"])
+@require_admin
+def get_inventory_reorder_data():
+    show_all = request.args.get("all") == "1"
+
+    try:
+        payload = inventory_reorder_service.get_latest_summary(show_all=show_all)
+    except (OSError, ValueError) as exc:
+        logger.warning("Failed to read inventory reorder summary: %s", exc)
+        return jsonify({"error": "Failed to read inventory reorder summary."}), 500
+
+    return jsonify(payload)
+
+
+@bp.route("/inventory-reorder/refresh", methods=["POST"])
+@require_admin
+def refresh_inventory_reorder_data():
+    job, created = inventory_reorder_service.start_refresh()
+    status_code = 202 if created else 200
+    return jsonify({"job": job, "created": created}), status_code
+
+
+@bp.route("/inventory-reorder/jobs/<job_id>", methods=["GET"])
+@require_admin
+def get_inventory_reorder_job(job_id: str):
+    job = inventory_reorder_service.get_job(job_id)
+    if not job:
+        return jsonify({"error": "Inventory reorder refresh job not found."}), 404
+    return jsonify({"job": job})
+
+
+@bp.route("/inventory-reorder/download", methods=["GET"])
+@require_admin
+def download_inventory_reorder_summary():
+    summary_path = inventory_reorder_service.latest_summary_path()
+    if not summary_path:
+        return jsonify({"error": "No inventory reorder summary is available."}), 404
+
+    return send_file(
+        summary_path,
+        as_attachment=True,
+        download_name=summary_path.name,
+        mimetype="application/json",
+    )
 
 
 # ============ Testing Endpoints ============

@@ -242,6 +242,29 @@ class Settings(BaseSettings):
     compatibility_editor_staging_download_url: Optional[str] = None
     compatibility_editor_staging_upload_url: Optional[str] = None
 
+    # Inventory Reorder Tool (manual admin refresh, env-only)
+    inventory_reorder_location_id: str = "e5945760-568d-4f4b-be3c-47d3587851a7"
+    inventory_reorder_bigcommerce_base_url: str = "https://api.bigcommerce.com/stores"
+    inventory_reorder_bigcommerce_store_id: str = Field(
+        default="jsj7fos9p1",
+        validation_alias=AliasChoices(
+            "INVENTORY_REORDER_BIGCOMMERCE_STORE_ID",
+            "BC_STORE_HASH",
+            "BC_STORE_ID",
+        ),
+    )
+    inventory_reorder_bigcommerce_token: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "INVENTORY_REORDER_BIGCOMMERCE_TOKEN",
+            "BC_ACCESS_TOKEN",
+            "BIGCOMMERCE_TOKEN",
+            "BC_TOKEN",
+        ),
+    )
+    inventory_reorder_batch_size: int = 100
+    inventory_reorder_request_delay_seconds: float = 0.2
+
     model_config = SettingsConfigDict(
         env_file=".env", case_sensitive=False, extra="ignore"
     )
