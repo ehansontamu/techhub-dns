@@ -20,6 +20,7 @@ import { getOrderAuditQueryOptions, getOrderDetailQueryOptions, getOrdersListQue
 import { OrderStatus } from "../types/order";
 import { extractApiErrorMessage, shouldThrowToBoundary } from "../utils/apiErrors";
 import { isValidOrderId } from "../utils/orderIds";
+import { isConflictError, retryOnceOnConflict } from "../utils/retryOnConflict";
 import { SkeletonCard } from "../components/Skeleton";
 
 export default function OrderDetailPage() {
@@ -46,6 +47,8 @@ export default function OrderDetailPage() {
     } | null>(null);
     const queryClient = useQueryClient();
     const [mobileShowOrders, setMobileShowOrders] = useState(false);
+    const [preparingPicklist, setPreparingPicklist] = useState(false);
+    const [refreshingAfterRma, setRefreshingAfterRma] = useState(false);
 
     const { orders: websocketOrders } = useOrdersWebSocket();
     const lastWebSocketUpdate = useRef<number>(0);
@@ -108,6 +111,16 @@ export default function OrderDetailPage() {
         }
 
         await invalidateOrderQueries(queryClient, orderId);
+    };
+
+    const loadAuthoritativeOrder = async () => {
+        if (!orderId) {
+            throw new Error("Order id is required");
+        }
+
+        const latestOrder = await ordersApi.getOrder(orderId);
+        queryClient.setQueryData(ordersQueryKeys.detail(orderId), latestOrder);
+        return latestOrder;
     };
 
     const getUserName = () => getUserDisplayName(user, "Unknown User");
@@ -194,8 +207,13 @@ export default function OrderDetailPage() {
             if (orderId) {
                 queryClient.setQueryData(ordersQueryKeys.detail(orderId), updatedOrder);
             }
-            await queryClient.invalidateQueries({ queryKey: ordersQueryKeys.lists() });
-            await refreshOrder();
+            await Promise.all([
+                queryClient.invalidateQueries({ queryKey: ordersQueryKeys.lists() }),
+                orderId
+                    ? queryClient.invalidateQueries({ queryKey: ordersQueryKeys.audit(orderId) })
+                    : Promise.resolve(),
+            ]);
+            await loadAuthoritativeOrder();
         },
         onError: async (error: unknown) => {
             console.error("Failed to reopen order for RMA:", error);
@@ -243,11 +261,17 @@ export default function OrderDetailPage() {
                 throw new Error("Order is unavailable");
             }
 
-            return ordersApi.generatePicklist(orderId, {
-                generated_by: getUserName(),
-                expected_updated_at: expectedUpdatedAt ?? order.updated_at,
-                create_partial_leg: createPartialLeg,
-                confirm_create_partial_leg: createPartialLeg,
+            return retryOnceOnConflict({
+                initialExpectedUpdatedAt: expectedUpdatedAt ?? order.updated_at,
+                loadLatestExpectedUpdatedAt: async () => (
+                    await loadAuthoritativeOrder()
+                ).updated_at,
+                attempt: (attemptExpectedUpdatedAt) => ordersApi.generatePicklist(orderId, {
+                    generated_by: getUserName(),
+                    expected_updated_at: attemptExpectedUpdatedAt,
+                    create_partial_leg: createPartialLeg,
+                    confirm_create_partial_leg: createPartialLeg,
+                }),
             });
         },
         onSuccess: async (updatedOrder) => {
@@ -269,43 +293,18 @@ export default function OrderDetailPage() {
 
             await refreshOrder();
         },
-        onError: async (error: unknown, variables) => {
+        onError: async (error: unknown) => {
             console.error("Failed to generate picklist:", error);
-            if (isAxiosError(error) && error.response?.status === 409 && orderId) {
-                try {
-                    const latestOrder = await queryClient.fetchQuery(getOrderDetailQueryOptions(orderId));
-                    const updatedOrder = await ordersApi.generatePicklist(orderId, {
-                        generated_by: getUserName(),
-                        expected_updated_at: latestOrder.updated_at,
-                        create_partial_leg: variables?.createPartialLeg,
-                        confirm_create_partial_leg: variables?.createPartialLeg,
-                    });
-
-                    await queryClient.invalidateQueries({ queryKey: ["orders"] });
-
-                    const nextOrderId = updatedOrder?.id;
-                    if (nextOrderId && nextOrderId !== orderId) {
-                        await invalidateOrderQueries(queryClient, nextOrderId);
-                        navigate(`/orders/${nextOrderId}`, {
-                            state: locationState ?? undefined,
-                            replace: true,
-                        });
-                        return;
-                    }
-
-                    await refreshOrder();
-                    toast.success("Order refreshed from the latest Inflow update before generating the picklist.");
-                    return;
-                } catch (retryError) {
-                    console.error("Failed to retry picklist generation after refresh:", retryError);
-                    toast.error("Order changed by another user. Reloaded the latest details.");
-                    await refreshOrder();
-                    return;
-                }
+            if (isConflictError(error)) {
+                toast.error("Order is still changing. Wait a moment, then try generating again.");
+            } else {
+                const message = extractApiErrorMessage(error, "Failed to generate picklist");
+                toast.error(message);
             }
 
-            const message = extractApiErrorMessage(error, "Failed to generate picklist");
-            toast.error(message);
+            await loadAuthoritativeOrder().catch((refreshError) => {
+                console.error("Failed to reload order after picklist error:", refreshError);
+            });
         },
     });
 
@@ -473,10 +472,23 @@ export default function OrderDetailPage() {
 
     const handleGeneratePicklist = async (options?: { createPartialLeg?: boolean }) => {
         if (!order) return;
+        setPreparingPicklist(true);
+        let mutationStarted = false;
         try {
-            await generatePicklistMutation.mutateAsync(options ?? {});
-        } catch {
-            // Handled by mutation callbacks.
+            const latestOrder = await loadAuthoritativeOrder();
+            mutationStarted = true;
+            await generatePicklistMutation.mutateAsync({
+                ...options,
+                expectedUpdatedAt: latestOrder.updated_at,
+            });
+        } catch (error) {
+            if (!mutationStarted) {
+                console.error("Failed to load latest order before generating picklist:", error);
+                const message = extractApiErrorMessage(error, "Failed to load the latest order details");
+                toast.error(message);
+            }
+        } finally {
+            setPreparingPicklist(false);
         }
     };
 
@@ -487,10 +499,15 @@ export default function OrderDetailPage() {
 
     const handleRmaReopen = async (reason: string) => {
         if (!order) return;
-        await rmaReopenMutation.mutateAsync({
-            reason,
-            expectedUpdatedAt: order.updated_at,
-        });
+        setRefreshingAfterRma(true);
+        try {
+            await rmaReopenMutation.mutateAsync({
+                reason,
+                expectedUpdatedAt: order.updated_at,
+            });
+        } finally {
+            setRefreshingAfterRma(false);
+        }
     };
 
     const handleArchiveOrder = async (reason: string) => {
@@ -582,7 +599,12 @@ export default function OrderDetailPage() {
                             onTagOrder={handleTagOrder}
                             onRequestTags={handleRequestTags}
                             onGeneratePicklist={handleGeneratePicklist}
-                            generatingPicklist={generatePicklistMutation.isPending}
+                            generatingPicklist={
+                                preparingPicklist
+                                || refreshingAfterRma
+                                || rmaReopenMutation.isPending
+                                || generatePicklistMutation.isPending
+                            }
                         />
                     ) : (
                         <SkeletonCard lines={4} />

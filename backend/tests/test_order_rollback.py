@@ -182,8 +182,14 @@ def test_rma_reopen_refreshes_snapshot_and_resets_workflow(monkeypatch):
     refreshed_snapshot = {
         "orderNumber": "TH123",
         "pickLines": [{"productId": "new-product"}],
-        "packLines": [{"productId": "new-product"}],
-        "shipLines": [{"productId": "new-product"}],
+        "packLines": [
+            {
+                "salesOrderPackLineId": "pack-before-rma",
+                "productId": "new-product",
+                "quantity": {"standardQuantity": "4"},
+            }
+        ],
+        "shipLines": [{"salesOrderShipLineId": "ship-before-rma"}],
     }
     captured_audit = {}
 
@@ -220,6 +226,10 @@ def test_rma_reopen_refreshes_snapshot_and_resets_workflow(monkeypatch):
     assert result.inflow_data["pickLines"] == [{"productId": "new-product"}]
     assert result.inflow_data["packLines"] == []
     assert result.inflow_data["shipLines"] == []
+    assert result.inflow_data[OrderService.RMA_FULFILLMENT_BASELINE_KEY] == {
+        "pack_line_quantities": {"id:pack-before-rma": 4.0},
+        "ship_line_keys": ["id:ship-before-rma"],
+    }
     assert db.committed is True
     assert db.refreshed is result
     assert len(db.added) == 2
@@ -305,10 +315,66 @@ def test_rma_reopen_preserves_split_leg_item_set(monkeypatch):
     print("[PASS] rma reopen preserves split leg item set")
 
 
+def test_rma_merge_hides_old_fulfillment_and_keeps_replacement_delta():
+    order = build_order(OrderStatus.PICKED)
+    order.inflow_data = {
+        "packLines": [],
+        "shipLines": [],
+        OrderService.RMA_FULFILLMENT_BASELINE_KEY: {
+            "pack_line_quantities": {"id:pack-before-rma": 4.0},
+            "ship_line_keys": ["id:ship-before-rma"],
+        },
+    }
+    service = OrderService(FakeDb(order))
+
+    merged = service.merge_inflow_snapshot_preserving_split(
+        order,
+        {
+            "packLines": [
+                {
+                    "salesOrderPackLineId": "pack-before-rma",
+                    "productId": "laptop",
+                    "quantity": {"standardQuantity": "5"},
+                },
+                {
+                    "salesOrderPackLineId": "pack-replacement",
+                    "productId": "laptop",
+                    "quantity": {"standardQuantity": "1"},
+                },
+            ],
+            "shipLines": [
+                {"salesOrderShipLineId": "ship-before-rma"},
+                {"salesOrderShipLineId": "ship-replacement"},
+            ],
+        },
+    )
+
+    assert merged["packLines"] == [
+        {
+            "salesOrderPackLineId": "pack-before-rma",
+            "productId": "laptop",
+            "quantity": {"standardQuantity": "1"},
+        },
+        {
+            "salesOrderPackLineId": "pack-replacement",
+            "productId": "laptop",
+            "quantity": {"standardQuantity": "1"},
+        },
+    ]
+    assert merged["shipLines"] == [
+        {"salesOrderShipLineId": "ship-replacement"}
+    ]
+    assert merged[OrderService.RMA_FULFILLMENT_BASELINE_KEY] == (
+        order.inflow_data[OrderService.RMA_FULFILLMENT_BASELINE_KEY]
+    )
+    print("[PASS] RMA merge hides old fulfillment and keeps replacement delta")
+
+
 if __name__ == "__main__":
     test_rollback_to_pre_delivery_clears_delivery_and_shipping_state()
     test_rollback_to_qa_clears_qa_state()
     test_rollback_rejects_forward_transition()
     test_rma_reopen_refreshes_snapshot_and_resets_workflow(pytest.MonkeyPatch())
     test_rma_reopen_preserves_split_leg_item_set(pytest.MonkeyPatch())
+    test_rma_merge_hides_old_fulfillment_and_keeps_replacement_delta()
     print("[SUCCESS] order rollback regression tests passed!")
