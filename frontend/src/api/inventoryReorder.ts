@@ -11,6 +11,7 @@ export interface InventoryReorderJob {
   started_at: string | null;
   finished_at: string | null;
   result_path: string | null;
+  trigger?: "manual" | "scheduled" | string;
 }
 
 export interface InventoryReorderConfigStatus {

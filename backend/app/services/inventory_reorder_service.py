@@ -170,6 +170,13 @@ class InventoryReorderService:
                 if started_at and (latest_started_at is None or started_at > latest_started_at):
                     latest_started_at = started_at
 
+        metadata_job = self._read_latest_metadata_job()
+        metadata_started_at = _parse_utc_iso(metadata_job.get("started_at") if metadata_job else None)
+        if metadata_started_at and (
+            latest_started_at is None or metadata_started_at > latest_started_at
+        ):
+            latest_started_at = metadata_started_at
+
         if latest_started_at is None:
             return {
                 "active": False,
@@ -202,6 +209,7 @@ class InventoryReorderService:
             "started_at": None,
             "finished_at": None,
             "result_path": None,
+            "trigger": "manual",
         }
         with self._lock:
             self._jobs[job_id] = job
@@ -210,7 +218,7 @@ class InventoryReorderService:
         thread.start()
         return self.get_job(job_id) or job, True
 
-    def run_refresh_sync(self) -> JobStatus:
+    def run_refresh_sync(self, *, trigger: str = "scheduled") -> JobStatus:
         existing = self._get_running_job()
         if existing:
             return existing
@@ -225,6 +233,7 @@ class InventoryReorderService:
             "started_at": None,
             "finished_at": None,
             "result_path": None,
+            "trigger": trigger,
         }
         with self._lock:
             self._jobs[job_id] = job
@@ -238,18 +247,32 @@ class InventoryReorderService:
             return dict(job) if job else None
 
     def latest_job(self) -> Optional[JobStatus]:
+        metadata_job = self._read_latest_metadata_job()
         with self._lock:
+            memory_job: Optional[JobStatus] = None
             if self._latest_job_id and self._latest_job_id in self._jobs:
-                return dict(self._jobs[self._latest_job_id])
+                memory_job = dict(self._jobs[self._latest_job_id])
+            else:
+                done_jobs = [
+                    job for job in self._jobs.values()
+                    if job.get("status") == "done" and job.get("result_path")
+                ]
+                if done_jobs:
+                    done_jobs.sort(key=lambda job: str(job.get("finished_at") or ""), reverse=True)
+                    memory_job = dict(done_jobs[0])
 
-            done_jobs = [
-                job for job in self._jobs.values()
-                if job.get("status") == "done" and job.get("result_path")
-            ]
-            if not done_jobs:
-                return None
-            done_jobs.sort(key=lambda job: str(job.get("finished_at") or ""), reverse=True)
-            return dict(done_jobs[0])
+        if not memory_job:
+            return metadata_job
+        if not metadata_job:
+            return memory_job
+
+        memory_finished_at = _parse_utc_iso(memory_job.get("finished_at"))
+        metadata_finished_at = _parse_utc_iso(metadata_job.get("finished_at"))
+        if metadata_finished_at and (
+            memory_finished_at is None or metadata_finished_at > memory_finished_at
+        ):
+            return metadata_job
+        return memory_job
 
     def get_latest_summary(self, *, show_all: bool = False) -> dict[str, Any]:
         summary_path = self._stable_summary_path()
@@ -309,6 +332,7 @@ class InventoryReorderService:
             message="Starting inventory refresh...",
             progress=0.01,
         )
+        self._write_latest_metadata_from_job(job_id)
         try:
             result_path = self._refresh_inventory(job_id)
         except Exception as exc:
@@ -321,6 +345,7 @@ class InventoryReorderService:
                 message="Refresh failed",
                 progress=1.0,
             )
+            self._write_latest_metadata_from_job(job_id)
             return
 
         self._update_job(
@@ -333,6 +358,7 @@ class InventoryReorderService:
         )
         with self._lock:
             self._latest_job_id = job_id
+        self._write_latest_metadata_from_job(job_id)
 
     def _refresh_inventory(self, job_id: str) -> Path:
         self._ensure_configured()
@@ -594,12 +620,45 @@ class InventoryReorderService:
         return max(float(self._settings.inventory_reorder_request_delay_seconds or 0), 0.0)
 
     def _data_dir(self) -> Path:
-        return Path(self._settings.storage_root) / "inventory-reorder"
+        return Path(getattr(self._settings, "storage_root", "storage")) / "inventory-reorder"
 
     def _stable_summary_path(self) -> Path:
         return self._data_dir() / "inventory_summary_simple.json"
+
+    def _metadata_path(self) -> Path:
+        return self._data_dir() / "inventory_summary_metadata.json"
 
     def _write_json(self, path: Path, payload: Any) -> None:
         with path.open("w", encoding="utf-8") as handle:
             json.dump(payload, handle, indent=2)
             handle.write("\n")
+
+    def _read_latest_metadata_job(self) -> Optional[JobStatus]:
+        metadata_path = self._metadata_path()
+        if not metadata_path.exists():
+            return None
+        try:
+            with metadata_path.open("r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+        except (OSError, ValueError) as exc:
+            logger.warning("Failed to read inventory reorder metadata: %s", exc)
+            return None
+
+        job = payload.get("latest_job") if isinstance(payload, dict) else None
+        return dict(job) if isinstance(job, dict) else None
+
+    def _write_latest_metadata_from_job(self, job_id: str) -> None:
+        job = self.get_job(job_id)
+        if not job:
+            return
+
+        metadata_path = self._metadata_path()
+        metadata_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "latest_job": job,
+            "updated_at": _utc_now_iso(),
+        }
+        try:
+            self._write_json(metadata_path, payload)
+        except OSError as exc:
+            logger.warning("Failed to write inventory reorder metadata: %s", exc)

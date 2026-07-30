@@ -183,7 +183,7 @@ def scheduled_inventory_reorder_refresh():
         )
         return
 
-    job = inventory_reorder_service.run_refresh_sync()
+    job = inventory_reorder_service.run_refresh_sync(trigger="scheduled")
     if job.get("status") == "done":
         logger.info(
             "Scheduled inventory reorder refresh completed: job_id=%s result_path=%s",
