@@ -108,9 +108,50 @@ def test_inventory_reorder_refresh_cooldown_uses_latest_start_time():
     assert 0 < cooldown["remaining_seconds"] <= 120
 
 
+def test_inventory_reorder_latest_job_reads_persisted_metadata(tmp_path):
+    service = InventoryReorderService(
+        SimpleNamespace(
+            inventory_reorder_refresh_cooldown_seconds=180,
+            storage_root=str(tmp_path),
+        )
+    )
+    metadata_path = tmp_path / "inventory-reorder" / "inventory_summary_metadata.json"
+    metadata_path.parent.mkdir(parents=True)
+    metadata_path.write_text(
+        """
+{
+  "latest_job": {
+    "job_id": "scheduled-job",
+    "status": "done",
+    "progress": 1.0,
+    "message": "Refresh complete",
+    "error": null,
+    "started_at": "2026-07-30T17:00:00Z",
+    "finished_at": "2026-07-30T17:05:00Z",
+    "result_path": "storage/inventory-reorder/inventory_summary_simple.json",
+    "trigger": "scheduled"
+  },
+  "updated_at": "2026-07-30T17:05:00Z"
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    latest = service.latest_job()
+
+    assert latest is not None
+    assert latest["job_id"] == "scheduled-job"
+    assert latest["trigger"] == "scheduled"
+
+
 if __name__ == "__main__":
     test_compute_inventory_reorder_rows_flags_reorder_items_first()
     test_compute_inventory_reorder_rows_marks_negative_final_qty_critical()
     test_compute_inventory_reorder_rows_hides_zero_reorder_quantity_by_default()
     test_inventory_reorder_refresh_cooldown_uses_latest_start_time()
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as tmp:
+        test_inventory_reorder_latest_job_reads_persisted_metadata(Path(tmp))
     print("[PASS] inventory reorder service tests passed")
