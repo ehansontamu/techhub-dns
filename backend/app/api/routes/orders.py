@@ -1170,7 +1170,7 @@ def sign_order(order_id):
     # Phase 1: generate documents BEFORE locking the order row (no DB lock held during PDF I/O)
     with get_db() as db:
         service = OrderService(db)
-        signed_sp_url, bundle_sp_url = service.generate_bundled_documents(
+        signed_sp_url, bundle_sp_url, partial_folder_sp_url = service.generate_bundled_documents(
             order_id=order_id,
             signature_data=signature_data.model_dump(exclude={"expected_updated_at"}),
         )
@@ -1185,7 +1185,8 @@ def sign_order(order_id):
                 inflow_service = InflowService()
                 updated_inflow_order = inflow_service.update_proof_of_delivery_url_sync(
                     order.inflow_sales_order_id,
-                    bundle_sp_url,
+                    partial_folder_sp_url or bundle_sp_url,
+                    preserve_existing=bool(partial_folder_sp_url),
                 )
                 proof_of_delivery_updated = True
             except Exception as exc:
