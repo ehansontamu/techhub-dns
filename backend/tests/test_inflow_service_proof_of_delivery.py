@@ -63,3 +63,35 @@ def test_update_proof_of_delivery_url_sync_updates_custom5_without_losing_existi
     assert captured["json"]["customFields"]["custom1"] == "Existing value"
     assert captured["json"]["customFields"]["custom4"] == "Other field"
     assert result["customFields"]["custom5"] == "https://sharepoint.example.test/bundles/TH5000_bundle.pdf"
+
+
+def test_update_proof_of_delivery_url_sync_preserves_existing_partial_folder_link(
+    monkeypatch,
+):
+    service = InflowService()
+    existing_folder_url = "https://sharepoint.example.test/bundles/TH5000_bundles"
+    original_order = {
+        "id": "sales-order-1",
+        "orderNumber": "TH5000",
+        "customFields": {"custom5": existing_folder_url},
+    }
+
+    monkeypatch.setattr(
+        service,
+        "get_order_by_id_sync",
+        lambda sales_order_id: original_order,
+    )
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("InFlow PUT should not run when the folder link already exists")
+
+    monkeypatch.setattr("app.services.inflow_service.httpx.Client", fail_if_called)
+
+    result = service.update_proof_of_delivery_url_sync(
+        "sales-order-1",
+        "https://sharepoint.example.test/bundles/TH5000_bundles-replacement",
+        preserve_existing=True,
+    )
+
+    assert result is original_order
+    assert result["customFields"]["custom5"] == existing_folder_url

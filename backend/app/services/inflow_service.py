@@ -1586,15 +1586,33 @@ class InflowService:
         return updated_order
 
     def update_proof_of_delivery_url_sync(
-        self, sales_order_id: str, proof_of_delivery_url: str
+        self,
+        sales_order_id: str,
+        proof_of_delivery_url: str,
+        *,
+        preserve_existing: bool = False,
     ) -> Dict[str, Any]:
-        """Update the Proof of Delivery custom field (custom5) for a sales order in inFlow."""
+        """Update the Proof of Delivery custom field (custom5) for a sales order in inFlow.
+
+        Partial-order families use ``preserve_existing`` so the first folder URL
+        remains stable when later legs are signed.
+        """
         order = self.get_order_by_id_sync(sales_order_id)
         if not order:
             raise ValueError(f"Sales order {sales_order_id} not found in Inflow")
 
+        existing_custom_fields = order.get("customFields")
+        if preserve_existing and isinstance(existing_custom_fields, dict):
+            existing_url = existing_custom_fields.get("custom5")
+            if isinstance(existing_url, str) and existing_url.strip():
+                logger.info(
+                    "Keeping existing Proof of Delivery link for partial sales order %s",
+                    sales_order_id,
+                )
+                return order
+
         updated_order = dict(order)
-        custom_fields = updated_order.get("customFields")
+        custom_fields = existing_custom_fields
         if not isinstance(custom_fields, dict):
             custom_fields = {}
         else:
