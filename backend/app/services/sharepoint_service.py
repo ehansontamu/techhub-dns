@@ -244,6 +244,74 @@ class SharePointService:
             logger.info(f"File uploaded successfully: {web_url}")
             return web_url
 
+    def ensure_folder(self, subfolder: str) -> str:
+        """Create a SharePoint folder when needed and return its web URL.
+
+        The configured SharePoint base folder and the immediate parent of
+        ``subfolder`` must already exist. This is intended for dynamic leaf
+        folders such as ``bundles/TH1234_bundles``.
+        """
+        if not self.is_enabled:
+            raise RuntimeError("SharePoint storage is not enabled or not fully configured")
+
+        normalized_subfolder = subfolder.strip("/")
+        if not normalized_subfolder:
+            raise ValueError("SharePoint subfolder is required")
+
+        drive_id = self._get_drive_id()
+        folder_path = self._get_folder_path(normalized_subfolder)
+        folder_url = f"{GRAPH_BASE_URL}/drives/{drive_id}/root:/{folder_path}"
+
+        with httpx.Client(timeout=60.0) as client:
+            response = client.get(folder_url, headers=self._get_headers())
+            if response.status_code == 200:
+                web_url = response.json().get("webUrl")
+                if not web_url:
+                    raise RuntimeError(
+                        f"SharePoint folder response missing webUrl: {folder_path}"
+                    )
+                return web_url
+
+            if response.status_code != 404:
+                response.raise_for_status()
+
+            parent_path, separator, folder_name = folder_path.rpartition("/")
+            if not separator or not parent_path or not folder_name:
+                raise ValueError(
+                    f"SharePoint folder must have an existing parent: {folder_path}"
+                )
+
+            create_url = (
+                f"{GRAPH_BASE_URL}/drives/{drive_id}/root:/{parent_path}:/children"
+            )
+            create_response = client.post(
+                create_url,
+                headers=self._get_headers(),
+                json={
+                    "name": folder_name,
+                    "folder": {},
+                    "@microsoft.graph.conflictBehavior": "fail",
+                },
+            )
+
+            # Another request may have created the folder between our GET and POST.
+            if create_response.status_code == 409:
+                response = client.get(folder_url, headers=self._get_headers())
+                response.raise_for_status()
+                data = response.json()
+            else:
+                create_response.raise_for_status()
+                data = create_response.json()
+
+            web_url = data.get("webUrl")
+            if not web_url:
+                raise RuntimeError(
+                    f"SharePoint folder response missing webUrl: {folder_path}"
+                )
+
+            logger.info("SharePoint folder ready: %s", folder_path)
+            return web_url
+
     def upload_json(
         self,
         data: Dict[str, Any],

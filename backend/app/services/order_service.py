@@ -471,6 +471,42 @@ class OrderService:
         filename = Path(unquote(parsed.path)).name
         return filename or None
 
+    def _partial_order_family_number(self, order: Order) -> Optional[str]:
+        """Return the original order number when ``order`` belongs to a split family."""
+        order_number = str(getattr(order, "inflow_order_id", None) or order.id)
+        parent_order_id = getattr(order, "parent_order_id", None)
+        if parent_order_id:
+            parent_order = (
+                self.db.query(Order)
+                .filter(Order.id == str(parent_order_id))
+                .first()
+            )
+            if parent_order:
+                return str(parent_order.inflow_order_id or parent_order.id)
+            return re.sub(r"-P\d*$", "", order_number, flags=re.IGNORECASE)
+
+        if (
+            getattr(order, "has_remainder", None) == "Y"
+            or getattr(order, "remainder_order_id", None)
+        ):
+            return order_number
+
+        return None
+
+    def _bundle_storage_location(self, order: Order) -> tuple[str, Optional[str]]:
+        """Return the SharePoint subfolder and partial-family number for a bundle."""
+        family_number = self._partial_order_family_number(order)
+        if not family_number:
+            return "bundles", None
+
+        safe_family_number = re.sub(
+            r"[^A-Za-z0-9._-]+", "_", family_number
+        ).strip("._-")
+        if not safe_family_number:
+            raise ValidationError("Partial order is missing a valid order number")
+
+        return f"bundles/{safe_family_number}_bundles", family_number
+
     def _remove_order_documents(
         self, order: Order, remove_sharepoint_files: bool = True
     ) -> Dict[str, Any]:
@@ -481,11 +517,12 @@ class OrderService:
             "sharepoint_failed": [],
         }
 
+        bundle_subfolder, _partial_family_number = self._bundle_storage_location(order)
         document_fields = [
             ("picklist_path", "picklists"),
             ("qa_path", "qa"),
             ("signed_picklist_path", "signed"),
-            ("bundle_path", "bundles"),
+            ("bundle_path", bundle_subfolder),
             ("order_details_path", "order-details"),
         ]
 
@@ -3058,9 +3095,14 @@ class OrderService:
 
     def generate_bundled_documents(
         self, order_id: Union[UUID, str], signature_data: dict
-    ) -> tuple[str, str]:
+    ) -> tuple[str, str, Optional[str]]:
         """Generate bundled documents directly in SharePoint (no local storage).
-        Returns (signed_picklist_sp_url, bundle_sp_url)."""
+        Returns (signed_picklist_sp_url, bundle_sp_url, partial_folder_sp_url).
+
+        For partial-order legs, bundles are grouped in one folder named after
+        the original order. The folder URL is returned for use as the stable
+        Proof of Delivery link.
+        """
         order_id_str = str(order_id)
         order = self.db.query(Order).filter(Order.id == order_id_str).first()
         if not order:
@@ -3148,10 +3190,21 @@ class OrderService:
             qa_sp_url = sp_service.upload_file(qa_bytes, "qa", f"{base_filename}_qa.pdf")
             logger.info(f"QA PDF uploaded to SharePoint: {qa_sp_url}")
 
+            # Partial legs share a stable folder so every delivered piece remains
+            # accessible from the original order's Proof of Delivery link.
+            partial_folder_sp_url: Optional[str] = None
+            bundle_subfolder, partial_family_number = self._bundle_storage_location(order)
+            if partial_family_number:
+                partial_folder_sp_url = sp_service.ensure_folder(bundle_subfolder)
+
             # Upload bundle
             with open(bundle_local_path, "rb") as f:
                 bundle_bytes = f.read()
-            bundle_sp_url = sp_service.upload_file(bundle_bytes, "bundles", f"{base_filename}_bundle.pdf")
+            bundle_sp_url = sp_service.upload_file(
+                bundle_bytes,
+                bundle_subfolder,
+                f"{base_filename}_bundle.pdf",
+            )
             logger.info(f"Bundle uploaded to SharePoint: {bundle_sp_url}")
 
             # Persist SharePoint URLs on order (source of truth)
@@ -3173,7 +3226,7 @@ class OrderService:
             except Exception as e:
                 logger.warning(f"Failed to delete temp picklist {picklist_temp_to_delete}: {e}")
 
-        return signed_sp_url, bundle_sp_url
+        return signed_sp_url, bundle_sp_url, partial_folder_sp_url
 
 
     def _apply_signature_to_pdf(self, pdf_path: str, signature_data: dict) -> str:
