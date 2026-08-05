@@ -581,8 +581,8 @@ export default function Preparation() {
                 </div>
 
                 <div className="px-5 pb-5 sm:px-6 sm:pb-6">
-                    <div className="grid gap-4 xl:grid-cols-[3fr_2fr]">
-                        <div className="space-y-4">
+                    <div className="grid gap-4 xl:grid-cols-[minmax(0,3fr)_minmax(18rem,2fr)]">
+                        <div className="min-w-0 space-y-4">
                             {tagCandidatesLoading && tagCandidates.length === 0 ? (
                                 <div className="rounded-lg border bg-muted/30 p-4 text-center text-sm text-muted-foreground">
                                     Loading picked orders...
@@ -676,7 +676,7 @@ export default function Preparation() {
                             )}
                         </div>
 
-                        <aside className="self-start rounded-2xl border border-border/70 bg-muted/20 p-4 shadow-none lg:sticky lg:top-6">
+                        <aside className="min-w-0 self-start rounded-2xl border border-border/70 bg-muted/20 p-4 shadow-none xl:sticky xl:top-6">
                             <div className="space-y-4">
                                 <div className="rounded-lg border bg-muted/30 p-4 text-sm text-muted-foreground">
                                     <p className="text-foreground font-medium">{selectedTagOrderIds.length} selected</p>
@@ -903,8 +903,8 @@ export default function Preparation() {
                 </div>
 
                 <div className="px-5 pb-5 sm:px-6 sm:pb-6">
-                    <div className="grid gap-4 xl:grid-cols-[3fr_2fr]">
-                        <div className="space-y-4">
+                    <div className="grid gap-4 xl:grid-cols-[minmax(0,3fr)_minmax(18rem,2fr)]">
+                        <div className="min-w-0 space-y-4">
                             {prepOrdersLoading && prepOrders.length === 0 ? (
                                 <div className="rounded-lg border bg-muted/30 p-4 text-center text-sm text-muted-foreground">
                                     Loading preparation queue...
@@ -987,7 +987,7 @@ export default function Preparation() {
                             )}
                         </div>
 
-                        <aside className="self-start rounded-2xl border border-border/70 bg-muted/20 p-4 shadow-none lg:sticky lg:top-6">
+                        <aside className="min-w-0 self-start rounded-2xl border border-border/70 bg-muted/20 p-4 shadow-none xl:sticky xl:top-6">
                             <div className="space-y-4">
                                 <div className="rounded-lg border bg-muted/30 p-4 text-sm text-muted-foreground">
                                     <p className="text-foreground font-medium">{selectedPrepOrderIds.length} selected</p>
@@ -1160,8 +1160,8 @@ export default function Preparation() {
                 </div>
 
                 <div className="px-5 pb-5 sm:px-6 sm:pb-6">
-                    <div className="grid gap-4 xl:grid-cols-[3fr_2fr]">
-                        <div className="space-y-4">
+                    <div className="grid gap-4 xl:grid-cols-[minmax(0,3fr)_minmax(18rem,2fr)]">
+                        <div className="min-w-0 space-y-4">
                             {pickerOverrideOrdersLoading && pickerOverrideOrders.length === 0 ? (
                                 <div className="rounded-lg border bg-muted/30 p-4 text-center text-sm text-muted-foreground">
                                     Loading QA orders...
@@ -1242,7 +1242,7 @@ export default function Preparation() {
                             )}
                         </div>
 
-                        <aside className="self-start rounded-2xl border border-border/70 bg-muted/20 p-4 shadow-none lg:sticky lg:top-6">
+                        <aside className="min-w-0 self-start rounded-2xl border border-border/70 bg-muted/20 p-4 shadow-none xl:sticky xl:top-6">
                             <div className="space-y-4">
                                 <div className="rounded-lg border bg-muted/30 p-4 text-sm text-muted-foreground">
                                     <p className="text-foreground font-medium">{selectedOverrideOrders.length} selected</p>
