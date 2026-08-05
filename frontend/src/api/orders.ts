@@ -45,6 +45,15 @@ export const ordersApi = {
     return response.data;
   },
 
+  bulkMarkTagged: async (payload: { order_ids: string[] }): Promise<{
+    success: boolean;
+    updated_orders: Array<{ id: string; inflow_order_id: string }>;
+    failed_orders: Array<{ id: string; reason: string }>;
+  }> => {
+    const response = await apiClient.post("/orders/bulk-tag", payload);
+    return response.data;
+  },
+
   updateOrderStatus: async (orderId: string, update: OrderStatusUpdate, changedBy?: string): Promise<Order> => {
     const response = await apiClient.patch<Order>(
       `/orders/${orderId}/status`,

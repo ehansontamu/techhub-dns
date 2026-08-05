@@ -783,6 +783,7 @@ class OrderService:
         tag_ids: List[str],
         technician: Optional[str] = None,
         expected_updated_at: Optional[datetime] = None,
+        tagging_source: Optional[str] = None,
     ) -> Order:
         order_id_str = str(order_id)
         order = self._resolve_order(order_id_str, lock=True)
@@ -833,8 +834,16 @@ class OrderService:
             order_id=str(order_id),
             action="asset_tagged",
             user_id=technician or "unknown",
-            description=f"Order tagged with {len(tag_ids)} asset tags",
-            audit_metadata={"tag_ids": tag_ids, "tagged_by": technician},
+            description=(
+                f"Order marked tagged via {tagging_source}"
+                if tagging_source
+                else f"Order tagged with {len(tag_ids)} asset tags"
+            ),
+            audit_metadata={
+                "tag_ids": tag_ids,
+                "tagged_by": technician,
+                "tagging_source": tagging_source,
+            },
         )
 
         if should_advance_to_qa:

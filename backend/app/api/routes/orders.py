@@ -26,6 +26,7 @@ from app.schemas.order import (
     BulkStatusUpdate,
     OrderUpdate,
     AssetTagUpdate,
+    BulkAssetTagRequest,
     PicklistGenerationRequest,
     QASubmission,
     SignatureData,
@@ -994,6 +995,60 @@ def tag_order(order_id):
 
         broadcast_dedup.request_broadcast(_broadcast_orders_sync)
         return jsonify(_order_response_json(order, db))
+
+
+@bp.route("/bulk-tag", methods=["POST"])
+@require_auth
+def bulk_tag_orders():
+    """Mark selected preparation orders as tagged without entering individual tag IDs."""
+    data = request.get_json(silent=True) or {}
+    payload = BulkAssetTagRequest(**data)
+    technician = get_current_user_email()
+    if technician == "system":
+        technician = get_current_user_display_name()
+
+    updated_orders: list[dict[str, str]] = []
+    failed_orders: list[dict[str, str]] = []
+
+    with get_db() as db:
+        service = OrderService(db)
+        for order_id in payload.order_ids:
+            try:
+                order = service.mark_asset_tagged(
+                    order_id=order_id,
+                    tag_ids=[],
+                    technician=technician,
+                    tagging_source="Preparation bulk action",
+                )
+                # mark_asset_tagged adds audit rows after its state commit.
+                # Commit them before moving to the next order so a later failure
+                # cannot roll back a previously successful order's audit trail.
+                db.commit()
+                updated_orders.append(
+                    {
+                        "id": str(order.id),
+                        "inflow_order_id": order.inflow_order_id or str(order.id),
+                    }
+                )
+            except (DNSApiError, ValueError) as exc:
+                db.rollback()
+                failed_orders.append(
+                    {
+                        "id": str(order_id),
+                        "reason": str(exc),
+                    }
+                )
+
+        if updated_orders:
+            broadcast_dedup.request_broadcast(_broadcast_orders_sync)
+
+    return jsonify(
+        {
+            "success": bool(updated_orders),
+            "updated_orders": updated_orders,
+            "failed_orders": failed_orders,
+        }
+    )
 
 
 @bp.route("/<order_id>/qa", methods=["POST"])

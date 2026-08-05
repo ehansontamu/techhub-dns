@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { isAxiosError } from "axios";
-import { Loader2, PackageCheck, RefreshCw, UploadCloud } from "lucide-react";
+import { Loader2, PackageCheck, RefreshCw, Tag, UploadCloud } from "lucide-react";
 
 import { ordersApi } from "../api/orders";
 import { settingsApi } from "../api/settings";
@@ -76,6 +76,13 @@ type UploadStatusState = {
     ineligibleOrders?: Array<{ order: string; reason: string }>;
 };
 
+type BulkTagStatusState = {
+    type: "success" | "error";
+    message: string;
+    updatedOrders?: string[];
+    failedOrders?: Array<{ id: string; reason: string }>;
+};
+
 type BatchStatusState = {
     type: "success" | "error";
     message: string;
@@ -112,11 +119,14 @@ export default function Preparation() {
     const [uploadStatus, setUploadStatus] = useState<UploadStatusState | null>(null);
     const [batchStatus, setBatchStatus] = useState<BatchStatusState | null>(null);
     const [uploadConfirmOpen, setUploadConfirmOpen] = useState(false);
+    const [bulkTagConfirmOpen, setBulkTagConfirmOpen] = useState(false);
     const [batchConfirmOpen, setBatchConfirmOpen] = useState(false);
     const uploadConfirmCancelRef = useRef<HTMLButtonElement | null>(null);
+    const bulkTagConfirmCancelRef = useRef<HTMLButtonElement | null>(null);
     const batchConfirmCancelRef = useRef<HTMLButtonElement | null>(null);
 
     const [selectedTagCandidates, setSelectedTagCandidates] = useState<string[]>([]);
+    const [bulkTagStatus, setBulkTagStatus] = useState<BulkTagStatusState | null>(null);
     const [selectedPrepOrders, setSelectedPrepOrders] = useState<string[]>([]);
     const [selectedOverrideOrders, setSelectedOverrideOrders] = useState<string[]>([]);
     const [selectedPickerEmail, setSelectedPickerEmail] = useState("");
@@ -203,6 +213,29 @@ export default function Preparation() {
         },
     });
 
+    const bulkTagMutation = useMutation({
+        mutationFn: (orderIds: string[]) => ordersApi.bulkMarkTagged({ order_ids: orderIds }),
+        onSuccess: async (response) => {
+            const updatedOrders = response.updated_orders.map((order) => order.inflow_order_id);
+            setBulkTagStatus({
+                type: response.failed_orders.length === 0 ? "success" : "error",
+                message: response.updated_orders.length > 0
+                    ? `Marked ${response.updated_orders.length} order${response.updated_orders.length === 1 ? "" : "s"} as tagged${response.failed_orders.length > 0 ? `; ${response.failed_orders.length} could not be updated` : ""}.`
+                    : "No orders were marked as tagged.",
+                updatedOrders,
+                failedOrders: response.failed_orders,
+            });
+            setSelectedTagCandidates([]);
+            await queryClient.invalidateQueries({ queryKey: ordersQueryKeys.all });
+        },
+        onError: (error: unknown) => {
+            setBulkTagStatus({
+                type: "error",
+                message: extractApiErrorMessage(error, "Failed to mark selected orders as tagged."),
+            });
+        },
+    });
+
     const batchMutation = useMutation({
         mutationFn: async (orderIds: string[]) => {
             const generatedOrders: string[] = [];
@@ -282,9 +315,18 @@ export default function Preparation() {
         },
     });
 
-    const selectedTagOrderIds = useMemo(
+    const selectedTagCandidateIds = useMemo(
         () => Array.from(new Set(selectedTagCandidates)).filter(Boolean).sort(),
-        [selectedTagCandidates]
+        [selectedTagCandidates],
+    );
+
+    const selectedTagOrderIds = useMemo(
+        () => tagCandidates
+            .filter((candidate) => selectedTagCandidateIds.includes(candidate.id))
+            .map((candidate) => candidate.inflow_order_id)
+            .filter(Boolean)
+            .sort(),
+        [selectedTagCandidateIds, tagCandidates],
     );
 
     const selectedPrepOrderIds = useMemo(
@@ -345,6 +387,13 @@ export default function Preparation() {
             : "border-destructive/20 bg-destructive/5 text-destructive";
     }, [uploadStatus]);
 
+    const bulkTagStatusStyles = useMemo(() => {
+        if (!bulkTagStatus) return null;
+        return bulkTagStatus.type === "success"
+            ? "border-emerald-200 bg-emerald-50 text-emerald-900"
+            : "border-destructive/20 bg-destructive/5 text-destructive";
+    }, [bulkTagStatus]);
+
     const batchStatusStyles = useMemo(() => {
         if (!batchStatus) return null;
         return batchStatus.type === "success"
@@ -362,6 +411,7 @@ export default function Preparation() {
     const handleClearTagSelection = () => {
         setSelectedTagCandidates([]);
         setUploadStatus(null);
+        setBulkTagStatus(null);
     };
 
     const handleClearPrepSelection = () => {
@@ -390,7 +440,7 @@ export default function Preparation() {
     useEffect(() => {
         setSelectedTagCandidates((prev) => {
             if (prev.length === 0) return prev;
-            const present = new Set(tagCandidates.map((candidate) => candidate.inflow_order_id).filter(Boolean));
+            const present = new Set(tagCandidates.map((candidate) => candidate.id).filter(Boolean));
             const next = prev.filter((id) => present.has(id));
             return next.length === prev.length ? prev : next;
         });
@@ -414,12 +464,12 @@ export default function Preparation() {
         });
     }, [pickerOverrideOrders]);
 
-    const toggleTagCandidate = useCallback((inflowOrderId: string, checked: boolean) => {
+    const toggleTagCandidate = useCallback((candidateId: string, checked: boolean) => {
         setSelectedTagCandidates((prev) => {
             if (checked) {
-                return prev.includes(inflowOrderId) ? prev : [...prev, inflowOrderId];
+                return prev.includes(candidateId) ? prev : [...prev, candidateId];
             }
-            return prev.filter((id) => id !== inflowOrderId);
+            return prev.filter((id) => id !== candidateId);
         });
     }, []);
 
@@ -447,6 +497,17 @@ export default function Preparation() {
         setUploadStatus(null);
         try {
             await uploadMutation.mutateAsync(selectedTagOrderIds);
+        } catch {
+            // Handled by mutation callbacks.
+        }
+    };
+
+    const handleBulkTag = async () => {
+        if (selectedTagCandidateIds.length === 0) return;
+
+        setBulkTagStatus(null);
+        try {
+            await bulkTagMutation.mutateAsync(selectedTagCandidateIds);
         } catch {
             // Handled by mutation callbacks.
         }
@@ -502,7 +563,7 @@ export default function Preparation() {
                                     setSelectedTagCandidates((prev) => {
                                         const next = new Set(prev);
                                         for (const candidate of tagCandidates) {
-                                            const id = candidate.inflow_order_id;
+                                            const id = candidate.id;
                                             if (id) next.add(id);
                                         }
                                         return Array.from(next);
@@ -548,9 +609,9 @@ export default function Preparation() {
                                             <TableBody>
                                                 {tagCandidates.map((candidate) => {
                                                     const inflowOrderId = candidate.inflow_order_id;
-                                                    const checked = inflowOrderId ? selectedTagCandidateSet.has(inflowOrderId) : false;
-                                                    const disabled = !inflowOrderId;
-                                                    const selectable = Boolean(inflowOrderId);
+                                                    const checked = candidate.id ? selectedTagCandidateSet.has(candidate.id) : false;
+                                                    const disabled = !candidate.id;
+                                                    const selectable = Boolean(candidate.id);
 
                                                     return (
                                                         <TableRow
@@ -559,14 +620,14 @@ export default function Preparation() {
                                                             className={selectable ? "cursor-pointer hover:bg-muted/30" : undefined}
                                                             tabIndex={selectable ? 0 : undefined}
                                                             onClick={() => {
-                                                                if (!inflowOrderId) return;
-                                                                toggleTagCandidate(inflowOrderId, !checked);
+                                                                if (!candidate.id) return;
+                                                                toggleTagCandidate(candidate.id, !checked);
                                                             }}
                                                             onKeyDown={(event) => {
-                                                                if (!inflowOrderId) return;
+                                                                if (!candidate.id) return;
                                                                 if (event.key !== "Enter" && event.key !== " ") return;
                                                                 event.preventDefault();
-                                                                toggleTagCandidate(inflowOrderId, !checked);
+                                                                toggleTagCandidate(candidate.id, !checked);
                                                             }}
                                                         >
                                                             <TableCell className="w-10">
@@ -576,8 +637,8 @@ export default function Preparation() {
                                                                     aria-label={inflowOrderId ? `Select ${inflowOrderId}` : "Select candidate"}
                                                                     onClick={(event) => event.stopPropagation()}
                                                                     onChange={(event) => {
-                                                                        if (!inflowOrderId) return;
-                                                                        toggleTagCandidate(inflowOrderId, event.target.checked);
+                                                                        if (!candidate.id) return;
+                                                                        toggleTagCandidate(candidate.id, event.target.checked);
                                                                     }}
                                                                 />
                                                             </TableCell>
@@ -685,6 +746,22 @@ export default function Preparation() {
                                     </div>
                                 ) : null}
 
+                                {bulkTagStatus ? (
+                                    <div className={`rounded-lg border p-4 text-sm ${bulkTagStatusStyles}`}>
+                                        <p className="font-medium">{bulkTagStatus.message}</p>
+                                        {bulkTagStatus.updatedOrders && bulkTagStatus.updatedOrders.length > 0 ? (
+                                            <p className="mt-1 text-xs">Updated: {bulkTagStatus.updatedOrders.join(", ")}</p>
+                                        ) : null}
+                                        {bulkTagStatus.failedOrders && bulkTagStatus.failedOrders.length > 0 ? (
+                                            <ul className="mt-2 space-y-1 text-xs">
+                                                {bulkTagStatus.failedOrders.map((order) => (
+                                                    <li key={order.id}>{order.id}: {order.reason}</li>
+                                                ))}
+                                            </ul>
+                                        ) : null}
+                                    </div>
+                                ) : null}
+
                                 <div className="flex flex-col gap-2">
                                     <Button
                                         type="button"
@@ -697,11 +774,20 @@ export default function Preparation() {
                                     <Button
                                         type="button"
                                         onClick={() => setUploadConfirmOpen(true)}
-                                        disabled={selectedTagOrderIds.length === 0 || uploadMutation.isPending}
+                                        disabled={selectedTagCandidateIds.length === 0 || uploadMutation.isPending || bulkTagMutation.isPending}
                                         className="btn-lift"
                                     >
                                         <UploadCloud className="mr-2 h-4 w-4" />
                                         {uploadMutation.isPending ? "Uploading..." : "Upload orders"}
+                                    </Button>
+                                    <Button
+                                        type="button"
+                                        variant="secondary"
+                                        onClick={() => setBulkTagConfirmOpen(true)}
+                                        disabled={selectedTagCandidateIds.length === 0 || uploadMutation.isPending || bulkTagMutation.isPending}
+                                    >
+                                        <Tag className="mr-2 h-4 w-4" />
+                                        {bulkTagMutation.isPending ? "Marking..." : "Mark selected as tagged"}
                                     </Button>
                                 </div>
                             </div>
@@ -739,6 +825,43 @@ export default function Preparation() {
                             disabled={uploadMutation.isPending}
                         >
                             Upload now
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
+
+            <Dialog open={bulkTagConfirmOpen} onOpenChange={setBulkTagConfirmOpen}>
+                <DialogContent
+                    onOpenAutoFocus={(event) => {
+                        event.preventDefault();
+                        bulkTagConfirmCancelRef.current?.focus();
+                    }}
+                >
+                    <DialogHeader>
+                        <DialogTitle>Mark selected orders as tagged?</DialogTitle>
+                    </DialogHeader>
+                    <p className="text-sm text-muted-foreground">
+                        This records that tags have been applied to {selectedTagOrderIds.length} selected order{selectedTagOrderIds.length === 1 ? "" : "s"}.
+                    </p>
+                    <DialogFooter>
+                        <Button
+                            ref={bulkTagConfirmCancelRef}
+                            type="button"
+                            variant="outline"
+                            onClick={() => setBulkTagConfirmOpen(false)}
+                            disabled={bulkTagMutation.isPending}
+                        >
+                            Cancel
+                        </Button>
+                        <Button
+                            type="button"
+                            onClick={() => {
+                                setBulkTagConfirmOpen(false);
+                                void handleBulkTag();
+                            }}
+                            disabled={bulkTagMutation.isPending}
+                        >
+                            Mark as tagged
                         </Button>
                     </DialogFooter>
                 </DialogContent>

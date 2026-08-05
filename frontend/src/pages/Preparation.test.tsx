@@ -15,6 +15,7 @@ vi.mock("../api/orders", () => ({
         getOrders: vi.fn(),
         getPickerOptions: vi.fn(),
         bulkOverridePicker: vi.fn(),
+        bulkMarkTagged: vi.fn(),
         getOrder: vi.fn(),
         generatePicklist: vi.fn(),
     },
@@ -130,6 +131,12 @@ describe("Preparation", () => {
             updated_orders: [{ id: "qa-1", inflow_order_id: "TH3001" }],
         });
 
+        mockedOrdersApi.bulkMarkTagged.mockResolvedValue({
+            success: true,
+            updated_orders: [{ id: "candidate-1", inflow_order_id: "TH1001" }],
+            failed_orders: [],
+        });
+
         mockedOrdersApi.getOrder.mockResolvedValue({
             id: "prep-1",
             inflow_order_id: "TH2001",
@@ -198,6 +205,22 @@ describe("Preparation", () => {
         );
 
         expect(await screen.findByText("Preparation Route")).toBeInTheDocument();
+    });
+
+    it("marks selected tag-request orders as tagged", async () => {
+        renderWithQueryClient(<Preparation />);
+
+        expect(await screen.findByText("TH1001")).toBeInTheDocument();
+        fireEvent.click(screen.getByLabelText("Select TH1001"));
+        fireEvent.click(screen.getByRole("button", { name: /mark selected as tagged/i }));
+
+        expect(screen.getByText("Mark selected orders as tagged?")).toBeInTheDocument();
+        fireEvent.click(screen.getByRole("button", { name: /^mark as tagged$/i }));
+
+        await waitFor(() => {
+            expect(mockedOrdersApi.bulkMarkTagged).toHaveBeenCalledWith({ order_ids: ["candidate-1"] });
+        });
+        expect(await screen.findByText(/Marked 1 order as tagged/)).toBeInTheDocument();
     });
 
     it("supports overriding the recorded picker for QA orders", async () => {
