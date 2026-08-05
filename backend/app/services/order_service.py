@@ -59,6 +59,7 @@ class OrderService:
     ORDER_DETAILS_EMAIL_SENT = "sent"
     ORDER_DETAILS_EMAIL_NOT_SENT = "not_sent"
     ORDER_DETAILS_EMAIL_FAILED = "failed"
+    RMA_FULFILLMENT_BASELINE_KEY = "_techhubRmaFulfillmentBaseline"
 
     def __init__(self, db: Session):
         self.db = db
@@ -113,6 +114,152 @@ class OrderService:
                     merged[field] = deepcopy(current_snapshot.get(field))
         return merged
 
+    @staticmethod
+    def _fulfillment_line_key(line: Dict[str, Any], id_field: str) -> Optional[str]:
+        line_id = line.get(id_field)
+        if line_id:
+            return f"id:{line_id}"
+
+        fallback_parts = [
+            line.get("salesOrderLineId"),
+            line.get("productId"),
+            line.get("containerNumber"),
+            line.get("locationId"),
+            line.get("lotId"),
+        ]
+        if not any(part is not None for part in fallback_parts):
+            return None
+        return "fields:" + "|".join(str(part or "") for part in fallback_parts)
+
+    @staticmethod
+    def _standard_quantity(line: Dict[str, Any]) -> float:
+        quantity = line.get("quantity")
+        raw_quantity = (
+            quantity.get("standardQuantity")
+            if isinstance(quantity, dict)
+            else quantity
+        )
+        try:
+            return float(raw_quantity or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    @staticmethod
+    def _with_standard_quantity(line: Dict[str, Any], quantity: float) -> Dict[str, Any]:
+        adjusted = deepcopy(line)
+        quantity_payload = adjusted.get("quantity")
+        if not isinstance(quantity_payload, dict):
+            quantity_payload = {}
+            adjusted["quantity"] = quantity_payload
+
+        original_quantity = quantity_payload.get("standardQuantity")
+        normalized_quantity = int(quantity) if quantity.is_integer() else quantity
+        quantity_payload["standardQuantity"] = (
+            str(normalized_quantity)
+            if isinstance(original_quantity, str)
+            else normalized_quantity
+        )
+        return adjusted
+
+    @classmethod
+    def _capture_rma_fulfillment_baseline(
+        cls,
+        snapshot: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        pack_quantities: Dict[str, float] = {}
+        for pack_line in snapshot.get("packLines", []) or []:
+            if not isinstance(pack_line, dict):
+                continue
+            line_key = cls._fulfillment_line_key(
+                pack_line, "salesOrderPackLineId"
+            )
+            if line_key:
+                pack_quantities[line_key] = (
+                    pack_quantities.get(line_key, 0.0)
+                    + cls._standard_quantity(pack_line)
+                )
+
+        ship_line_keys = []
+        for ship_line in snapshot.get("shipLines", []) or []:
+            if not isinstance(ship_line, dict):
+                continue
+            line_key = cls._fulfillment_line_key(
+                ship_line, "salesOrderShipLineId"
+            )
+            if line_key:
+                ship_line_keys.append(line_key)
+
+        return {
+            "pack_line_quantities": pack_quantities,
+            "ship_line_keys": ship_line_keys,
+        }
+
+    @classmethod
+    def _apply_rma_fulfillment_baseline(
+        cls,
+        existing_order: Order,
+        inflow_data: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        merged = dict(inflow_data or {})
+        current_snapshot = (
+            existing_order.inflow_data
+            if isinstance(existing_order.inflow_data, dict)
+            else {}
+        )
+        baseline = current_snapshot.get(cls.RMA_FULFILLMENT_BASELINE_KEY)
+        if not isinstance(baseline, dict):
+            return merged
+
+        remaining_pack_quantities = {
+            str(key): float(value)
+            for key, value in (
+                baseline.get("pack_line_quantities", {}) or {}
+            ).items()
+        }
+        visible_pack_lines = []
+        for pack_line in merged.get("packLines", []) or []:
+            if not isinstance(pack_line, dict):
+                visible_pack_lines.append(pack_line)
+                continue
+
+            line_key = cls._fulfillment_line_key(
+                pack_line, "salesOrderPackLineId"
+            )
+            baseline_quantity = remaining_pack_quantities.get(line_key or "", 0.0)
+            current_quantity = cls._standard_quantity(pack_line)
+            if baseline_quantity <= 0:
+                visible_pack_lines.append(pack_line)
+                continue
+
+            suppressed_quantity = min(current_quantity, baseline_quantity)
+            remaining_pack_quantities[line_key] = (
+                baseline_quantity - suppressed_quantity
+            )
+            visible_quantity = current_quantity - suppressed_quantity
+            if visible_quantity > 0:
+                visible_pack_lines.append(
+                    cls._with_standard_quantity(pack_line, visible_quantity)
+                )
+
+        baseline_ship_keys = {
+            str(key) for key in baseline.get("ship_line_keys", []) or []
+        }
+        visible_ship_lines = []
+        for ship_line in merged.get("shipLines", []) or []:
+            if not isinstance(ship_line, dict):
+                visible_ship_lines.append(ship_line)
+                continue
+            line_key = cls._fulfillment_line_key(
+                ship_line, "salesOrderShipLineId"
+            )
+            if line_key not in baseline_ship_keys:
+                visible_ship_lines.append(ship_line)
+
+        merged["packLines"] = visible_pack_lines
+        merged["shipLines"] = visible_ship_lines
+        merged[cls.RMA_FULFILLMENT_BASELINE_KEY] = deepcopy(baseline)
+        return merged
+
     def merge_inflow_snapshot_preserving_split(
         self,
         order: Order,
@@ -126,7 +273,8 @@ class OrderService:
         original combined sales order, so its responses always carry the full item
         set and would otherwise erase the leg-scoped ``lines`` of split orders.
         """
-        merged = self._preserve_partial_split_inflow_snapshot(order, inflow_data)
+        merged = self._apply_rma_fulfillment_baseline(order, inflow_data)
+        merged = self._preserve_partial_split_inflow_snapshot(order, merged)
         if getattr(order, "remainder_order_id", None) and not getattr(
             order, "parent_order_id", None
         ):
@@ -635,6 +783,7 @@ class OrderService:
         tag_ids: List[str],
         technician: Optional[str] = None,
         expected_updated_at: Optional[datetime] = None,
+        tagging_source: Optional[str] = None,
     ) -> Order:
         order_id_str = str(order_id)
         order = self._resolve_order(order_id_str, lock=True)
@@ -685,8 +834,16 @@ class OrderService:
             order_id=str(order_id),
             action="asset_tagged",
             user_id=technician or "unknown",
-            description=f"Order tagged with {len(tag_ids)} asset tags",
-            audit_metadata={"tag_ids": tag_ids, "tagged_by": technician},
+            description=(
+                f"Order marked tagged via {tagging_source}"
+                if tagging_source
+                else f"Order tagged with {len(tag_ids)} asset tags"
+            ),
+            audit_metadata={
+                "tag_ids": tag_ids,
+                "tagged_by": technician,
+                "tagging_source": tagging_source,
+            },
         )
 
         if should_advance_to_qa:
@@ -1781,6 +1938,9 @@ class OrderService:
                 refreshed_snapshot["pickLines"] = deepcopy(
                     current_snapshot.get("pickLines")
                 )
+        refreshed_snapshot[self.RMA_FULFILLMENT_BASELINE_KEY] = (
+            self._capture_rma_fulfillment_baseline(refreshed_snapshot)
+        )
         refreshed_snapshot["packLines"] = []
         refreshed_snapshot["shipLines"] = []
 
@@ -2271,7 +2431,7 @@ class OrderService:
         shipping_address_obj = self._as_dict(inflow_data.get("shippingAddress"))
         email = inflow_data.get("email", "")
 
-        existing_order.inflow_data = self._preserve_partial_split_inflow_snapshot(
+        existing_order.inflow_data = self.merge_inflow_snapshot_preserving_split(
             existing_order,
             inflow_data,
         )

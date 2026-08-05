@@ -88,6 +88,10 @@ class AssetTagUpdate(BaseModel):
     expected_updated_at: Optional[datetime] = None
 
 
+class BulkAssetTagRequest(BaseModel):
+    order_ids: List[UUID] = Field(min_length=1)
+
+
 class PicklistGenerationRequest(BaseModel):
     generated_by: Optional[str] = None
     expected_updated_at: Optional[datetime] = None

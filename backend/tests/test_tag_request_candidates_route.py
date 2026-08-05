@@ -71,3 +71,55 @@ def test_parent_remainder_without_taggable_items_is_excluded_from_candidates(mon
         engine.dispose()
         if db_path.exists():
             db_path.unlink()
+
+
+def test_bulk_tag_marks_selected_orders_and_records_the_actor(monkeypatch):
+    db_path, engine, session_factory = _make_session_factory()
+    try:
+        session = session_factory()
+        order = Order(
+            inflow_order_id="TH6002",
+            status=OrderStatus.PICKED.value,
+            inflow_data={"lines": [{"productId": "prod-aio"}]},
+        )
+        session.add(order)
+        session.commit()
+        order_id = str(order.id)
+        session.close()
+
+        monkeypatch.setattr(orders_routes, "get_db", session_factory)
+        monkeypatch.setattr(
+            orders_routes, "get_current_user_email", lambda: "tagger@example.com"
+        )
+        monkeypatch.setattr(
+            orders_routes.broadcast_dedup,
+            "request_broadcast",
+            lambda _callback: None,
+        )
+
+        app = Flask(__name__)
+        with app.test_request_context(
+            "/api/orders/bulk-tag",
+            method="POST",
+            json={"order_ids": [order_id]},
+        ):
+            with patch.object(
+                orders_routes.OrderService, "_requires_asset_tags", return_value=False
+            ):
+                response = orders_routes.bulk_tag_orders.__wrapped__()
+
+        payload = response.get_json() or {}
+        assert response.status_code == 200
+        assert payload["success"] is True
+        assert payload["updated_orders"] == [
+            {"id": order_id, "inflow_order_id": "TH6002"}
+        ]
+        assert payload["failed_orders"] == []
+
+        refreshed = session_factory().get(Order, order_id)
+        assert refreshed.tagged_at is not None
+        assert refreshed.tagged_by == "tagger@example.com"
+    finally:
+        engine.dispose()
+        if db_path.exists():
+            db_path.unlink()

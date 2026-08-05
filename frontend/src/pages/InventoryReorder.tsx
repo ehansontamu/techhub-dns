@@ -43,6 +43,15 @@ const formatTimestamp = (value: string | null | undefined): string => {
   return date.toLocaleString();
 };
 
+const formatRefreshLabel = (job: InventoryReorderJob | null | undefined): string => {
+  const timestamp = formatTimestamp(job?.finished_at);
+  if (!job?.trigger || timestamp === "Never") {
+    return timestamp;
+  }
+
+  return `${timestamp} (${job.trigger})`;
+};
+
 const formatDuration = (seconds: number): string => {
   const minutes = Math.floor(seconds / 60);
   const remainingSeconds = seconds % 60;
@@ -331,7 +340,7 @@ export default function InventoryReorder() {
         <InventoryMetric label="Rows" value={data?.summary.total ?? 0} />
         <InventoryMetric label="Needs Reorder" value={data?.summary.needs_reorder ?? 0} tone="warning" />
         <InventoryMetric label="Critical" value={data?.summary.critical ?? 0} tone="destructive" />
-        <InventoryMetric label="Last Refresh" value={formatTimestamp(data?.latest_job?.finished_at)} compact />
+        <InventoryMetric label="Last Refresh" value={formatRefreshLabel(data?.latest_job)} compact />
       </section>
 
       {job ? (
