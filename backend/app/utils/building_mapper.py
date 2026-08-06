@@ -28,7 +28,7 @@ CACHE_DURATION = timedelta(days=1)
 # This is used to validate extracted codes, not for mapping
 COMMON_BUILDING_CODES = {
     # Main Campus Buildings
-    "ACAD", "ZACH", "LAAH", "HELD", "BLOC", "AGGY", "ANEX", "RICH", "RUDD",
+    "ACAD", "ZACH", "LAAH", "ARCH", "HELD", "BLOC", "AGGY", "ANEX", "RICH", "RUDD",
     "WCLB", "EVAN", "HALB", "HRBB", "KOLD", "MELC", "MSEN", "NEDU", "PETR",
     "RDER", "SCOT", "TAMU", "VIDI", "CHEM", "ETB", "ADMN", "THOM", "THOMPSON",
     # Additional Campus Buildings
@@ -294,6 +294,9 @@ def extract_building_code_from_location(location: str) -> Optional[str]:
     # These are addresses that should always map to specific building codes
     patterns_checked.append("Pattern 0: Specific known addresses")
     specific_address_patterns = [
+        (r'798\s+ROSS\s+(?:ST|STREET)\b', "ARCH"),  # Langford Architecture Building A
+        (r'\bLANGFORD\s+(?:(?:BLDG|BLDG\.|BUILDING)\s+)?A\b', "ARCH"),
+        (r'\b3367\s+TAMU\b', "THOM"),  # Thompson Hall
         (r'8447\s+JOHN\s+SHARP', "HSC"),  # Health Science Center
         (r'603\s+LAMAR', "SCC"),  # Student Computing Center
         (r'STUDENT\s+COMPUTING\s+(?:CTR|CENTER|CENTRE)', "SCC"),  # Student Computing Center
