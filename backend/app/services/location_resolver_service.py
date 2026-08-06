@@ -10,7 +10,11 @@ from dataclasses import dataclass
 from difflib import SequenceMatcher
 from typing import Dict, Any, Optional
 
-from app.utils.building_mapper import get_building_abbreviation, extract_building_code_from_location
+from app.utils.building_mapper import (
+    extract_building_code_from_location,
+    extract_specific_building_code,
+    get_building_abbreviation,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -184,6 +188,22 @@ class LocationResolverService:
         Returns:
             Tuple of (building_code, source) where source indicates where code was found
         """
+        # Known physical addresses are more authoritative than generic building names
+        # that may appear elsewhere in the order remarks.
+        for address, source in (
+            (address2, "address2"),
+            (shipping_address, "address"),
+        ):
+            building_code = extract_specific_building_code(address)
+            if building_code:
+                logger.info(
+                    "[%s] Specific building code '%s' found in %s",
+                    order_number,
+                    building_code,
+                    source,
+                )
+                return building_code, source
+
         # PRIORITY 1: Check order remarks directly
         if order_remarks:
             building_code = extract_building_code_from_location(order_remarks)

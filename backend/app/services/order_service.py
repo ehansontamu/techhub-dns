@@ -27,8 +27,9 @@ from app.services.audit_service import AuditService
 from app.services.location_resolver_service import location_resolver_service
 
 from app.utils.building_mapper import (
-    get_building_abbreviation,
     extract_building_code_from_location,
+    extract_specific_building_code,
+    get_building_abbreviation,
 )
 from app.utils.exceptions import (
     ConflictError,
@@ -2242,10 +2243,12 @@ class OrderService:
         address2: str,
     ) -> str:
         """Extract building code for local deliveries using 3 priority levels."""
-        building_code = None
+        building_code = extract_specific_building_code(
+            address2
+        ) or extract_specific_building_code(shipping_address)
 
         # PRIORITY 1: Check order remarks FIRST for building codes
-        if order_remarks:
+        if not building_code and order_remarks:
             logger.info(
                 f"PRIORITY 1: Checking order remarks for order {order_number}: '{order_remarks[:100]}...'"
             )
@@ -2579,12 +2582,14 @@ class OrderService:
                 f"No city specified for order {order_number}, assuming local delivery"
             )
 
-        building_code = None
+        building_code = extract_specific_building_code(
+            address2
+        ) or extract_specific_building_code(shipping_address)
 
         if is_local_delivery:
             # For local deliveries, try to extract building codes
             # PRIORITY 1: Check order remarks FIRST for building codes
-            if order_remarks:
+            if not building_code and order_remarks:
                 logger.info(
                     f"PRIORITY 1: Checking order remarks for order {order_number}: '{order_remarks[:100]}...'"
                 )

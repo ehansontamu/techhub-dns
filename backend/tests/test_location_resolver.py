@@ -481,6 +481,22 @@ def test_langford_building_a_resolves_to_arch():
     assert resolved.display_location == "ARCH"
     assert resolved.source == "address2"
 
+    resolved_with_generic_remarks = service.resolve_location(
+        {
+            "orderNumber": "TESTLANGFORDA2",
+            "orderRemarks": "Deliver to Langford room 122",
+            "shippingAddress": {
+                "address1": "798 Ross St",
+                "address2": "Langford A, room 122",
+                "city": "College Station",
+                "state": "TX",
+                "postalCode": "77840",
+            },
+        }
+    )
+    assert resolved_with_generic_remarks.building_code == "ARCH"
+    assert resolved_with_generic_remarks.source == "address2"
+
 
 def test_3367_tamu_resolves_to_thom():
     """3367 TAMU identifies Thompson Hall, while MS 3367 remains Fermier."""
