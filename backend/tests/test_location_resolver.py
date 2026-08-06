@@ -460,7 +460,8 @@ def test_langford_building_a_resolves_to_arch():
 
     assert extract_building_code_from_location(full_address) == "ARCH"
     assert extract_building_code_from_location("Langford Building A, Room 122") == "ARCH"
-    assert extract_building_code_from_location("Langford Hall, Room 122") == "LAAH"
+    assert extract_building_code_from_location("Langford Hall, Room 122") is None
+    assert extract_building_code_from_location("Langford Architecture") is None
 
     service = LocationResolverService()
     resolved = service.resolve_location(
