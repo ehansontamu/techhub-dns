@@ -28,7 +28,7 @@ CACHE_DURATION = timedelta(days=1)
 # This is used to validate extracted codes, not for mapping
 COMMON_BUILDING_CODES = {
     # Main Campus Buildings
-    "ACAD", "ZACH", "LAAH", "HELD", "BLOC", "AGGY", "ANEX", "RICH", "RUDD",
+    "ACAD", "ZACH", "LAAH", "ARCH", "HELD", "BLOC", "AGGY", "ANEX", "RICH", "RUDD",
     "WCLB", "EVAN", "HALB", "HRBB", "KOLD", "MELC", "MSEN", "NEDU", "PETR",
     "RDER", "SCOT", "TAMU", "VIDI", "CHEM", "ETB", "ADMN", "THOM", "THOMPSON",
     # Additional Campus Buildings
@@ -58,6 +58,15 @@ COMMON_BUILDING_CODES = {
     "VPIS",  # Visualization Sciences Building
     "JCAIN", # J. Mike Walker '66 Mechanical Engineering
 }
+
+SPECIFIC_BUILDING_PATTERNS = [
+    (r'798\s+ROSS\s+(?:ST|STREET)\b', "ARCH"),  # Langford Architecture Building A
+    (r'\bLANGFORD\s+(?:(?:BLDG|BLDG\.|BUILDING)\s+)?A\b', "ARCH"),
+    (r'\b3367\s+TAMU\b', "THOM"),  # Thompson Hall
+    (r'8447\s+JOHN\s+SHARP', "HSC"),  # Health Science Center
+    (r'603\s+LAMAR', "SCC"),  # Student Computing Center
+    (r'STUDENT\s+COMPUTING\s+(?:CTR|CENTER|CENTRE)', "SCC"),
+]
 
 
 WEST_CAMPUS_PORTABLE_PATTERN = re.compile(
@@ -114,6 +123,19 @@ def normalize_address(address: str) -> str:
         normalized = re.sub(pattern, replacement, normalized)
 
     return normalized
+
+
+def extract_specific_building_code(location: str) -> Optional[str]:
+    """Return a high-confidence building mapping for a known address or label."""
+    if not location:
+        return None
+
+    location_upper = location.upper().strip()
+    for pattern, code in SPECIFIC_BUILDING_PATTERNS:
+        if re.search(pattern, location_upper):
+            return code
+
+    return None
 
 
 def fetch_building_data_from_arcgis() -> Optional[Dict[str, Any]]:
@@ -293,15 +315,14 @@ def extract_building_code_from_location(location: str) -> Optional[str]:
     # Pattern 0: Specific known addresses (highest priority)
     # These are addresses that should always map to specific building codes
     patterns_checked.append("Pattern 0: Specific known addresses")
-    specific_address_patterns = [
-        (r'8447\s+JOHN\s+SHARP', "HSC"),  # Health Science Center
-        (r'603\s+LAMAR', "SCC"),  # Student Computing Center
-        (r'STUDENT\s+COMPUTING\s+(?:CTR|CENTER|CENTRE)', "SCC"),  # Student Computing Center
-    ]
-    for pattern, code in specific_address_patterns:
-        if re.search(pattern, location_upper):
-            logger.info(f"Extracted building code from location '{location}': {code} (Pattern 0: {pattern})")
-            return code
+    specific_code = extract_specific_building_code(location)
+    if specific_code:
+        logger.info(
+            "Extracted specific building code from location '%s': %s (Pattern 0)",
+            location,
+            specific_code,
+        )
+        return specific_code
 
     # Pattern 1: Building code at start followed by space and room number
     # Examples: "LAAH 424", "ACAD 205C", "ZACH 101"
@@ -371,7 +392,6 @@ def extract_building_code_from_location(location: str) -> Optional[str]:
         (r'\bWEHNER\s+(?:BLDG|BLDG\.|BUILDING|HALL)\b', "WCLB"),
         (r'\bZACHRY\s+(?:BLDG|BLDG\.|BUILDING|HALL|ENGINEERING)\b', "ZACH"),
         (r'\bACADEMIC\s+(?:BLDG|BLDG\.|BUILDING|HALL)\b', "ACAD"),
-        (r'\bLANGFORD\s+(?:BLDG|BLDG\.|BUILDING|HALL|ARCHITECTURE)\b', "LAAH"),
         (r'\bHELDENFELS\s+(?:BLDG|BLDG\.|BUILDING|HALL)\b', "HELD"),
         (r'\bBLOCKER\s+(?:BLDG|BLDG\.|BUILDING|HALL)\b', "BLOC"),
         (r'\bRUDDER\s+(?:BLDG|BLDG\.|BUILDING|HALL|TOWER)\b', "RUDD"),
@@ -404,7 +424,6 @@ def extract_building_code_from_location(location: str) -> Optional[str]:
         (r'\bWEHNER\b', "WCLB"),
         (r'\bZACHRY\b', "ZACH"),
         (r'\bACADEMIC\b', "ACAD"),
-        (r'\bLANGFORD\b', "LAAH"),
         (r'\bHELDENFELS\b', "HELD"),
         (r'\bBLOCKER\b', "BLOC"),
         (r'\bRUDDER\b', "RUDD"),

@@ -4038,6 +4038,43 @@ def test_create_order_from_inflow_prefers_address_resolution_over_zach_contact_o
     print("[PASS] Parent remainder prep actions are blocked until remaining items are picked")
 
 
+def test_create_order_from_inflow_prefers_specific_langford_a_address_over_remarks():
+    """A specific Langford A address must override a generic Langford remark."""
+
+    session, engine = _make_sqlite_session()
+
+    try:
+        service = OrderService(session)
+        incoming_payload = {
+            "orderNumber": "THARCH001",
+            "salesOrderId": "sales-order-arch-1",
+            "contactName": "Architecture User",
+            "email": "architecture@example.com",
+            "poNumber": "PO-ARCH-1",
+            "orderRemarks": "Deliver to Langford room 122",
+            "shippingAddress": {
+                "address1": "798 Ross St",
+                "address2": "Langford A, room 122",
+                "city": "College Station",
+                "stateProvince": "TX",
+                "postalCode": "77840",
+            },
+            "customFields": {},
+            "lines": [],
+            "pickLines": [],
+            "packLines": [],
+            "shipLines": [],
+        }
+
+        created = service.create_order_from_inflow(incoming_payload)
+        session.refresh(created)
+
+        assert created.delivery_location == "ARCH"
+    finally:
+        session.close()
+        engine.dispose()
+
+
 def test_generate_picklist_raises_when_sharepoint_upload_fails():
     """Picklist generation should fail if SharePoint upload is unavailable."""
 

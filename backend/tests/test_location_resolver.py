@@ -447,6 +447,89 @@ def test_allen_variants_normalize_to_display_label():
     assert resolved.source in {"address2", "address"}
 
     print("[PASS] ALLEN normalization test passed")
+
+
+def test_langford_building_a_resolves_to_arch():
+    """Langford Building A must not be captured by the generic LAAH rule."""
+    from app.services.location_resolver_service import LocationResolverService
+    from app.utils.building_mapper import extract_building_code_from_location
+
+    full_address = (
+        "798 Ross St, Langford A, room 122, College Station, TX, 77843"
+    )
+
+    assert extract_building_code_from_location(full_address) == "ARCH"
+    assert extract_building_code_from_location("Langford Building A, Room 122") == "ARCH"
+    assert extract_building_code_from_location("Langford Hall, Room 122") is None
+    assert extract_building_code_from_location("Langford Architecture") is None
+
+    service = LocationResolverService()
+    resolved = service.resolve_location(
+        {
+            "orderNumber": "TESTLANGFORDA1",
+            "orderRemarks": "",
+            "shippingAddress": {
+                "address1": "798 Ross St",
+                "address2": "Langford A, room 122",
+                "city": "College Station",
+                "state": "TX",
+                "postalCode": "77843",
+            },
+        }
+    )
+
+    assert resolved.building_code == "ARCH"
+    assert resolved.display_location == "ARCH"
+    assert resolved.source == "address2"
+
+    resolved_with_generic_remarks = service.resolve_location(
+        {
+            "orderNumber": "TESTLANGFORDA2",
+            "orderRemarks": "Deliver to Langford room 122",
+            "shippingAddress": {
+                "address1": "798 Ross St",
+                "address2": "Langford A, room 122",
+                "city": "College Station",
+                "state": "TX",
+                "postalCode": "77840",
+            },
+        }
+    )
+    assert resolved_with_generic_remarks.building_code == "ARCH"
+    assert resolved_with_generic_remarks.source == "address2"
+
+
+def test_3367_tamu_resolves_to_thom():
+    """3367 TAMU identifies Thompson Hall, while MS 3367 remains Fermier."""
+    from app.services.location_resolver_service import LocationResolverService
+    from app.utils.building_mapper import extract_building_code_from_location
+
+    assert extract_building_code_from_location("3367 TAMU") == "THOM"
+    assert extract_building_code_from_location(
+        "3367 TAMU, College Station, TX 77843"
+    ) == "THOM"
+    assert extract_building_code_from_location("MS 3367") == "FERM"
+
+    service = LocationResolverService()
+    resolved = service.resolve_location(
+        {
+            "orderNumber": "TESTTHOM1",
+            "orderRemarks": "",
+            "shippingAddress": {
+                "address1": "3367 TAMU",
+                "address2": "Room 122",
+                "city": "College Station",
+                "state": "TX",
+                "postalCode": "77843",
+            },
+        }
+    )
+
+    assert resolved.building_code == "THOM"
+    assert resolved.display_location == "THOM"
+    assert resolved.source == "address"
+
+
 def test_zach_address_variants_normalize_to_display_label():
     """Test that 125 Spence Street / TAMU 3579 variants resolve to ZACH."""
     from app.services.location_resolver_service import LocationResolverService
