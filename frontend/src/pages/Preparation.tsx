@@ -13,6 +13,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import { getOrdersListQueryOptions, getTagRequestCandidatesQueryOptions, ordersQueryKeys } from "../queries/orders";
 import { canGeneratePicklist, isActiveRemainderLegWaitingOnPickup } from "../utils/orderPartial";
 import { extractApiErrorMessage } from "../utils/apiErrors";
+import { formatToCentralTime } from "../utils/timezone";
 import { OrderDetail, OrderStatus } from "../types/order";
 
 type TagRequestCandidate = {
@@ -21,6 +22,9 @@ type TagRequestCandidate = {
     recipient_name?: string;
     delivery_location?: string;
     picklist_generated_at?: string;
+    tagRequestSentAt?: string;
+    tagRequestSentBy?: string;
+    tagRequestSent: boolean;
 };
 
 const parseTagRequestCandidate = (value: unknown): TagRequestCandidate | null => {
@@ -31,12 +35,27 @@ const parseTagRequestCandidate = (value: unknown): TagRequestCandidate | null =>
     const inflowOrderId = typeof record.inflow_order_id === "string" ? record.inflow_order_id.trim() : "";
     if (!id) return null;
 
+    const tagData = record.tag_data && typeof record.tag_data === "object"
+        ? record.tag_data as Record<string, unknown>
+        : null;
+    const tagRequestSentAt = typeof tagData?.canopyorders_request_sent_at === "string"
+        ? tagData.canopyorders_request_sent_at
+        : typeof tagData?.tag_request_sent_at === "string"
+            ? tagData.tag_request_sent_at
+            : undefined;
+    const tagRequestSentBy = typeof tagData?.canopyorders_request_sent_by === "string"
+        ? tagData.canopyorders_request_sent_by
+        : undefined;
+
     return {
         id,
         inflow_order_id: inflowOrderId,
         recipient_name: typeof record.recipient_name === "string" ? record.recipient_name : undefined,
         delivery_location: typeof record.delivery_location === "string" ? record.delivery_location : undefined,
         picklist_generated_at: typeof record.picklist_generated_at === "string" ? record.picklist_generated_at : undefined,
+        tagRequestSentAt,
+        tagRequestSentBy,
+        tagRequestSent: Boolean(tagRequestSentAt || tagData?.tag_request_status === "sent"),
     };
 };
 
@@ -604,6 +623,7 @@ export default function Preparation() {
                                                     <TableHead className="w-10" />
                                                     <TableHead className="whitespace-nowrap">Order</TableHead>
                                                     <TableHead>Recipient</TableHead>
+                                                    <TableHead className="whitespace-nowrap">Tag request</TableHead>
                                                 </TableRow>
                                             </TableHeader>
                                             <TableBody>
@@ -665,6 +685,27 @@ export default function Preparation() {
                                                                         </p>
                                                                     ) : null}
                                                                 </div>
+                                                            </TableCell>
+                                                            <TableCell>
+                                                                {candidate.tagRequestSent ? (
+                                                                    <div className="space-y-1">
+                                                                        <Badge className="whitespace-nowrap border-emerald-300 bg-emerald-100 text-emerald-800 hover:bg-emerald-100">
+                                                                            Tag request sent
+                                                                        </Badge>
+                                                                        {candidate.tagRequestSentAt ? (
+                                                                            <p className="whitespace-nowrap text-xs text-muted-foreground">
+                                                                                {formatToCentralTime(candidate.tagRequestSentAt, "MMM d, yyyy h:mm a")}
+                                                                            </p>
+                                                                        ) : null}
+                                                                        {candidate.tagRequestSentBy ? (
+                                                                            <p className="max-w-[12rem] truncate text-xs text-muted-foreground" title={candidate.tagRequestSentBy}>
+                                                                                by {candidate.tagRequestSentBy}
+                                                                            </p>
+                                                                        ) : null}
+                                                                    </div>
+                                                                ) : (
+                                                                    <span className="whitespace-nowrap text-xs text-muted-foreground">Not requested</span>
+                                                                )}
                                                             </TableCell>
                                                         </TableRow>
                                                     );

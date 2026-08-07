@@ -51,6 +51,10 @@ describe("Preparation", () => {
                 recipient_name: "Ada Lovelace",
                 delivery_location: "Engineering Building",
                 picklist_generated_at: null,
+                tag_data: {
+                    canopyorders_request_sent_at: "2026-05-20T15:30:00Z",
+                    canopyorders_request_sent_by: "requester@example.com",
+                },
             },
         ]);
 
@@ -221,6 +225,14 @@ describe("Preparation", () => {
             expect(mockedOrdersApi.bulkMarkTagged).toHaveBeenCalledWith({ order_ids: ["candidate-1"] });
         });
         expect(await screen.findByText(/Marked 1 order as tagged/)).toBeInTheDocument();
+    });
+
+    it("marks orders that already had an asset tag request sent", async () => {
+        renderWithQueryClient(<Preparation />);
+
+        expect(await screen.findByText("Tag request sent")).toBeInTheDocument();
+        expect(screen.getByText("May 20, 2026 10:30 AM")).toBeInTheDocument();
+        expect(screen.getByText("by requester@example.com")).toBeInTheDocument();
     });
 
     it("supports overriding the recorded picker for QA orders", async () => {
