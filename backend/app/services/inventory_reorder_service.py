@@ -313,14 +313,18 @@ class InventoryReorderService:
     def latest_summary_path(self) -> Optional[Path]:
         summary_path = self._stable_summary_path()
         if summary_path.exists():
-            return summary_path
+            # Flask resolves relative send_file paths from app.root_path, while
+            # inventory summaries are stored relative to the backend runtime.
+            # Return an absolute path so download callers always target the
+            # same file that the summary reader found.
+            return summary_path.resolve()
 
         latest = self.latest_job()
         result_path = latest.get("result_path") if latest else None
         if isinstance(result_path, str):
             candidate = Path(result_path)
             if candidate.exists():
-                return candidate
+                return candidate.resolve()
 
         return None
 

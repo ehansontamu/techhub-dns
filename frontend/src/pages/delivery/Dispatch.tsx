@@ -701,7 +701,7 @@ export default function Dispatch() {
   }
 
   return (
-    <div className="space-y-5 pb-28">
+    <div className="space-y-5 pb-60 sm:pb-28">
       {/* ── Active Delivery Runs (above the fold) ── */}
       <Card>
         <button
@@ -999,7 +999,7 @@ export default function Dispatch() {
 
       {/* ── Sticky Action Bar ── */}
       <div className="fixed inset-x-0 bottom-0 z-30 border-t border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80 lg:left-[var(--sidebar-width)]">
-        <div className="mx-auto flex max-w-5xl items-center gap-3 px-4 py-3">
+        <div className="mx-auto flex max-w-5xl flex-col items-stretch gap-3 px-4 py-3 sm:flex-row sm:items-center">
           {userCheckedOutVehicle ? (
             /* ── Check-in mode: user has a vehicle out ── */
             <>
@@ -1008,11 +1008,10 @@ export default function Dispatch() {
                   {VEHICLES.find((v) => v.id === userCheckedOutVehicle)?.label} checked out
                 </span>
               </div>
-              <div className="flex-1" />
               <Button
                 onClick={() => void handleCheckin(userCheckedOutVehicle)}
                 disabled={isActionLoading}
-                className="h-9 min-w-[120px]"
+                className="h-9 w-full min-w-[120px] sm:ml-auto sm:w-auto"
                 variant="destructive"
               >
                 {isActionLoading ? "Checking in..." : "Check In"}
@@ -1021,89 +1020,88 @@ export default function Dispatch() {
           ) : (
             /* ── Checkout mode: normal flow ── */
             <>
-              <div className="flex items-center gap-2 text-sm">
-                {selectedOrderIds.length > 0 ? (
-                  <Badge variant="default" className="text-xs">
-                    {selectedOrderIds.length} selected
-                  </Badge>
-                ) : (
-                  <span className="text-xs text-muted-foreground">No orders selected</span>
-                )}
-                {selectedPartialPickCount > 0 && (
-                  <Badge variant="warning" className="text-[10px]">
-                    {selectedPartialPickCount} partial
-                  </Badge>
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                <div className="flex items-center gap-2 text-sm">
+                  {selectedOrderIds.length > 0 ? (
+                    <Badge variant="default" className="text-xs">
+                      {selectedOrderIds.length} selected
+                    </Badge>
+                  ) : (
+                    <span className="text-xs text-muted-foreground">No orders selected</span>
+                  )}
+                  {selectedPartialPickCount > 0 && (
+                    <Badge variant="warning" className="text-[10px]">
+                      {selectedPartialPickCount} partial
+                    </Badge>
+                  )}
+                </div>
+
+                <div className="hidden h-5 w-px bg-border sm:block" />
+
+                {/* Vehicle selector */}
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {DISPATCH_TARGETS.map((target) => {
+                    const isActive = target.id === selectedDispatchTarget;
+                    const status = target.id === "pickup" ? null : statusByVehicle[target.id];
+                    const canUse = target.id === "pickup"
+                      ? true
+                      : Boolean(status && !status.checked_out && !status.delivery_run_active);
+                    return (
+                      <button
+                        key={target.id}
+                        type="button"
+                        className={`inline-flex h-8 items-center gap-1 rounded-md border px-2 text-xs transition-colors ${
+                          isActive
+                            ? "border-accent bg-accent/10 text-foreground font-medium"
+                            : "border-border text-muted-foreground hover:text-foreground"
+                        } ${!canUse ? "opacity-50" : ""}`}
+                        onClick={() => setSelectedDispatchTarget(target.id)}
+                      >
+                        {target.label}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {selectedDispatchTarget !== "pickup" && (
+                  <>
+                    <div className="hidden h-5 w-px bg-border sm:block" />
+
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {DELIVERY_RUN_PRIORITY_OPTIONS.map((option) => {
+                        const isSelected = selectedPurpose === option.purpose;
+                        return (
+                          <button
+                            key={option.purpose}
+                            type="button"
+                            className={`inline-flex h-8 items-center rounded-md border px-2 text-xs transition-colors ${
+                              isSelected
+                                ? "border-accent bg-accent text-accent-foreground font-medium"
+                                : "border-border text-muted-foreground hover:text-foreground"
+                            }`}
+                            onClick={() => setSelectedPurpose(option.purpose)}
+                          >
+                            {option.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </>
                 )}
               </div>
 
-              <div className="h-5 w-px bg-border" />
-
-              {/* Vehicle selector */}
-              <div className="flex items-center gap-1.5">
-                {DISPATCH_TARGETS.map((target) => {
-                  const isActive = target.id === selectedDispatchTarget;
-                  const status = target.id === "pickup" ? null : statusByVehicle[target.id];
-                  const canUse = target.id === "pickup"
-                    ? true
-                    : Boolean(status && !status.checked_out && !status.delivery_run_active);
-                  return (
-                    <button
-                      key={target.id}
-                      type="button"
-                      className={`inline-flex h-8 items-center gap-1 rounded-md border px-2 text-xs transition-colors ${
-                        isActive
-                          ? "border-accent bg-accent/10 text-foreground font-medium"
-                          : "border-border text-muted-foreground hover:text-foreground"
-                      } ${!canUse ? "opacity-50" : ""}`}
-                      onClick={() => setSelectedDispatchTarget(target.id)}
-                    >
-                      {target.label}
-                    </button>
-                  );
-                })}
+              <div className="flex min-w-0 flex-col gap-2 sm:ml-auto sm:flex-row sm:items-center">
+                {actionBarBlocker ? (
+                  <span className="text-xs text-muted-foreground">{actionBarBlocker}</span>
+                ) : null}
+                <Button
+                  onClick={() => void handleStartRun()}
+                  disabled={!canStartRun || isActionLoading}
+                  className="h-9 w-full min-w-[120px] sm:w-auto"
+                >
+                  {isActionLoading ? "Starting..." : actionButtonLabel}
+                </Button>
               </div>
-
-              {selectedDispatchTarget !== "pickup" && (
-                <>
-                  <div className="h-5 w-px bg-border" />
-
-                  <div className="flex items-center gap-1.5">
-                    {DELIVERY_RUN_PRIORITY_OPTIONS.map((option) => {
-                      const isSelected = selectedPurpose === option.purpose;
-                      return (
-                        <button
-                          key={option.purpose}
-                          type="button"
-                          className={`inline-flex h-8 items-center rounded-md border px-2 text-xs transition-colors ${
-                            isSelected
-                              ? "border-accent bg-accent text-accent-foreground font-medium"
-                              : "border-border text-muted-foreground hover:text-foreground"
-                          }`}
-                          onClick={() => setSelectedPurpose(option.purpose)}
-                        >
-                          {option.label}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </>
-              )}
-
-              <div className="flex-1" />
-
-              {/* Action button */}
-              {actionBarBlocker ? (
-                <span className="text-xs text-muted-foreground">{actionBarBlocker}</span>
-              ) : null}
-              <Button
-                onClick={() => void handleStartRun()}
-                disabled={!canStartRun || isActionLoading}
-                className="h-9 min-w-[120px]"
-              >
-                {isActionLoading
-                  ? "Starting..."
-                  : actionButtonLabel}
-              </Button>
             </>
           )}
         </div>

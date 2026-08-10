@@ -104,7 +104,7 @@ export default function InventoryReorder() {
   const [loading, setLoading] = useState(true);
   const [showAll, setShowAll] = useState(false);
   const [search, setSearch] = useState("");
-  const [sortKey, setSortKey] = useState<SortKey>("combined");
+  const [sortKey, setSortKey] = useState<SortKey>("status");
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
   const [activeJob, setActiveJob] = useState<InventoryReorderJob | null>(null);
   const [refreshing, setRefreshing] = useState(false);

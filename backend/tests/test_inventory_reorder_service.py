@@ -144,6 +144,18 @@ def test_inventory_reorder_latest_job_reads_persisted_metadata(tmp_path):
     assert latest["trigger"] == "scheduled"
 
 
+def test_latest_summary_path_is_absolute_for_file_downloads(tmp_path):
+    service = InventoryReorderService(SimpleNamespace(storage_root=str(tmp_path)))
+    summary_path = tmp_path / "inventory-reorder" / "inventory_summary_simple.json"
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    summary_path.write_text("[]\n", encoding="utf-8")
+
+    latest_path = service.latest_summary_path()
+
+    assert latest_path == summary_path.resolve()
+    assert latest_path.is_absolute()
+
+
 if __name__ == "__main__":
     test_compute_inventory_reorder_rows_flags_reorder_items_first()
     test_compute_inventory_reorder_rows_marks_negative_final_qty_critical()
@@ -154,4 +166,5 @@ if __name__ == "__main__":
 
     with tempfile.TemporaryDirectory() as tmp:
         test_inventory_reorder_latest_job_reads_persisted_metadata(Path(tmp))
+        test_latest_summary_path_is_absolute_for_file_downloads(Path(tmp))
     print("[PASS] inventory reorder service tests passed")
