@@ -1528,7 +1528,7 @@ def save_vetting_editor_data():
 
 
 @bp.route("/compatibility-editor-staging", methods=["GET"])
-@require_admin
+@require_auth
 def get_compatibility_editor_staging_data():
     download_url = (settings.compatibility_editor_staging_download_url or "").strip()
     upload_url = (settings.compatibility_editor_staging_upload_url or "").strip()
@@ -1576,7 +1576,7 @@ def get_compatibility_editor_staging_data():
 
 
 @bp.route("/compatibility-editor-staging", methods=["PUT"])
-@require_admin
+@require_auth
 def save_compatibility_editor_staging_data():
     upload_url = (settings.compatibility_editor_staging_upload_url or "").strip()
     if not upload_url:
