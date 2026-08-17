@@ -96,6 +96,31 @@ def test_compute_inventory_reorder_rows_hides_zero_reorder_quantity_by_default()
     assert all_rows[0]["sku"] == "ZERO1"
 
 
+def test_compute_inventory_reorder_rows_removes_fulfilled_cached_inflow_orders():
+    rows = compute_inventory_reorder_rows(
+        [
+            {
+                "name": "Laptop",
+                "sku": "LT-1",
+                "quantityAvailable": "10",
+                "bigCommerceStatus9": "0",
+                "quantityOnOrder": "0",
+                "reorderPoint": "5",
+                "reorderQty": "10",
+                "orders": {
+                    "bigCommerce": [],
+                    "inflow": [
+                        {"orderNumber": "TH1", "status": "fulfilled"},
+                        {"orderNumber": "TH2", "status": "started"},
+                    ],
+                },
+            }
+        ]
+    )
+
+    assert [order["orderNumber"] for order in rows[0]["orders"]["inflow"]] == ["TH2"]
+
+
 def test_build_simple_summary_preserves_order_details_by_source():
     service = InventoryReorderService(SimpleNamespace())
 
@@ -263,6 +288,7 @@ if __name__ == "__main__":
     test_compute_inventory_reorder_rows_flags_reorder_items_first()
     test_compute_inventory_reorder_rows_marks_negative_final_qty_critical()
     test_compute_inventory_reorder_rows_hides_zero_reorder_quantity_by_default()
+    test_compute_inventory_reorder_rows_removes_fulfilled_cached_inflow_orders()
     test_build_simple_summary_preserves_order_details_by_source()
     test_inflow_order_details_exclude_fulfilled_orders_and_preserve_guid()
     test_inventory_reorder_refresh_cooldown_uses_latest_start_time()

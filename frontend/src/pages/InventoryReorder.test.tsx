@@ -75,6 +75,12 @@ describe("InventoryReorder", () => {
                 quantity: 3,
                 status: "started",
               },
+              {
+                orderId: "fulfilled-guid",
+                orderNumber: "TH0999",
+                quantity: 20,
+                status: "fulfilled",
+              },
             ],
           },
         },
@@ -144,5 +150,6 @@ describe("InventoryReorder", () => {
       "href",
       "https://app.inflowinventory.com/sales-orders/inflow-1"
     );
+    expect(screen.queryByText("Order TH0999")).not.toBeInTheDocument();
   });
 });

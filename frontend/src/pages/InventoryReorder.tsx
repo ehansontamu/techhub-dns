@@ -535,6 +535,10 @@ function OrderDetails({ orders }: OrderDetailsProps) {
     );
   }
 
+  const activeInflowOrders = orders.inflow.filter(
+    (order) => !order.status.trim().toLowerCase().startsWith("fulfilled")
+  );
+
   return (
     <div className="grid gap-4 lg:grid-cols-2">
       <OrderSourceList
@@ -546,7 +550,7 @@ function OrderDetails({ orders }: OrderDetailsProps) {
       />
       <OrderSourceList
         title="InFlow active sales orders"
-        orders={orders.inflow}
+        orders={activeInflowOrders}
         emptyMessage="This product is not on any active InFlow sales orders."
         getOrderHref={(order) => `${INFLOW_SALES_ORDER_BASE}/${encodeURIComponent(order.orderId)}`}
       />

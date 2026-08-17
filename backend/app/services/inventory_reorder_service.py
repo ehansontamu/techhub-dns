@@ -59,6 +59,13 @@ def _to_int(value: Any, default: int = 0) -> int:
         return default
 
 
+def _is_fulfilled_order_detail(detail: Any) -> bool:
+    if not isinstance(detail, dict):
+        return False
+    status = str(detail.get("status") or "").strip().lower()
+    return status == "fulfilled" or status.startswith("fulfilled ")
+
+
 def compute_inventory_reorder_rows(
     summary: list[dict[str, Any]], *, show_all: bool = False
 ) -> list[dict[str, Any]]:
@@ -79,8 +86,22 @@ def compute_inventory_reorder_rows(
         reorder_qty = _to_int(item.get("reorderQty"), 0)
         needs_reorder = combined <= reorder_point
 
+        orders = item.get("orders")
+        normalized_orders = orders
+        if isinstance(orders, dict):
+            inflow_orders = orders.get("inflow", [])
+            normalized_orders = {
+                **orders,
+                "inflow": [
+                    detail
+                    for detail in inflow_orders
+                    if not _is_fulfilled_order_detail(detail)
+                ] if isinstance(inflow_orders, list) else [],
+            }
+
         row = {
             **item,
+            "orders": normalized_orders,
             "available": available,
             "status9": status9,
             "finalQty": final_qty,
@@ -586,6 +607,7 @@ class InventoryReorderService:
                 params={
                     "include": "lines.product,lines",
                     "filter[isActive]": "true",
+                    "filter[inventoryStatus][]": ["unfulfilled", "started"],
                     "count": count,
                     "skip": skip,
                     "sort": "orderDate",
@@ -605,7 +627,7 @@ class InventoryReorderService:
                 if not isinstance(order, dict):
                     continue
                 inventory_status = str(order.get("inventoryStatus") or "").strip()
-                if inventory_status.lower() == "fulfilled":
+                if inventory_status.lower() == "fulfilled" or inventory_status.lower().startswith("fulfilled "):
                     continue
                 order_id = str(order.get("salesOrderId") or order.get("id") or "")
                 order_number = str(order.get("orderNumber") or order_id or "Unknown")
