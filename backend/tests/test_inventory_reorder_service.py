@@ -95,6 +95,47 @@ def test_compute_inventory_reorder_rows_hides_zero_reorder_quantity_by_default()
     assert all_rows[0]["sku"] == "ZERO1"
 
 
+def test_build_simple_summary_preserves_order_details_by_source():
+    service = InventoryReorderService(SimpleNamespace())
+
+    summary = service._build_simple_summary(
+        [
+            {
+                "productId": "product-1",
+                "name": "Laptop",
+                "sku": "LT-1",
+                "summary": {"quantityAvailable": "20", "quantityOnOrder": "3"},
+                "reorderSettings": [],
+            }
+        ],
+        {"LAPTOP": 12},
+        bigcommerce_order_details={
+            "LAPTOP": [
+                {
+                    "orderId": "901",
+                    "orderNumber": "901",
+                    "quantity": 12,
+                    "status": "Aggiebuy Approval (Status 9)",
+                }
+            ]
+        },
+        inflow_order_details={
+            "product-1": [
+                {
+                    "orderId": "inflow-1",
+                    "orderNumber": "TH1001",
+                    "quantity": 3,
+                    "status": "started",
+                }
+            ]
+        },
+    )
+
+    assert summary[0]["bigCommerceStatus9"] == "12"
+    assert summary[0]["orders"]["bigCommerce"][0]["quantity"] == 12
+    assert summary[0]["orders"]["inflow"][0]["orderNumber"] == "TH1001"
+
+
 def test_inventory_reorder_refresh_cooldown_uses_latest_start_time():
     service = InventoryReorderService(
         SimpleNamespace(inventory_reorder_refresh_cooldown_seconds=180)
@@ -160,6 +201,7 @@ if __name__ == "__main__":
     test_compute_inventory_reorder_rows_flags_reorder_items_first()
     test_compute_inventory_reorder_rows_marks_negative_final_qty_critical()
     test_compute_inventory_reorder_rows_hides_zero_reorder_quantity_by_default()
+    test_build_simple_summary_preserves_order_details_by_source()
     test_inventory_reorder_refresh_cooldown_uses_latest_start_time()
     import tempfile
     from pathlib import Path

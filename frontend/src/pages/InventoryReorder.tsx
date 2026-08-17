@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { AlertTriangle, ArrowUpDown, Download, Loader2, PackageSearch, RefreshCw, Search } from "lucide-react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { AlertTriangle, ArrowUpDown, ChevronRight, Download, Loader2, PackageSearch, RefreshCw, Search } from "lucide-react";
 import { toast } from "sonner";
 import {
   inventoryReorderApi,
   type InventoryReorderJob,
+  type InventoryReorderOrderDetail,
   type InventoryReorderResponse,
   type InventoryReorderRow,
 } from "../api/inventoryReorder";
@@ -24,7 +25,7 @@ const sortableColumns: Array<{ key: SortKey; label: string; align?: "right" }> =
   { key: "name", label: "Product Name" },
   { key: "sku", label: "SKU" },
   { key: "available", label: "InFlow Available", align: "right" },
-  { key: "status9", label: "BC Status 9", align: "right" },
+  { key: "status9", label: "BC Aggiebuy Approval (Status 9)", align: "right" },
   { key: "finalQty", label: "Final Qty", align: "right" },
   { key: "onOrder", label: "On Order", align: "right" },
   { key: "combined", label: "Final + On Order", align: "right" },
@@ -110,6 +111,7 @@ export default function InventoryReorder() {
   const [refreshing, setRefreshing] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [nowMs, setNowMs] = useState(() => Date.now());
+  const [expandedRows, setExpandedRows] = useState<Set<string>>(() => new Set());
 
   const loadData = useCallback(async (options?: { silent?: boolean }) => {
     if (!isAdmin) {
@@ -245,6 +247,18 @@ export default function InventoryReorder() {
     }
     setSortKey(key);
     setSortDirection(key === "name" || key === "sku" || key === "status" ? "asc" : "desc");
+  };
+
+  const toggleExpanded = (rowKey: string) => {
+    setExpandedRows((current) => {
+      const next = new Set(current);
+      if (next.has(rowKey)) {
+        next.delete(rowKey);
+      } else {
+        next.add(rowKey);
+      }
+      return next;
+    });
   };
 
   const job = activeJob ?? data?.latest_job ?? null;
@@ -402,6 +416,9 @@ export default function InventoryReorder() {
             <Table>
               <TableHeader>
                 <TableRow>
+                  <TableHead className="w-12">
+                    <span className="sr-only">Order details</span>
+                  </TableHead>
                   {sortableColumns.map((column) => (
                     <TableHead key={column.key} className={cn(column.align === "right" && "text-right")}>
                       <button
@@ -420,40 +437,139 @@ export default function InventoryReorder() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {filteredRows.map((row) => (
-                  <TableRow
-                    key={`${row.sku}-${row.name}`}
-                    className={cn(
-                      row.critical && "bg-red-50 hover:bg-red-100/80",
-                      row.needsReorder && !row.critical && "bg-amber-50 hover:bg-amber-100/80"
-                    )}
-                  >
-                    <TableCell className="min-w-[18rem] font-medium">{row.name}</TableCell>
-                    <TableCell className="min-w-[7rem] text-muted-foreground">{row.sku || "-"}</TableCell>
-                    <NumberCell value={row.available} />
-                    <NumberCell value={row.status9} />
-                    <NumberCell value={row.finalQty} />
-                    <NumberCell value={row.onOrder} />
-                    <NumberCell value={row.combined} />
-                    <NumberCell value={row.reorderPoint} />
-                    <NumberCell value={row.reorderQty} />
-                    <TableCell>
-                      {row.critical ? (
-                        <Badge variant="destructive">Critical</Badge>
-                      ) : row.needsReorder ? (
-                        <Badge variant="warning">Reorder</Badge>
-                      ) : (
-                        <Badge variant="secondary">Stocked</Badge>
-                      )}
-                    </TableCell>
-                  </TableRow>
-                ))}
+                {filteredRows.map((row) => {
+                  const rowKey = `${row.sku}-${row.name}`;
+                  const isExpanded = expandedRows.has(rowKey);
+                  return (
+                    <Fragment key={rowKey}>
+                      <TableRow
+                        className={cn(
+                          row.critical && "bg-red-50 hover:bg-red-100/80",
+                          row.needsReorder && !row.critical && "bg-amber-50 hover:bg-amber-100/80"
+                        )}
+                      >
+                        <TableCell className="w-12 pr-0">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8"
+                            aria-label={`${isExpanded ? "Hide" : "Show"} orders for ${row.name}`}
+                            aria-expanded={isExpanded}
+                            onClick={() => toggleExpanded(rowKey)}
+                          >
+                            <ChevronRight className={cn("h-4 w-4 transition-transform", isExpanded && "rotate-90")} />
+                          </Button>
+                        </TableCell>
+                        <TableCell className="min-w-[18rem] font-medium">{row.name}</TableCell>
+                        <TableCell className="min-w-[7rem] text-muted-foreground">{row.sku || "-"}</TableCell>
+                        <NumberCell value={row.available} />
+                        <NumberCell value={row.status9} />
+                        <NumberCell value={row.finalQty} />
+                        <NumberCell value={row.onOrder} />
+                        <NumberCell value={row.combined} />
+                        <NumberCell value={row.reorderPoint} />
+                        <NumberCell value={row.reorderQty} />
+                        <TableCell>
+                          {row.critical ? (
+                            <Badge variant="destructive">Critical</Badge>
+                          ) : row.needsReorder ? (
+                            <Badge variant="warning">Reorder</Badge>
+                          ) : (
+                            <Badge variant="secondary">Stocked</Badge>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                      {isExpanded ? (
+                        <TableRow className="bg-muted/20 hover:bg-muted/20">
+                          <TableCell colSpan={sortableColumns.length + 1} className="p-4 md:p-5">
+                            <OrderDetails orders={row.orders} />
+                          </TableCell>
+                        </TableRow>
+                      ) : null}
+                    </Fragment>
+                  );
+                })}
               </TableBody>
             </Table>
           )}
         </div>
       </section>
     </div>
+  );
+}
+
+type OrderDetailsProps = {
+  orders: InventoryReorderRow["orders"];
+};
+
+function OrderDetails({ orders }: OrderDetailsProps) {
+  if (!orders) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        Order-level details will be available after the next inventory refresh.
+      </p>
+    );
+  }
+
+  return (
+    <div className="grid gap-4 lg:grid-cols-2">
+      <OrderSourceList
+        title="BigCommerce Aggiebuy Approval (Status 9)"
+        orders={orders.bigCommerce}
+        emptyMessage="This product is not on any Status 9 BigCommerce orders."
+      />
+      <OrderSourceList
+        title="InFlow active sales orders"
+        orders={orders.inflow}
+        emptyMessage="This product is not on any active InFlow sales orders."
+      />
+    </div>
+  );
+}
+
+type OrderSourceListProps = {
+  title: string;
+  orders: InventoryReorderOrderDetail[];
+  emptyMessage: string;
+};
+
+function OrderSourceList({ title, orders, emptyMessage }: OrderSourceListProps) {
+  const totalQuantity = orders.reduce((total, order) => total + order.quantity, 0);
+
+  return (
+    <section className="rounded-lg border bg-background/80 p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 className="text-sm font-semibold">{title}</h3>
+        <span className="text-xs tabular-nums text-muted-foreground">
+          {orders.length} {orders.length === 1 ? "order" : "orders"} · {totalQuantity.toLocaleString()} units
+        </span>
+      </div>
+      {orders.length === 0 ? (
+        <p className="mt-3 text-sm text-muted-foreground">{emptyMessage}</p>
+      ) : (
+        <div className="mt-3 divide-y rounded-md border">
+          {orders.map((order, index) => (
+            <div
+              key={`${order.orderId}-${index}`}
+              className={cn(
+                "flex flex-wrap items-center justify-between gap-3 px-3 py-2.5",
+                order.quantity >= 10 && "bg-amber-50"
+              )}
+            >
+              <div className="min-w-0">
+                <p className="font-medium">Order {order.orderNumber}</p>
+                <p className="text-xs capitalize text-muted-foreground">{order.status}</p>
+              </div>
+              <div className="flex items-center gap-2">
+                {order.quantity >= 10 ? <Badge variant="warning">10+ units</Badge> : null}
+                <span className="font-semibold tabular-nums">{order.quantity.toLocaleString()}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
   );
 }
 

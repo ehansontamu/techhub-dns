@@ -403,9 +403,14 @@ class InventoryReorderService:
             if summary.get("productId")
         }
 
-        progress("Fetching BigCommerce status 9 counts...", 0.78)
-        bigcommerce_counts = self._fetch_bigcommerce_status9_counts(
+        progress("Fetching BigCommerce status 9 order details...", 0.72)
+        bigcommerce_counts, bigcommerce_order_details = self._fetch_bigcommerce_status9_demand(
             bigcommerce_headers, progress=progress
+        )
+
+        progress("Fetching active InFlow sales order details...", 0.82)
+        inflow_order_details = self._fetch_inflow_active_order_details(
+            inflow_headers, progress=progress
         )
 
         progress("Building reorder summary...", 0.92)
@@ -413,7 +418,12 @@ class InventoryReorderService:
             {**product, "summary": summary_by_product_id.get(product.get("productId"), {})}
             for product in products
         ]
-        simple_summary = self._build_simple_summary(merged, bigcommerce_counts)
+        simple_summary = self._build_simple_summary(
+            merged,
+            bigcommerce_counts,
+            bigcommerce_order_details=bigcommerce_order_details,
+            inflow_order_details=inflow_order_details,
+        )
 
         data_dir = self._data_dir()
         data_dir.mkdir(parents=True, exist_ok=True)
@@ -488,9 +498,19 @@ class InventoryReorderService:
     def _fetch_bigcommerce_status9_counts(
         self, headers: dict[str, str], *, progress: ProgressCallback
     ) -> dict[str, int]:
+        counts, _details = self._fetch_bigcommerce_status9_demand(
+            headers,
+            progress=progress,
+        )
+        return counts
+
+    def _fetch_bigcommerce_status9_demand(
+        self, headers: dict[str, str], *, progress: ProgressCallback
+    ) -> tuple[dict[str, int], dict[str, list[dict[str, Any]]]]:
         import requests
 
         counts: defaultdict[str, int] = defaultdict(int)
+        details_by_order: defaultdict[str, dict[str, dict[str, Any]]] = defaultdict(dict)
         page = 1
         while True:
             progress(f"BigCommerce: fetching status 9 orders (page {page})...", None)
@@ -520,12 +540,111 @@ class InventoryReorderService:
                     continue
                 for product in self._fetch_bigcommerce_order_products(order_id, headers):
                     name = str(product.get("name") or "").upper()
-                    counts[name] += _to_int(product.get("quantity"), 0)
+                    if not name:
+                        continue
+                    quantity = _to_int(product.get("quantity"), 0)
+                    counts[name] += quantity
+                    order_key = str(order_id)
+                    detail = details_by_order[name].setdefault(
+                        order_key,
+                        {
+                            "orderId": order_key,
+                            "orderNumber": str(order.get("id") or order_id),
+                            "quantity": 0,
+                            "status": "Aggiebuy Approval (Status 9)",
+                        },
+                    )
+                    detail["quantity"] += quantity
 
             page += 1
             time.sleep(self._request_delay())
 
-        return dict(counts)
+        details = {
+            product_name: list(order_map.values())
+            for product_name, order_map in details_by_order.items()
+        }
+        for order_details in details.values():
+            order_details.sort(
+                key=lambda detail: (-_to_int(detail.get("quantity"), 0), detail["orderNumber"])
+            )
+
+        return dict(counts), details
+
+    def _fetch_inflow_active_order_details(
+        self, headers: dict[str, str], *, progress: ProgressCallback
+    ) -> dict[str, list[dict[str, Any]]]:
+        import requests
+
+        details_by_order: defaultdict[str, dict[str, dict[str, Any]]] = defaultdict(dict)
+        skip = 0
+        count = 100
+        while True:
+            progress(f"InFlow: fetching active sales orders (skip={skip})...", None)
+            response = requests.get(
+                f"{self._inflow_base_url()}/{self._settings.inflow_company_id}/sales-orders",
+                headers=headers,
+                params={
+                    "include": "lines.product,lines",
+                    "filter[isActive]": "true",
+                    "count": count,
+                    "skip": skip,
+                    "sort": "orderDate",
+                    "sortDesc": "true",
+                },
+                timeout=90,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            orders = payload.get("items", []) if isinstance(payload, dict) else payload
+            if not isinstance(orders, list):
+                raise ValueError("InFlow sales orders response must be an array.")
+            if not orders:
+                break
+
+            for order in orders:
+                if not isinstance(order, dict):
+                    continue
+                order_id = str(order.get("salesOrderId") or order.get("id") or "")
+                order_number = str(order.get("orderNumber") or order_id or "Unknown")
+                status = str(order.get("inventoryStatus") or "Active")
+                for line in order.get("lines", []) or []:
+                    if not isinstance(line, dict):
+                        continue
+                    product = line.get("product") if isinstance(line.get("product"), dict) else {}
+                    product_id = str(line.get("productId") or product.get("productId") or "")
+                    if not product_id:
+                        continue
+                    quantity_data = line.get("quantity")
+                    quantity = _to_int(
+                        quantity_data.get("standardQuantity")
+                        if isinstance(quantity_data, dict)
+                        else quantity_data,
+                        0,
+                    )
+                    order_key = order_id or order_number
+                    detail = details_by_order[product_id].setdefault(
+                        order_key,
+                        {
+                            "orderId": order_id,
+                            "orderNumber": order_number,
+                            "quantity": 0,
+                            "status": status,
+                        },
+                    )
+                    detail["quantity"] += quantity
+
+            skip += count
+            time.sleep(self._request_delay())
+
+        details = {
+            product_id: list(order_map.values())
+            for product_id, order_map in details_by_order.items()
+        }
+        for order_details in details.values():
+            order_details.sort(
+                key=lambda detail: (-_to_int(detail.get("quantity"), 0), detail["orderNumber"])
+            )
+        return details
 
     def _fetch_bigcommerce_order_products(
         self, order_id: Any, headers: dict[str, str]
@@ -550,13 +669,21 @@ class InventoryReorderService:
         return [product for product in payload if isinstance(product, dict)]
 
     def _build_simple_summary(
-        self, merged_products: list[dict[str, Any]], bigcommerce_counts: dict[str, int]
-    ) -> list[dict[str, str]]:
-        summary: list[dict[str, str]] = []
+        self,
+        merged_products: list[dict[str, Any]],
+        bigcommerce_counts: dict[str, int],
+        *,
+        bigcommerce_order_details: Optional[dict[str, list[dict[str, Any]]]] = None,
+        inflow_order_details: Optional[dict[str, list[dict[str, Any]]]] = None,
+    ) -> list[dict[str, Any]]:
+        summary: list[dict[str, Any]] = []
+        bigcommerce_order_details = bigcommerce_order_details or {}
+        inflow_order_details = inflow_order_details or {}
         for product in merged_products:
             product_summary = product.get("summary", {}) or {}
             name = str(product.get("name") or "")
-            entry: dict[str, str] = {
+            product_id = str(product.get("productId") or "")
+            entry: dict[str, Any] = {
                 "name": name,
                 "sku": str(product.get("sku") or ""),
             }
@@ -568,6 +695,10 @@ class InventoryReorderService:
             entry["bigCommerceStatus9"] = str(int(bigcommerce_counts.get(name.upper(), 0)))
             entry["reorderPoint"] = "0"
             entry["reorderQty"] = "0"
+            entry["orders"] = {
+                "bigCommerce": bigcommerce_order_details.get(name.upper(), []),
+                "inflow": inflow_order_details.get(product_id, []),
+            }
 
             reorder_settings = product.get("reorderSettings", []) or []
             for reorder_setting in reorder_settings:
