@@ -21,17 +21,19 @@ import { getUserDisplayName } from "../utils/userDisplay";
 type SortKey = "name" | "sku" | "available" | "status9" | "finalQty" | "onOrder" | "combined" | "reorderPoint" | "reorderQty" | "status";
 type SortDirection = "asc" | "desc";
 
-const sortableColumns: Array<{ key: SortKey; label: string; align?: "right" }> = [
-  { key: "name", label: "Product Name" },
-  { key: "sku", label: "SKU" },
-  { key: "available", label: "InFlow Available", align: "right" },
-  { key: "status9", label: "BC Aggiebuy Approval (Status 9)", align: "right" },
-  { key: "finalQty", label: "Final Qty", align: "right" },
-  { key: "onOrder", label: "On Order", align: "right" },
-  { key: "combined", label: "Final + On Order", align: "right" },
-  { key: "reorderPoint", label: "Reorder Point", align: "right" },
-  { key: "reorderQty", label: "Reorder Qty", align: "right" },
-  { key: "status", label: "Status" },
+const BIGCOMMERCE_ORDER_ADMIN_BASE = "https://store-jsj7fos9p1.mybigcommerce.com/manage/orders";
+
+const sortableColumns: Array<{ key: SortKey; label: string; align?: "right"; width: string }> = [
+  { key: "name", label: "Product Name", width: "w-[18%]" },
+  { key: "sku", label: "SKU", width: "w-[7%]" },
+  { key: "available", label: "InFlow Available", align: "right", width: "w-[8%]" },
+  { key: "status9", label: "BC Aggiebuy Approval (Status 9)", align: "right", width: "w-[12%]" },
+  { key: "finalQty", label: "Final Qty", align: "right", width: "w-[7%]" },
+  { key: "onOrder", label: "On Order", align: "right", width: "w-[7%]" },
+  { key: "combined", label: "Final + On Order", align: "right", width: "w-[9%]" },
+  { key: "reorderPoint", label: "Reorder Point", align: "right", width: "w-[8%]" },
+  { key: "reorderQty", label: "Reorder Qty", align: "right", width: "w-[8%]" },
+  { key: "status", label: "Status", width: "w-[13%]" },
 ];
 
 const isRunningJob = (job: InventoryReorderJob | null): boolean =>
@@ -413,24 +415,31 @@ export default function InventoryReorder() {
               {data?.has_data ? "No matching inventory rows." : "No inventory summary has been refreshed yet."}
             </div>
           ) : (
-            <Table>
+            <Table className="table-fixed text-xs">
               <TableHeader>
                 <TableRow>
-                  <TableHead className="w-12">
+                  <TableHead className="w-9 px-1 py-2 md:px-1">
                     <span className="sr-only">Order details</span>
                   </TableHead>
                   {sortableColumns.map((column) => (
-                    <TableHead key={column.key} className={cn(column.align === "right" && "text-right")}>
+                    <TableHead
+                      key={column.key}
+                      className={cn(
+                        "h-auto whitespace-normal px-1.5 py-2 align-bottom leading-tight md:px-2",
+                        column.width,
+                        column.align === "right" && "text-right"
+                      )}
+                    >
                       <button
                         type="button"
                         onClick={() => toggleSort(column.key)}
                         className={cn(
-                          "inline-flex items-center gap-1 text-left transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+                          "inline-flex items-end gap-0.5 text-left leading-tight transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
                           column.align === "right" && "justify-end text-right"
                         )}
                       >
                         {column.label}
-                        <ArrowUpDown className="h-3.5 w-3.5" />
+                        <ArrowUpDown className="h-3 w-3 shrink-0" />
                       </button>
                     </TableHead>
                   ))}
@@ -440,6 +449,9 @@ export default function InventoryReorder() {
                 {filteredRows.map((row) => {
                   const rowKey = `${row.sku}-${row.name}`;
                   const isExpanded = expandedRows.has(rowKey);
+                  const hasBulkBigCommerceOrder = Boolean(
+                    row.orders?.bigCommerce.some((order) => order.quantity >= 10)
+                  );
                   return (
                     <Fragment key={rowKey}>
                       <TableRow
@@ -448,12 +460,12 @@ export default function InventoryReorder() {
                           row.needsReorder && !row.critical && "bg-amber-50 hover:bg-amber-100/80"
                         )}
                       >
-                        <TableCell className="w-12 pr-0">
+                        <TableCell className="w-9 px-0.5 py-1.5">
                           <Button
                             type="button"
                             variant="ghost"
                             size="icon"
-                            className="h-8 w-8"
+                            className="h-7 w-7"
                             aria-label={`${isExpanded ? "Hide" : "Show"} orders for ${row.name}`}
                             aria-expanded={isExpanded}
                             onClick={() => toggleExpanded(rowKey)}
@@ -461,8 +473,8 @@ export default function InventoryReorder() {
                             <ChevronRight className={cn("h-4 w-4 transition-transform", isExpanded && "rotate-90")} />
                           </Button>
                         </TableCell>
-                        <TableCell className="min-w-[18rem] font-medium">{row.name}</TableCell>
-                        <TableCell className="min-w-[7rem] text-muted-foreground">{row.sku || "-"}</TableCell>
+                        <TableCell className="break-words px-1.5 py-2 font-medium leading-tight md:px-2">{row.name}</TableCell>
+                        <TableCell className="break-words px-1.5 py-2 text-muted-foreground md:px-2">{row.sku || "-"}</TableCell>
                         <NumberCell value={row.available} />
                         <NumberCell value={row.status9} />
                         <NumberCell value={row.finalQty} />
@@ -470,14 +482,21 @@ export default function InventoryReorder() {
                         <NumberCell value={row.combined} />
                         <NumberCell value={row.reorderPoint} />
                         <NumberCell value={row.reorderQty} />
-                        <TableCell>
+                        <TableCell className="px-1.5 py-2 md:px-2">
+                          <div className="flex flex-col items-start gap-1">
                           {row.critical ? (
-                            <Badge variant="destructive">Critical</Badge>
+                            <Badge variant="destructive" className="px-2 py-0 text-[11px]">Critical</Badge>
                           ) : row.needsReorder ? (
-                            <Badge variant="warning">Reorder</Badge>
+                            <Badge variant="warning" className="px-2 py-0 text-[11px]">Reorder</Badge>
                           ) : (
-                            <Badge variant="secondary">Stocked</Badge>
+                            <Badge variant="secondary" className="px-2 py-0 text-[11px]">Stocked</Badge>
                           )}
+                          {hasBulkBigCommerceOrder ? (
+                            <Badge variant="outline" className="whitespace-normal px-2 py-0 text-center text-[10px] leading-tight">
+                              Bulk order in BC
+                            </Badge>
+                          ) : null}
+                          </div>
                         </TableCell>
                       </TableRow>
                       {isExpanded ? (
@@ -518,6 +537,7 @@ function OrderDetails({ orders }: OrderDetailsProps) {
         title="BigCommerce Aggiebuy Approval (Status 9)"
         orders={orders.bigCommerce}
         emptyMessage="This product is not on any Status 9 BigCommerce orders."
+        getOrderHref={(order) => `${BIGCOMMERCE_ORDER_ADMIN_BASE}/${encodeURIComponent(order.orderNumber)}`}
       />
       <OrderSourceList
         title="InFlow active sales orders"
@@ -532,9 +552,10 @@ type OrderSourceListProps = {
   title: string;
   orders: InventoryReorderOrderDetail[];
   emptyMessage: string;
+  getOrderHref?: (order: InventoryReorderOrderDetail) => string;
 };
 
-function OrderSourceList({ title, orders, emptyMessage }: OrderSourceListProps) {
+function OrderSourceList({ title, orders, emptyMessage, getOrderHref }: OrderSourceListProps) {
   const totalQuantity = orders.reduce((total, order) => total + order.quantity, 0);
 
   return (
@@ -558,7 +579,18 @@ function OrderSourceList({ title, orders, emptyMessage }: OrderSourceListProps) 
               )}
             >
               <div className="min-w-0">
-                <p className="font-medium">Order {order.orderNumber}</p>
+                {getOrderHref ? (
+                  <a
+                    href={getOrderHref(order)}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="font-medium text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                  >
+                    Order {order.orderNumber}
+                  </a>
+                ) : (
+                  <p className="font-medium">Order {order.orderNumber}</p>
+                )}
                 <p className="text-xs capitalize text-muted-foreground">{order.status}</p>
               </div>
               <div className="flex items-center gap-2">
@@ -599,5 +631,5 @@ function InventoryMetric({ label, value, tone, compact = false }: InventoryMetri
 }
 
 function NumberCell({ value }: { value: number }) {
-  return <TableCell className="text-right tabular-nums">{value.toLocaleString()}</TableCell>;
+  return <TableCell className="px-1.5 py-2 text-right tabular-nums md:px-2">{value.toLocaleString()}</TableCell>;
 }

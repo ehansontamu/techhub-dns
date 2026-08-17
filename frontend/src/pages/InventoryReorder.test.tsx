@@ -78,8 +78,35 @@ describe("InventoryReorder", () => {
             ],
           },
         },
+        {
+          name: "Mouse",
+          sku: "MS-1",
+          quantityAvailable: "20",
+          quantityOnOrder: "0",
+          bigCommerceStatus9: "9",
+          available: 20,
+          status9: 9,
+          finalQty: 11,
+          onOrder: 0,
+          combined: 11,
+          reorderPoint: 5,
+          reorderQty: 10,
+          needsReorder: false,
+          critical: false,
+          orders: {
+            bigCommerce: [
+              {
+                orderId: "902",
+                orderNumber: "902",
+                quantity: 9,
+                status: "Aggiebuy Approval (Status 9)",
+              },
+            ],
+            inflow: [],
+          },
+        },
       ],
-      summary: { total: 1, needs_reorder: 0, critical: 0 },
+      summary: { total: 2, needs_reorder: 0, critical: 0 },
       latest_job: null,
       has_data: true,
       config: {
@@ -101,12 +128,17 @@ describe("InventoryReorder", () => {
 
     await waitFor(() => expect(screen.getByText("Laptop")).toBeInTheDocument());
     expect(screen.getByText("BC Aggiebuy Approval (Status 9)")).toBeInTheDocument();
+    expect(screen.getAllByText("Bulk order in BC")).toHaveLength(1);
 
     fireEvent.click(screen.getByRole("button", { name: "Show orders for Laptop" }));
 
     expect(screen.getByText("BigCommerce Aggiebuy Approval (Status 9)")).toBeInTheDocument();
-    expect(screen.getByText("Order 901")).toBeInTheDocument();
-    expect(screen.getByText("Order TH1001")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Order 901" })).toHaveAttribute(
+      "href",
+      "https://store-jsj7fos9p1.mybigcommerce.com/manage/orders/901"
+    );
+    expect(screen.getByRole("link", { name: "Order 901" })).toHaveAttribute("target", "_blank");
+    expect(screen.getByText("Order TH1001").closest("a")).toBeNull();
     expect(screen.getByText("10+ units")).toBeInTheDocument();
   });
 });
