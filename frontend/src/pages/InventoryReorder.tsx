@@ -420,8 +420,8 @@ export default function InventoryReorder() {
             >
               10+ BC orders
               <Badge
-                variant={showTenPlusOnly ? "secondary" : "outline"}
-                className="ml-2 min-w-6 justify-center px-1.5 tabular-nums"
+                variant="outline"
+                className="ml-2 min-w-6 justify-center border-transparent bg-[#d97706] px-1.5 text-white tabular-nums"
               >
                 {data?.summary.ten_plus_bc_order_items ?? 0}
               </Badge>
