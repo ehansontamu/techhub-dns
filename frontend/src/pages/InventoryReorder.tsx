@@ -83,6 +83,9 @@ const formatScheduleTimes = (times: string): string => {
   return labels.length > 0 ? labels.join(", ") : "7:30 AM, 12 PM, 3 PM";
 };
 
+const hasTenPlusBigCommerceOrder = (row: InventoryReorderRow): boolean =>
+  Boolean(row.orders?.bigCommerce.some((order) => order.quantity >= 10));
+
 const compareRows = (left: InventoryReorderRow, right: InventoryReorderRow, sortKey: SortKey) => {
   if (sortKey === "name" || sortKey === "sku") {
     return String(left[sortKey] ?? "").localeCompare(String(right[sortKey] ?? ""));
@@ -92,7 +95,8 @@ const compareRows = (left: InventoryReorderRow, right: InventoryReorderRow, sort
     const getRank = (row: InventoryReorderRow) => {
       if (row.critical) return 0;
       if (row.needsReorder) return 1;
-      return 2;
+      if (hasTenPlusBigCommerceOrder(row)) return 2;
+      return 3;
     };
 
     return getRank(left) - getRank(right);
@@ -107,6 +111,7 @@ export default function InventoryReorder() {
   const [data, setData] = useState<InventoryReorderResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [showAll, setShowAll] = useState(false);
+  const [showTenPlusOnly, setShowTenPlusOnly] = useState(false);
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("status");
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
@@ -126,7 +131,7 @@ export default function InventoryReorder() {
       setLoading(true);
     }
     try {
-      const payload = await inventoryReorderApi.getData(showAll);
+      const payload = await inventoryReorderApi.getData(showAll || showTenPlusOnly);
       setData(payload);
       if (isRunningJob(payload.latest_job)) {
         setActiveJob(payload.latest_job);
@@ -142,7 +147,7 @@ export default function InventoryReorder() {
         setLoading(false);
       }
     }
-  }, [isAdmin, showAll]);
+  }, [isAdmin, showAll, showTenPlusOnly]);
 
   useEffect(() => {
     void loadData();
@@ -231,17 +236,20 @@ export default function InventoryReorder() {
   const rows = data?.rows ?? [];
   const filteredRows = useMemo(() => {
     const query = search.trim().toLowerCase();
+    const scopedRows = showTenPlusOnly
+      ? rows.filter(hasTenPlusBigCommerceOrder)
+      : rows;
     const searched = query
-      ? rows.filter((row) =>
+      ? scopedRows.filter((row) =>
           `${row.name} ${row.sku}`.toLowerCase().includes(query)
         )
-      : rows;
+      : scopedRows;
 
     return [...searched].sort((left, right) => {
       const comparison = compareRows(left, right, sortKey);
       return sortDirection === "asc" ? comparison : -comparison;
     });
-  }, [rows, search, sortDirection, sortKey]);
+  }, [rows, search, showTenPlusOnly, sortDirection, sortKey]);
 
   const toggleSort = (key: SortKey) => {
     if (sortKey === key) {
@@ -403,6 +411,21 @@ export default function InventoryReorder() {
                 className="pl-9"
               />
             </div>
+            <Button
+              type="button"
+              variant={showTenPlusOnly ? "default" : "outline"}
+              aria-pressed={showTenPlusOnly}
+              onClick={() => setShowTenPlusOnly((current) => !current)}
+              className="whitespace-nowrap"
+            >
+              10+ BC orders
+              <Badge
+                variant={showTenPlusOnly ? "secondary" : "outline"}
+                className="ml-2 min-w-6 justify-center px-1.5 tabular-nums"
+              >
+                {data?.summary.ten_plus_bc_order_items ?? 0}
+              </Badge>
+            </Button>
             <div className="space-y-1">
               <Checkbox checked={showAll} onChange={(event) => setShowAll(event.target.checked)} label="Show all items" />
               <p className="text-xs text-muted-foreground">Includes products with reorder qty 0.</p>
@@ -450,9 +473,7 @@ export default function InventoryReorder() {
                 {filteredRows.map((row) => {
                   const rowKey = `${row.sku}-${row.name}`;
                   const isExpanded = expandedRows.has(rowKey);
-                  const hasBulkBigCommerceOrder = Boolean(
-                    row.orders?.bigCommerce.some((order) => order.quantity >= 10)
-                  );
+                  const hasBulkBigCommerceOrder = hasTenPlusBigCommerceOrder(row);
                   return (
                     <Fragment key={rowKey}>
                       <TableRow

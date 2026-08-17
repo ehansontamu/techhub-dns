@@ -284,6 +284,50 @@ def test_latest_summary_path_is_absolute_for_file_downloads(tmp_path):
     assert latest_path.is_absolute()
 
 
+def test_latest_summary_counts_ten_plus_bc_items_regardless_of_reorder_settings(tmp_path):
+    service = InventoryReorderService(
+        SimpleNamespace(
+            storage_root=str(tmp_path),
+            inventory_reorder_refresh_cooldown_seconds=0,
+            inventory_reorder_scheduled_refresh_enabled=False,
+            inventory_reorder_scheduled_refresh_times="7:30",
+            inventory_reorder_scheduled_refresh_timezone="America/Chicago",
+            inflow_api_key="test",
+            inventory_reorder_bigcommerce_token="test",
+            inflow_company_id="company",
+            inventory_reorder_location_id="location",
+            inventory_reorder_bigcommerce_store_id="store",
+        )
+    )
+    summary_path = tmp_path / "inventory-reorder" / "inventory_summary_simple.json"
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    summary_path.write_text(
+        """
+[
+  {
+    "name": "Bulk Item",
+    "sku": "BULK1",
+    "quantityAvailable": "20",
+    "quantityOnOrder": "0",
+    "bigCommerceStatus9": "12",
+    "reorderPoint": "0",
+    "reorderQty": "0",
+    "orders": {
+      "bigCommerce": [{"orderId": "500", "orderNumber": "500", "quantity": 12}],
+      "inflow": []
+    }
+  }
+]
+""".strip(),
+        encoding="utf-8",
+    )
+
+    result = service.get_latest_summary(show_all=False)
+
+    assert result["rows"] == []
+    assert result["summary"]["ten_plus_bc_order_items"] == 1
+
+
 if __name__ == "__main__":
     test_compute_inventory_reorder_rows_flags_reorder_items_first()
     test_compute_inventory_reorder_rows_marks_negative_final_qty_critical()
@@ -298,4 +342,5 @@ if __name__ == "__main__":
     with tempfile.TemporaryDirectory() as tmp:
         test_inventory_reorder_latest_job_reads_persisted_metadata(Path(tmp))
         test_latest_summary_path_is_absolute_for_file_downloads(Path(tmp))
+        test_latest_summary_counts_ten_plus_bc_items_regardless_of_reorder_settings(Path(tmp))
     print("[PASS] inventory reorder service tests passed")

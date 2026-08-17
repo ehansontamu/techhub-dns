@@ -65,6 +65,7 @@ export interface InventoryReorderSummary {
   total: number;
   needs_reorder: number;
   critical: number;
+  ten_plus_bc_order_items: number;
 }
 
 export interface InventoryReorderResponse {

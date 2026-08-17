@@ -66,6 +66,19 @@ def _is_fulfilled_order_detail(detail: Any) -> bool:
     return status == "fulfilled" or status.startswith("fulfilled ")
 
 
+def _has_ten_plus_bigcommerce_order(row: Any) -> bool:
+    if not isinstance(row, dict):
+        return False
+    orders = row.get("orders")
+    if not isinstance(orders, dict):
+        return False
+    bigcommerce_orders = orders.get("bigCommerce", [])
+    return isinstance(bigcommerce_orders, list) and any(
+        isinstance(order, dict) and _to_int(order.get("quantity"), 0) >= 10
+        for order in bigcommerce_orders
+    )
+
+
 def compute_inventory_reorder_rows(
     summary: list[dict[str, Any]], *, show_all: bool = False
 ) -> list[dict[str, Any]]:
@@ -322,9 +335,14 @@ class InventoryReorderService:
             raise ValueError("Stored inventory summary must be a JSON array.")
 
         rows = compute_inventory_reorder_rows(payload, show_all=show_all)
+        all_rows = rows if show_all else compute_inventory_reorder_rows(payload, show_all=True)
+        row_summary = self._build_row_summary(rows)
+        row_summary["ten_plus_bc_order_items"] = sum(
+            1 for row in all_rows if _has_ten_plus_bigcommerce_order(row)
+        )
         return {
             "rows": rows,
-            "summary": self._build_row_summary(rows),
+            "summary": row_summary,
             "latest_job": self.latest_job(),
             "has_data": True,
             "config": self.get_config_status(),
@@ -760,6 +778,9 @@ class InventoryReorderService:
             "total": len(rows),
             "needs_reorder": sum(1 for row in rows if row.get("needsReorder")),
             "critical": sum(1 for row in rows if row.get("critical")),
+            "ten_plus_bc_order_items": sum(
+                1 for row in rows if _has_ten_plus_bigcommerce_order(row)
+            ),
         }
 
     def _ensure_configured(self) -> None:

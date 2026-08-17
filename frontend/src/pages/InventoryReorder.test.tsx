@@ -112,7 +112,7 @@ describe("InventoryReorder", () => {
           },
         },
       ],
-      summary: { total: 2, needs_reorder: 0, critical: 0 },
+      summary: { total: 2, needs_reorder: 0, critical: 0, ten_plus_bc_order_items: 1 },
       latest_job: null,
       has_data: true,
       config: {
@@ -134,6 +134,7 @@ describe("InventoryReorder", () => {
 
     await waitFor(() => expect(screen.getByText("Laptop")).toBeInTheDocument());
     expect(screen.getByText("BC Aggiebuy Approval (Status 9)")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "10+ BC orders 1" })).toBeInTheDocument();
     expect(screen.queryByText("Bulk order in BC")).not.toBeInTheDocument();
     expect(screen.getAllByText("10+ order")).toHaveLength(1);
     expect(screen.queryByText("10+ units")).not.toBeInTheDocument();
@@ -152,5 +153,12 @@ describe("InventoryReorder", () => {
       "https://app.inflowinventory.com/sales-orders/inflow-1"
     );
     expect(screen.queryByText("Order TH0999")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "10+ BC orders 1" }));
+    await waitFor(() => expect(mockedInventoryReorderApi.getData).toHaveBeenLastCalledWith(true));
+    await waitFor(() => {
+      expect(screen.getByText("Laptop")).toBeInTheDocument();
+      expect(screen.queryByText("Mouse")).not.toBeInTheDocument();
+    });
   });
 });
