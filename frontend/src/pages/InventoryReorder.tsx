@@ -493,12 +493,7 @@ export default function InventoryReorder() {
                             <Badge variant="secondary" className="px-2 py-0 text-[11px]">Stocked</Badge>
                           )}
                           {hasBulkBigCommerceOrder ? (
-                            <>
-                              <Badge variant="outline" className="whitespace-normal px-2 py-0 text-center text-[10px] leading-tight">
-                                Bulk order in BC
-                              </Badge>
-                              <Badge variant="warning" className="px-2 py-0 text-[10px]">10+ units</Badge>
-                            </>
+                            <Badge variant="warning" className="px-2 py-0 text-[10px]">10+ order</Badge>
                           ) : null}
                           </div>
                         </TableCell>

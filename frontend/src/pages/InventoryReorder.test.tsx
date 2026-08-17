@@ -134,12 +134,13 @@ describe("InventoryReorder", () => {
 
     await waitFor(() => expect(screen.getByText("Laptop")).toBeInTheDocument());
     expect(screen.getByText("BC Aggiebuy Approval (Status 9)")).toBeInTheDocument();
-    expect(screen.getAllByText("Bulk order in BC")).toHaveLength(1);
-    expect(screen.getAllByText("10+ units")).toHaveLength(1);
+    expect(screen.queryByText("Bulk order in BC")).not.toBeInTheDocument();
+    expect(screen.getAllByText("10+ order")).toHaveLength(1);
+    expect(screen.queryByText("10+ units")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Show orders for Laptop" }));
 
-    expect(screen.getAllByText("10+ units")).toHaveLength(2);
+    expect(screen.getAllByText("10+ units")).toHaveLength(1);
     expect(screen.getByText("BigCommerce Aggiebuy Approval (Status 9)")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Order 901" })).toHaveAttribute(
       "href",
