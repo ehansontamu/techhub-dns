@@ -1,6 +1,7 @@
 import sys
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from unittest.mock import patch
 
 sys.path.append(".")
 
@@ -136,6 +137,67 @@ def test_build_simple_summary_preserves_order_details_by_source():
     assert summary[0]["orders"]["inflow"][0]["orderNumber"] == "TH1001"
 
 
+def test_inflow_order_details_exclude_fulfilled_orders_and_preserve_guid():
+    service = InventoryReorderService(
+        SimpleNamespace(
+            inflow_api_url="https://inflow.example.test",
+            inflow_company_id="company-1",
+            inventory_reorder_request_delay_seconds=0,
+        )
+    )
+
+    class FakeResponse:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self._payload
+
+    responses = [
+        FakeResponse(
+            [
+                {
+                    "salesOrderId": "fulfilled-guid",
+                    "orderNumber": "TH1000",
+                    "inventoryStatus": "fulfilled",
+                    "lines": [
+                        {
+                            "productId": "product-1",
+                            "quantity": {"standardQuantity": "15"},
+                        }
+                    ],
+                },
+                {
+                    "salesOrderId": "active-guid",
+                    "orderNumber": "TH1001",
+                    "inventoryStatus": "started",
+                    "lines": [
+                        {
+                            "productId": "product-1",
+                            "quantity": {"standardQuantity": "3"},
+                        }
+                    ],
+                },
+            ]
+        ),
+        FakeResponse([]),
+    ]
+
+    fake_requests = SimpleNamespace(get=lambda *_args, **_kwargs: responses.pop(0))
+    with patch.dict(sys.modules, {"requests": fake_requests}):
+        details = service._fetch_inflow_active_order_details(
+            {"Authorization": "Bearer test"},
+            progress=lambda _message, _pct: None,
+        )
+
+    assert len(details["product-1"]) == 1
+    assert details["product-1"][0]["orderId"] == "active-guid"
+    assert details["product-1"][0]["orderNumber"] == "TH1001"
+
+
 def test_inventory_reorder_refresh_cooldown_uses_latest_start_time():
     service = InventoryReorderService(
         SimpleNamespace(inventory_reorder_refresh_cooldown_seconds=180)
@@ -202,6 +264,7 @@ if __name__ == "__main__":
     test_compute_inventory_reorder_rows_marks_negative_final_qty_critical()
     test_compute_inventory_reorder_rows_hides_zero_reorder_quantity_by_default()
     test_build_simple_summary_preserves_order_details_by_source()
+    test_inflow_order_details_exclude_fulfilled_orders_and_preserve_guid()
     test_inventory_reorder_refresh_cooldown_uses_latest_start_time()
     import tempfile
     from pathlib import Path

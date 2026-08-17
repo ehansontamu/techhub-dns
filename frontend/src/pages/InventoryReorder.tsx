@@ -22,6 +22,7 @@ type SortKey = "name" | "sku" | "available" | "status9" | "finalQty" | "onOrder"
 type SortDirection = "asc" | "desc";
 
 const BIGCOMMERCE_ORDER_ADMIN_BASE = "https://store-jsj7fos9p1.mybigcommerce.com/manage/orders";
+const INFLOW_SALES_ORDER_BASE = "https://app.inflowinventory.com/sales-orders";
 
 const sortableColumns: Array<{ key: SortKey; label: string; align?: "right"; width: string }> = [
   { key: "name", label: "Product Name", width: "w-[18%]" },
@@ -492,9 +493,12 @@ export default function InventoryReorder() {
                             <Badge variant="secondary" className="px-2 py-0 text-[11px]">Stocked</Badge>
                           )}
                           {hasBulkBigCommerceOrder ? (
-                            <Badge variant="outline" className="whitespace-normal px-2 py-0 text-center text-[10px] leading-tight">
-                              Bulk order in BC
-                            </Badge>
+                            <>
+                              <Badge variant="outline" className="whitespace-normal px-2 py-0 text-center text-[10px] leading-tight">
+                                Bulk order in BC
+                              </Badge>
+                              <Badge variant="warning" className="px-2 py-0 text-[10px]">10+ units</Badge>
+                            </>
                           ) : null}
                           </div>
                         </TableCell>
@@ -538,11 +542,13 @@ function OrderDetails({ orders }: OrderDetailsProps) {
         orders={orders.bigCommerce}
         emptyMessage="This product is not on any Status 9 BigCommerce orders."
         getOrderHref={(order) => `${BIGCOMMERCE_ORDER_ADMIN_BASE}/${encodeURIComponent(order.orderNumber)}`}
+        showBulkQuantityBadge
       />
       <OrderSourceList
         title="InFlow active sales orders"
         orders={orders.inflow}
         emptyMessage="This product is not on any active InFlow sales orders."
+        getOrderHref={(order) => `${INFLOW_SALES_ORDER_BASE}/${encodeURIComponent(order.orderId)}`}
       />
     </div>
   );
@@ -553,9 +559,16 @@ type OrderSourceListProps = {
   orders: InventoryReorderOrderDetail[];
   emptyMessage: string;
   getOrderHref?: (order: InventoryReorderOrderDetail) => string;
+  showBulkQuantityBadge?: boolean;
 };
 
-function OrderSourceList({ title, orders, emptyMessage, getOrderHref }: OrderSourceListProps) {
+function OrderSourceList({
+  title,
+  orders,
+  emptyMessage,
+  getOrderHref,
+  showBulkQuantityBadge = false,
+}: OrderSourceListProps) {
   const totalQuantity = orders.reduce((total, order) => total + order.quantity, 0);
 
   return (
@@ -575,7 +588,7 @@ function OrderSourceList({ title, orders, emptyMessage, getOrderHref }: OrderSou
               key={`${order.orderId}-${index}`}
               className={cn(
                 "flex flex-wrap items-center justify-between gap-3 px-3 py-2.5",
-                order.quantity >= 10 && "bg-amber-50"
+                showBulkQuantityBadge && order.quantity >= 10 && "bg-amber-50"
               )}
             >
               <div className="min-w-0">
@@ -594,7 +607,7 @@ function OrderSourceList({ title, orders, emptyMessage, getOrderHref }: OrderSou
                 <p className="text-xs capitalize text-muted-foreground">{order.status}</p>
               </div>
               <div className="flex items-center gap-2">
-                {order.quantity >= 10 ? <Badge variant="warning">10+ units</Badge> : null}
+                {showBulkQuantityBadge && order.quantity >= 10 ? <Badge variant="warning">10+ units</Badge> : null}
                 <span className="font-semibold tabular-nums">{order.quantity.toLocaleString()}</span>
               </div>
             </div>

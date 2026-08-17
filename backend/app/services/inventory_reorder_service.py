@@ -604,9 +604,12 @@ class InventoryReorderService:
             for order in orders:
                 if not isinstance(order, dict):
                     continue
+                inventory_status = str(order.get("inventoryStatus") or "").strip()
+                if inventory_status.lower() == "fulfilled":
+                    continue
                 order_id = str(order.get("salesOrderId") or order.get("id") or "")
                 order_number = str(order.get("orderNumber") or order_id or "Unknown")
-                status = str(order.get("inventoryStatus") or "Active")
+                status = inventory_status or "Active"
                 for line in order.get("lines", []) or []:
                     if not isinstance(line, dict):
                         continue

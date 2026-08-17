@@ -129,16 +129,20 @@ describe("InventoryReorder", () => {
     await waitFor(() => expect(screen.getByText("Laptop")).toBeInTheDocument());
     expect(screen.getByText("BC Aggiebuy Approval (Status 9)")).toBeInTheDocument();
     expect(screen.getAllByText("Bulk order in BC")).toHaveLength(1);
+    expect(screen.getAllByText("10+ units")).toHaveLength(1);
 
     fireEvent.click(screen.getByRole("button", { name: "Show orders for Laptop" }));
 
+    expect(screen.getAllByText("10+ units")).toHaveLength(2);
     expect(screen.getByText("BigCommerce Aggiebuy Approval (Status 9)")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Order 901" })).toHaveAttribute(
       "href",
       "https://store-jsj7fos9p1.mybigcommerce.com/manage/orders/901"
     );
     expect(screen.getByRole("link", { name: "Order 901" })).toHaveAttribute("target", "_blank");
-    expect(screen.getByText("Order TH1001").closest("a")).toBeNull();
-    expect(screen.getByText("10+ units")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Order TH1001" })).toHaveAttribute(
+      "href",
+      "https://app.inflowinventory.com/sales-orders/inflow-1"
+    );
   });
 });
