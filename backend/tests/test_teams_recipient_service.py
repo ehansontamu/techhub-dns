@@ -125,6 +125,34 @@ def test_notify_orders_in_delivery_aggregates_child_legs_for_same_recipient() ->
     print("[PASS] child legs in the same delivery collapse into one Teams notification")
 
 
+def test_inventory_reorder_notification_uses_bulk_order_payload() -> None:
+    service = TeamsRecipientService()
+    uploaded_payloads: list[dict] = []
+
+    def fake_upload_file_to_sharepoint(**kwargs):
+        uploaded_payloads.append(json.loads(kwargs["file_content"].decode("utf-8")))
+        return "sharepoint://teams/notification.json"
+
+    with patch(
+        "app.services.teams_recipient_service.graph_service.upload_file_to_sharepoint",
+        side_effect=fake_upload_file_to_sharepoint,
+    ):
+        assert service.send_inventory_reorder_notification(
+            recipient_email="recipient@example.com",
+            recipient_name="Recipient",
+            bigcommerce_order_id="12345",
+            order_items=["6 x Product A", "4 x Product B"],
+            total_quantity=10,
+        )
+
+    payload = uploaded_payloads[0]
+    assert payload["type"] == "inventory_reorder_notification"
+    assert payload["message"] == (
+        "Bulk BigCommerce Order Alert\n\n"
+        "BigCommerce order BC-12345 is a bulk order with 10 items."
+    )
+
+
 def test_notify_orders_in_delivery_keeps_separate_recipients_distinct() -> None:
     service = TeamsRecipientService()
     order_a = _make_order(

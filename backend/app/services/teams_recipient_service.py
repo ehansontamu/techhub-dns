@@ -58,6 +58,8 @@ class TeamsRecipientService:
         order_items: List[str] = None,
         order_numbers: List[str] = None,
         notification_group_key: str = None,
+        notification_type: str = "delivery_notification",
+        notification_message: Optional[str] = None,
         force: bool = False,
     ) -> bool:
         """
@@ -103,7 +105,7 @@ class TeamsRecipientService:
         # Extra fields are ignored by the flow today but preserve aggregation context.
         payload = {
             "id": f"notif_{safe_reference}_{int(datetime.now().timestamp())}",
-            "type": "delivery_notification",
+            "type": notification_type,
             "recipientEmail": recipient_email,
             "recipientName": recipient_name,
             "orderNumber": display_order_number,
@@ -113,6 +115,8 @@ class TeamsRecipientService:
             "deliveryRunner": delivery_runner,
             "createdAt": to_utc_iso_z(datetime.utcnow()),
         }
+        if notification_message:
+            payload["message"] = notification_message
         if notification_group_key:
             payload["notificationGroupKey"] = notification_group_key
 
@@ -154,10 +158,8 @@ class TeamsRecipientService:
     ) -> bool:
         """Queue a Teams alert for a newly detected high-quantity BC order.
 
-        The queue payload deliberately reuses the established delivery-notification
-        contract so the existing Power Automate flow can deliver it without a
-        separate integration.  ``notificationCategory`` lets the flow distinguish
-        this operational alert if it is later customized.
+        The payload is explicitly labeled for Power Automate so it can use a
+        bulk-order message template instead of the delivery template.
         """
         reference = f"BC-{bigcommerce_order_id}"
         payload_items = [
@@ -171,6 +173,11 @@ class TeamsRecipientService:
             delivery_runner="Inventory Reorder Alert",
             order_items=payload_items,
             notification_group_key=f"inventory-reorder-{bigcommerce_order_id}",
+            notification_type="inventory_reorder_notification",
+            notification_message=(
+                "Bulk BigCommerce Order Alert\n\n"
+                f"BigCommerce order {reference} is a bulk order with {total_quantity} items."
+            ),
             force=True,
         )
 
