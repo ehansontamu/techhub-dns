@@ -1,7 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { canGeneratePicklist, getOrderProductTableView, getPartialOrderInfo } from "./orderPartial";
+import { canGeneratePicklist, getOrderProductTableView, getPartialLegLabel, getPartialOrderInfo } from "./orderPartial";
 
 describe("getPartialOrderInfo", () => {
+  it("uses the persisted picked-leg suffix for the operator-facing part number", () => {
+    expect(
+      getPartialLegLabel({
+        inflow_order_id: "TH000140-P2",
+        parent_order_id: "parent-uuid",
+      } as any),
+    ).toBe("Part 2 leg");
+  });
+
   it("marks a child partial leg as a partial leg even when it is fully picked itself", () => {
     const info = getPartialOrderInfo({
       inflow_data: {
@@ -88,7 +97,7 @@ describe("getOrderProductTableView", () => {
       has_remainder: true,
     } as any);
 
-    expect(view.title).toBe("Remainder leg items");
+    expect(view.title).toBe("Final leg items");
     expect(view.rows).toEqual([
       {
         productId: "A",
@@ -111,7 +120,7 @@ describe("getOrderProductTableView", () => {
       parent_order_id: "parent-uuid",
     } as any);
 
-    expect(view.title).toBe("Picked leg items");
+    expect(view.title).toBe("Part 1 leg items");
     expect(view.rows).toEqual([
       {
         productId: "B",

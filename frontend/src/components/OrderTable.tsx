@@ -13,7 +13,7 @@ import {
 } from "./ui/table";
 import StatusBadge from "./StatusBadge";
 import { formatDeliveryLocation } from "../utils/location";
-import { getPartialOrderInfo } from "../utils/orderPartial";
+import { getPartialLegLabel, getPartialOrderInfo } from "../utils/orderPartial";
 import { formatToCentralTime } from "../utils/timezone";
 
 interface OrderTableProps {
@@ -110,8 +110,8 @@ export default function OrderTable({
     const getOrderNumber = (order: Order) => order.inflow_order_id || order.id;
     const getOrderLegLabel = (order: Order) => {
         const partialInfo = getPartialOrderInfo(order);
-        if (partialInfo.isPartialLeg) return "Picked leg";
-        if (partialInfo.hasRemainder) return "Remainder leg";
+        const partialLegLabel = getPartialLegLabel(order);
+        if (partialLegLabel) return partialLegLabel;
         if (partialInfo.isPartial) return "Partial order";
         return null;
     };
@@ -162,7 +162,7 @@ export default function OrderTable({
                                             className="h-6 px-2 py-0 text-[10px] font-medium uppercase tracking-wide"
                                         />
                                         {legLabel ? (
-                                            <Badge variant={legLabel === "Remainder leg" ? "warning" : "secondary"} className="text-[10px] uppercase tracking-wide">
+                                            <Badge variant={legLabel === "Final leg" ? "warning" : "secondary"} className="text-[10px] uppercase tracking-wide">
                                                 {legLabel}
                                             </Badge>
                                         ) : null}
@@ -257,7 +257,7 @@ export default function OrderTable({
                                         {getOrderLegLabel(order) ? (
                                             <div className="basis-full">
                                                 <Badge
-                                                    variant={getOrderLegLabel(order) === "Remainder leg" ? "warning" : "secondary"}
+                                                    variant={getOrderLegLabel(order) === "Final leg" ? "warning" : "secondary"}
                                                     className="text-[10px] uppercase tracking-wide"
                                                 >
                                                     {getOrderLegLabel(order)}
