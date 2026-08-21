@@ -328,6 +328,47 @@ def test_latest_summary_counts_ten_plus_bc_items_regardless_of_reorder_settings(
     assert result["summary"]["ten_plus_bc_order_items"] == 1
 
 
+def test_new_high_quantity_bigcommerce_orders_notify_once_after_baseline(tmp_path, monkeypatch):
+    service = InventoryReorderService(
+        SimpleNamespace(
+            storage_root=str(tmp_path),
+            inventory_reorder_teams_notifications_enabled=True,
+            inventory_reorder_teams_recipient_email="inventory@example.com",
+            inventory_reorder_teams_recipient_name="Inventory Team",
+            inventory_reorder_teams_minimum_order_quantity=10,
+        )
+    )
+    notifications = []
+
+    def fake_send(**kwargs):
+        notifications.append(kwargs)
+        return True
+
+    monkeypatch.setattr(service, "_send_bigcommerce_order_alert", fake_send)
+    existing_order = {"id": "100", "products": [{"name": "Existing", "quantity": 12}]}
+    new_order = {"id": "101", "products": [{"name": "New", "quantity": 10}]}
+
+    service._notify_new_high_quantity_bigcommerce_orders([existing_order])
+    service._notify_new_high_quantity_bigcommerce_orders([existing_order, new_order])
+    service._notify_new_high_quantity_bigcommerce_orders([existing_order, new_order])
+
+    assert len(notifications) == 1
+    assert notifications[0]["bigcommerce_order_id"] == "101"
+    assert notifications[0]["total_quantity"] == 10
+
+
+def test_merge_bigcommerce_orders_deduplicates_status_and_recent_results():
+    merged = InventoryReorderService._merge_bigcommerce_orders(
+        [{"id": "100", "products": [{"name": "Status 9", "quantity": 10}]}],
+        [
+            {"id": "100", "products": [{"name": "Duplicate", "quantity": 10}]},
+            {"id": "101", "products": [{"name": "Approved", "quantity": 10}]},
+        ],
+    )
+
+    assert [order["id"] for order in merged] == ["100", "101"]
+
+
 if __name__ == "__main__":
     test_compute_inventory_reorder_rows_flags_reorder_items_first()
     test_compute_inventory_reorder_rows_marks_negative_final_qty_critical()

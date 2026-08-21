@@ -268,6 +268,11 @@ class Settings(BaseSettings):
     inventory_reorder_scheduled_refresh_enabled: bool = True
     inventory_reorder_scheduled_refresh_times: str = "7:30,12:00,15:00"
     inventory_reorder_scheduled_refresh_timezone: str = "America/Chicago"
+    inventory_reorder_teams_notifications_enabled: bool = False
+    inventory_reorder_teams_recipient_email: Optional[str] = None
+    inventory_reorder_teams_recipient_name: str = "Inventory Team"
+    inventory_reorder_teams_minimum_order_quantity: int = 10
+    inventory_reorder_bigcommerce_order_lookback_days: int = 7
 
     model_config = SettingsConfigDict(
         env_file=".env", case_sensitive=False, extra="ignore"

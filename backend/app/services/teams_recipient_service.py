@@ -144,6 +144,36 @@ class TeamsRecipientService:
             )
             return False
 
+    def send_inventory_reorder_notification(
+        self,
+        recipient_email: str,
+        recipient_name: str,
+        bigcommerce_order_id: str,
+        order_items: List[str],
+        total_quantity: int,
+    ) -> bool:
+        """Queue a Teams alert for a newly detected high-quantity BC order.
+
+        The queue payload deliberately reuses the established delivery-notification
+        contract so the existing Power Automate flow can deliver it without a
+        separate integration.  ``notificationCategory`` lets the flow distinguish
+        this operational alert if it is later customized.
+        """
+        reference = f"BC-{bigcommerce_order_id}"
+        payload_items = [
+            f"{total_quantity} total units",
+            *order_items,
+        ]
+        return self.send_delivery_notification(
+            recipient_email=recipient_email,
+            recipient_name=recipient_name,
+            order_number=reference,
+            delivery_runner="Inventory Reorder Alert",
+            order_items=payload_items,
+            notification_group_key=f"inventory-reorder-{bigcommerce_order_id}",
+            force=True,
+        )
+
     @staticmethod
     def _sort_orders_for_notification(orders: List) -> List:
         return sorted(
