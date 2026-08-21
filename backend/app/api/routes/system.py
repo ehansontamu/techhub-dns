@@ -1787,6 +1787,42 @@ def test_teams_recipient():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+@bp.route("/test/teams-inventory-reorder", methods=["POST"])
+@require_admin
+def test_inventory_reorder_teams_notification():
+    """Queue the same Teams alert sent for a new 10+ BC order."""
+    from app.services.teams_recipient_service import teams_recipient_service
+
+    data = request.get_json() or {}
+    recipient_email = data.get("recipient_email")
+    recipient_name = data.get("recipient_name", "Test User")
+
+    if not recipient_email:
+        return jsonify({"error": "Missing 'recipient_email' in request body"}), 400
+
+    try:
+        success = teams_recipient_service.send_inventory_reorder_notification(
+            recipient_email=recipient_email,
+            recipient_name=recipient_name,
+            bigcommerce_order_id="TEST-10PLUS",
+            order_items=["6 x Test Product A", "4 x Test Product B"],
+            total_quantity=10,
+        )
+        if success:
+            return jsonify(
+                {
+                    "success": True,
+                    "message": f"10+ BC order test alert queued for {recipient_email}",
+                }
+            )
+        return jsonify(
+            {"success": False, "error": "Failed to queue 10+ BC order test alert. Check server logs."}
+        ), 500
+    except Exception as e:
+        logger.error("Inventory reorder Teams test failed: %s", e)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @bp.route("/test/inflow", methods=["POST"])
 @require_admin
 def test_inflow_connection():

@@ -163,6 +163,14 @@ export const settingsApi = {
     },
 
     /**
+     * Queue a test Teams alert matching the Inventory Reorder 10+ BC-order alert.
+     */
+    async testInventoryReorderTeamsRecipient(recipientEmail: string): Promise<TestResult> {
+        const response = await apiClient.post("/system/test/teams-inventory-reorder", { recipient_email: recipientEmail });
+        return response.data;
+    },
+
+    /**
      * Test Inflow API connection.
      */
     async testInflow(): Promise<TestResult> {

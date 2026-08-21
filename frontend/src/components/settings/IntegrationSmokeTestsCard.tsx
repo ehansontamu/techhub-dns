@@ -10,7 +10,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../ui
 import { Input } from "../ui/input";
 import { extractApiErrorMessage } from "../../utils/apiErrors";
 
-type ActionKind = "email" | "teams" | "inflow" | "sharepoint" | "webhook" | "sync";
+type ActionKind = "email" | "teams" | "inventoryReorderTeams" | "inflow" | "sharepoint" | "webhook" | "sync";
 
 interface ActionEntry {
     id: string;
@@ -26,6 +26,7 @@ export function IntegrationSmokeTestsCard() {
 
     const testEmailMutation = useMutation({ mutationFn: async (email: string) => settingsApi.testEmail(email) });
     const testTeamsMutation = useMutation({ mutationFn: async (email: string) => settingsApi.testTeamsRecipient(email) });
+    const testInventoryReorderTeamsMutation = useMutation({ mutationFn: async (email: string) => settingsApi.testInventoryReorderTeamsRecipient(email) });
     const testInflowMutation = useMutation({ mutationFn: async () => settingsApi.testInflow() });
     const testSharePointMutation = useMutation({ mutationFn: async () => settingsApi.testSharePoint() });
     const testWebhookMutation = useMutation({ mutationFn: async () => inflowApi.testWebhook() });
@@ -34,6 +35,7 @@ export function IntegrationSmokeTestsCard() {
     const busy =
         testEmailMutation.isPending ||
         testTeamsMutation.isPending ||
+        testInventoryReorderTeamsMutation.isPending ||
         testInflowMutation.isPending ||
         testSharePointMutation.isPending ||
         testWebhookMutation.isPending ||
@@ -46,7 +48,7 @@ export function IntegrationSmokeTestsCard() {
         ].slice(0, 4));
     };
 
-    const handleRecipientActions = async (kind: "email" | "teams") => {
+    const handleRecipientActions = async (kind: "email" | "teams" | "inventoryReorderTeams") => {
         if (!recipientEmail.trim()) {
             toast.error("Enter an email address to test");
             return;
@@ -63,7 +65,7 @@ export function IntegrationSmokeTestsCard() {
                     toast.error("Test email failed", { description: result.error || result.message || undefined });
                     pushAction("Email", "error", result.error || result.message || "Failed");
                 }
-            } else {
+            } else if (kind === "teams") {
                 const result = await testTeamsMutation.mutateAsync(recipientEmail.trim());
                 if (result.success) {
                     toast.success("Test Teams message queued", { description: result.message || undefined });
@@ -72,9 +74,18 @@ export function IntegrationSmokeTestsCard() {
                     toast.error("Test Teams message failed", { description: result.error || result.message || undefined });
                     pushAction("Teams", "error", result.error || result.message || "Failed");
                 }
+            } else {
+                const result = await testInventoryReorderTeamsMutation.mutateAsync(recipientEmail.trim());
+                if (result.success) {
+                    toast.success("10+ BC order Teams alert queued", { description: result.message || undefined });
+                    pushAction("10+ BC order Teams", "success", result.message || `Queued for ${recipientEmail.trim()}`);
+                } else {
+                    toast.error("10+ BC order Teams alert failed", { description: result.error || result.message || undefined });
+                    pushAction("10+ BC order Teams", "error", result.error || result.message || "Failed");
+                }
             }
         } catch (error: unknown) {
-            const label = kind === "email" ? "Email" : "Teams";
+            const label = kind === "email" ? "Email" : kind === "teams" ? "Teams" : "10+ BC order Teams";
             const message = extractApiErrorMessage(error, "Please try again.");
             toast.error(`${label} failed`, { description: message });
             pushAction(label, "error", message);
@@ -139,7 +150,7 @@ export function IntegrationSmokeTestsCard() {
                         onChange={(event) => setRecipientEmail(event.target.value)}
                         disabled={busy}
                     />
-                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
                         <Button onClick={() => void handleRecipientActions("email")} disabled={busy}>
                             {runningAction === "email" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Zap className="mr-2 h-4 w-4" />}
                             Test email
@@ -147,6 +158,10 @@ export function IntegrationSmokeTestsCard() {
                         <Button variant="secondary" onClick={() => void handleRecipientActions("teams")} disabled={busy}>
                             {runningAction === "teams" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Zap className="mr-2 h-4 w-4" />}
                             Test Teams
+                        </Button>
+                        <Button variant="secondary" onClick={() => void handleRecipientActions("inventoryReorderTeams")} disabled={busy}>
+                            {runningAction === "inventoryReorderTeams" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Zap className="mr-2 h-4 w-4" />}
+                            Test 10+ BC alert
                         </Button>
                     </div>
                 </div>
