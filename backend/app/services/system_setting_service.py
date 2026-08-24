@@ -40,7 +40,7 @@ DEFAULT_SETTINGS = {
         "type": SETTING_TYPE_BOOLEAN,
         "description": (
             "Enable automatic Teams notifications to delivery recipients when orders move "
-            "to In Delivery. This does not control Canopy asset-tag or BigCommerce alerts."
+            "to In Delivery."
         ),
     },
     SETTING_DOCUMENT_SIGNING_ENABLED: {

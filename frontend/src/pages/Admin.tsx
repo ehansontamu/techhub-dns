@@ -43,7 +43,7 @@ const adminQueryKeys = {
 const RULES: RuleMeta[] = [
     { key: "document_signing_enabled", title: "Document signing", description: "Require signing to complete delivery.", kind: "boolean" },
     { key: "email_notifications_enabled", title: "Email notifications", description: "Send email on workflow events.", kind: "boolean" },
-    { key: "teams_recipient_notifications_enabled", title: "Delivery recipient Teams notifications", description: "Controls automatic Teams messages to delivery recipients when orders move to In Delivery. Does not control Canopy asset-tag or BigCommerce alerts.", kind: "boolean" },
+    { key: "teams_recipient_notifications_enabled", title: "Delivery recipient Teams notifications", description: "Controls automatic Teams messages to delivery recipients when orders move to In Delivery.", kind: "boolean" },
     { key: "picklist_auto_print_enabled", title: "Picklist auto-print", description: "Push generated picklists to the print queue.", kind: "boolean" },
     { key: "require_asset_tags_before_picklist", title: "Asset tags before picklist", description: "Gate picklist generation on completed tagging.", kind: "boolean" },
     { key: "require_same_user_for_tagging_and_picklist", title: "Same user tag + picklist", description: "Require the same operator for both steps.", kind: "boolean" },
