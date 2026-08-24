@@ -38,7 +38,10 @@ DEFAULT_SETTINGS = {
     SETTING_TEAMS_RECIPIENT_ENABLED: {
         "value": "false",
         "type": SETTING_TYPE_BOOLEAN,
-        "description": "Enable sending delivery notifications to recipients via Teams",
+        "description": (
+            "Enable automatic Teams notifications to delivery recipients when orders move "
+            "to In Delivery. This does not control Canopy asset-tag or BigCommerce alerts."
+        ),
     },
     SETTING_DOCUMENT_SIGNING_ENABLED: {
         "value": "true",
