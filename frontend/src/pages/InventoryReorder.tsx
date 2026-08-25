@@ -251,6 +251,8 @@ export default function InventoryReorder() {
     });
   }, [rows, search, showTenPlusOnly, sortDirection, sortKey]);
 
+  const tenPlusBcOrderCount = data?.summary.ten_plus_bc_order_items ?? 0;
+
   const toggleSort = (key: SortKey) => {
     if (sortKey === key) {
       setSortDirection((current) => (current === "asc" ? "desc" : "asc"));
@@ -421,9 +423,14 @@ export default function InventoryReorder() {
               10+ BC orders
               <Badge
                 variant="outline"
-                className="ml-2 min-w-6 justify-center border-transparent bg-[#d97706] px-1.5 text-white tabular-nums"
+                className={cn(
+                  "ml-2 min-w-6 justify-center px-1.5 tabular-nums",
+                  tenPlusBcOrderCount > 0
+                    ? "border-transparent bg-[#d97706] text-white"
+                    : "border-current bg-transparent text-current"
+                )}
               >
-                {data?.summary.ten_plus_bc_order_items ?? 0}
+                {tenPlusBcOrderCount}
               </Badge>
             </Button>
             <div className="space-y-1">
