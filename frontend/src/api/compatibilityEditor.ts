@@ -93,10 +93,36 @@ export interface CompatibilityEditorPublication {
   filename: string;
 }
 
+export interface CompatibilityEditorChange {
+  id: string;
+  target: string;
+  mutationType: CompatibilityEditorMutation["type"];
+  baseVersion: number;
+  version: number;
+  proposedData: Record<string, unknown>;
+  currentData: Record<string, unknown> | null;
+  status: "pending" | "approved" | "rejected";
+  submittedBy: string;
+  updatedBy: string;
+  submittedAt: string | null;
+  updatedAt: string | null;
+  reviewedBy: string | null;
+  reviewedAt: string | null;
+  reviewNote: string | null;
+}
+
+export interface CompatibilityEditorApproval {
+  pendingCount: number;
+  pendingChanges: CompatibilityEditorChange[];
+}
+
 export interface CompatibilityEditorDocument {
   data: CompatibilityEditorPayload;
   revision: number;
+  workspaceRevision: number;
   versions: CompatibilityEditorVersions;
+  approvedVersions: CompatibilityEditorVersions;
+  approval: CompatibilityEditorApproval;
   publication: CompatibilityEditorPublication;
   duplicate?: boolean;
 }
@@ -164,8 +190,17 @@ export const compatibilityEditorApi = {
     pending: boolean;
     error: string | null;
     filename: string;
+    snapshotId: string | null;
   }> {
     const response = await apiClient.post("/system/compatibility-editor/publish");
+    return response.data;
+  },
+
+  async review(changeId: string, action: "approve" | "reject", note?: string): Promise<CompatibilityEditorDocument> {
+    const response = await apiClient.post(`/system/compatibility-editor/changes/${changeId}/review`, {
+      action,
+      ...(note ? { note } : {}),
+    });
     return response.data;
   },
 };

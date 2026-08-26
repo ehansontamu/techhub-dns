@@ -13,10 +13,12 @@ from app.models.system_setting import SystemSetting
 from app.models.print_job import PrintJob
 from app.models.compatibility_editor import (
     CompatibilityCell,
+    CompatibilityChangeRequest,
     CompatibilityComputer,
     CompatibilityDock,
     CompatibilityEditorOperation,
     CompatibilityEditorState,
+    CompatibilityPublicationSnapshot,
 )
 
 __all__ = [
@@ -38,8 +40,10 @@ __all__ = [
     "SystemSetting",
     "PrintJob",
     "CompatibilityCell",
+    "CompatibilityChangeRequest",
     "CompatibilityComputer",
     "CompatibilityDock",
     "CompatibilityEditorOperation",
     "CompatibilityEditorState",
+    "CompatibilityPublicationSnapshot",
 ]

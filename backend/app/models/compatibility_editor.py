@@ -13,6 +13,7 @@ from sqlalchemy import (
     String,
     Text,
 )
+from sqlalchemy.dialects import mysql
 
 from app.database import Base
 
@@ -24,6 +25,7 @@ class CompatibilityEditorState(Base):
 
     id = Column(String(32), primary_key=True, default="primary")
     revision = Column(Integer, nullable=False, default=0)
+    review_revision = Column(Integer, nullable=False, default=0)
     published_revision = Column(Integer, nullable=False, default=0)
     pending_since = Column(DateTime, nullable=True)
     last_published_at = Column(DateTime, nullable=True)
@@ -130,3 +132,53 @@ class CompatibilityEditorOperation(Base):
     target = Column(String(255), nullable=False)
     actor = Column(String(255), nullable=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+
+class CompatibilityChangeRequest(Base):
+    """A proposed compatibility edit that is isolated from approved data."""
+
+    __tablename__ = "compatibility_change_requests"
+    __table_args__ = (
+        Index(
+            "ix_compatibility_change_requests_status_target",
+            "status",
+            "target",
+        ),
+    )
+
+    id = Column(String(36), primary_key=True)
+    target = Column(String(255), nullable=False)
+    mutation_type = Column(String(50), nullable=False)
+    base_version = Column(Integer, nullable=False, default=0)
+    proposal_version = Column(Integer, nullable=False, default=1)
+    proposed_data = Column(JSON, nullable=False)
+    status = Column(String(20), nullable=False, default="pending")
+    submitted_by = Column(String(255), nullable=False)
+    updated_by = Column(String(255), nullable=False)
+    reviewed_by = Column(String(255), nullable=True)
+    review_note = Column(Text, nullable=True)
+    submitted_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(
+        DateTime,
+        nullable=False,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
+    reviewed_at = Column(DateTime, nullable=True)
+
+
+class CompatibilityPublicationSnapshot(Base):
+    """Immutable JSON body authorized by an explicit admin publish action."""
+
+    __tablename__ = "compatibility_publication_snapshots"
+
+    id = Column(String(36), primary_key=True)
+    revision = Column(Integer, nullable=False, index=True)
+    content = Column(Text().with_variant(mysql.LONGTEXT(), "mysql"), nullable=False)
+    sha256 = Column(String(64), nullable=False)
+    status = Column(String(20), nullable=False, default="queued", index=True)
+    requested_by = Column(String(255), nullable=False)
+    requested_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    last_attempt_at = Column(DateTime, nullable=True)
+    published_at = Column(DateTime, nullable=True)
+    last_error = Column(Text, nullable=True)

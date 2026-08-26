@@ -29,7 +29,12 @@ from app.database import get_db_session
 from app.models.system_setting import SystemSetting
 from app.models.order import Order
 from app.models.inflow_webhook import InflowWebhook, WebhookStatus
-from app.api.auth_middleware import get_current_user_email, require_admin, require_auth
+from app.api.auth_middleware import (
+    get_current_user_email,
+    is_current_user_admin,
+    require_admin,
+    require_auth,
+)
 from app.utils.timezone import to_utc_iso_z
 from app.services.audit_service import AuditService
 from app.services.print_job_service import (
@@ -42,14 +47,19 @@ from app.services.compatibility_editor_service import (
     CompatibilityEditorError,
     CompatibilityEditorNotInitialized,
     apply_mutation as apply_compatibility_editor_mutation,
-    get_document as get_compatibility_editor_document,
     import_bundled_seed_if_empty,
+)
+from app.services.compatibility_approval_service import (
+    get_workspace_document as get_compatibility_editor_workspace,
+    resolve_pending_after_admin_mutation,
+    review_change as review_compatibility_change_request,
+    submit_change as submit_compatibility_editor_change,
 )
 from app.services.compatibility_publisher_service import (
     COMPATIBILITY_SUPERAPP_FILENAME,
     is_publish_configured as is_compatibility_publish_configured,
-    publish_latest as publish_latest_compatibility_document,
-    schedule_publish as schedule_compatibility_publish,
+    publish_requested as publish_requested_compatibility_document,
+    request_publication as request_compatibility_publication,
 )
 import logging
 
@@ -1547,7 +1557,10 @@ def _emit_compatibility_editor_update(document: dict[str, Any]) -> None:
 
         socketio.emit(
             "compatibility_editor_updated",
-            {"revision": document["revision"]},
+            {
+                "revision": document["revision"],
+                "workspaceRevision": document.get("workspaceRevision", 0),
+            },
             room="compatibility-editor",
         )
     except Exception:
@@ -1555,16 +1568,15 @@ def _emit_compatibility_editor_update(document: dict[str, Any]) -> None:
 
 
 @bp.route("/compatibility-editor", methods=["GET"])
-@require_admin
+@require_auth
 def get_compatibility_editor_data():
     db = get_db_session()
     try:
-        document = get_compatibility_editor_document(db)
+        document = get_compatibility_editor_workspace(db)
     except CompatibilityEditorNotInitialized as exc:
         try:
-            document = import_bundled_seed_if_empty(
-                db, actor=get_current_user_email()
-            )
+            import_bundled_seed_if_empty(db, actor=get_current_user_email())
+            document = get_compatibility_editor_workspace(db)
         except (OSError, ValueError) as seed_exc:
             logger.exception("Failed to initialize compatibility editor seed")
             return jsonify(
@@ -1573,30 +1585,54 @@ def get_compatibility_editor_data():
     finally:
         db.close()
 
-    if document["publication"]["pending"]:
-        schedule_compatibility_publish()
     document["publication"]["filename"] = COMPATIBILITY_SUPERAPP_FILENAME
     document["publication"]["configured"] = is_compatibility_publish_configured()
     return jsonify(document)
 
 
 @bp.route("/compatibility-editor", methods=["PATCH"])
-@require_admin
+@require_auth
 def mutate_compatibility_editor_data():
     payload = request.get_json(silent=True)
     if payload is None:
         return jsonify({"error": "Missing JSON request body."}), 400
 
     db = get_db_session()
+    actor = get_current_user_email()
+    is_admin = is_current_user_admin()
     try:
-        document, duplicate = apply_compatibility_editor_mutation(
-            db,
-            payload,
-            actor=get_current_user_email(),
-        )
+        if is_admin:
+            try:
+                _approved_document, duplicate = apply_compatibility_editor_mutation(
+                    db,
+                    payload,
+                    actor=actor,
+                )
+            except CompatibilityEditorConflict as exc:
+                mutation = payload.get("mutation") if isinstance(payload, dict) else None
+                if (
+                    isinstance(mutation, dict)
+                    and mutation.get("type") == "cell.update"
+                    and exc.current_version is None
+                ):
+                    document, duplicate = submit_compatibility_editor_change(
+                        db, payload, actor=actor
+                    )
+                else:
+                    raise
+            else:
+                document = resolve_pending_after_admin_mutation(
+                    db, payload, actor=actor
+                )
+        else:
+            document, duplicate = submit_compatibility_editor_change(
+                db,
+                payload,
+                actor=actor,
+            )
     except CompatibilityEditorConflict as exc:
         try:
-            current_document = get_compatibility_editor_document(db)
+            current_document = get_compatibility_editor_workspace(db)
             current_document["publication"]["filename"] = (
                 COMPATIBILITY_SUPERAPP_FILENAME
             )
@@ -1622,7 +1658,6 @@ def mutate_compatibility_editor_data():
     finally:
         db.close()
 
-    schedule_compatibility_publish()
     if not duplicate:
         _emit_compatibility_editor_update(document)
     document["duplicate"] = duplicate
@@ -1631,10 +1666,63 @@ def mutate_compatibility_editor_data():
     return jsonify(document)
 
 
+@bp.route("/compatibility-editor/changes/<change_id>/review", methods=["POST"])
+@require_admin
+def review_compatibility_editor_change(change_id: str):
+    payload = request.get_json(silent=True) or {}
+    action = payload.get("action")
+    note = payload.get("note")
+    if note is not None and not isinstance(note, str):
+        return jsonify({"error": "'note' must be a string."}), 400
+
+    db = get_db_session()
+    try:
+        document = review_compatibility_change_request(
+            db,
+            change_id,
+            action=action,
+            actor=get_current_user_email(),
+            note=note,
+        )
+    except CompatibilityEditorConflict as exc:
+        return jsonify(
+            {
+                "error": str(exc),
+                "conflict": {
+                    "target": exc.target,
+                    "currentVersion": exc.current_version,
+                },
+            }
+        ), 409
+    except CompatibilityEditorNotInitialized as exc:
+        return jsonify({"error": str(exc)}), 503
+    except CompatibilityEditorError as exc:
+        return jsonify({"error": str(exc)}), 400
+    finally:
+        db.close()
+
+    _emit_compatibility_editor_update(document)
+    document["publication"]["filename"] = COMPATIBILITY_SUPERAPP_FILENAME
+    document["publication"]["configured"] = is_compatibility_publish_configured()
+    return jsonify(document)
+
+
 @bp.route("/compatibility-editor/publish", methods=["POST"])
 @require_admin
 def publish_compatibility_editor_data():
-    result = publish_latest_compatibility_document()
+    db = get_db_session()
+    try:
+        snapshot = request_compatibility_publication(
+            db, actor=get_current_user_email()
+        )
+        snapshot_id = snapshot.id
+    except Exception as exc:
+        logger.exception("Failed to prepare compatibility publication snapshot")
+        return jsonify({"error": str(exc)}), 500
+    finally:
+        db.close()
+
+    result = publish_requested_compatibility_document(snapshot_id=snapshot_id)
     status = 200 if result.success else 502
     return jsonify(
         {
@@ -1644,6 +1732,7 @@ def publish_compatibility_editor_data():
             "pending": result.pending,
             "error": result.error,
             "filename": COMPATIBILITY_SUPERAPP_FILENAME,
+            "snapshotId": result.snapshot_id,
         }
     ), status
 

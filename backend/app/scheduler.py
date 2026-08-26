@@ -10,7 +10,7 @@ from app.services.inflow_service import InflowService
 from app.services.inventory_reorder_service import InventoryReorderService
 from app.services.compatibility_publisher_service import (
     is_publish_configured as is_compatibility_publish_configured,
-    publish_latest as publish_latest_compatibility_document,
+    publish_requested as publish_requested_compatibility_document,
 )
 from app.models.inflow_webhook import InflowWebhook, WebhookStatus
 from app.config import settings
@@ -33,12 +33,12 @@ inventory_reorder_service = InventoryReorderService(settings)
 
 
 def publish_compatibility_editor_snapshot() -> None:
-    result = publish_latest_compatibility_document()
+    result = publish_requested_compatibility_document()
     if result.error:
         logger.warning("Compatibility editor reconciliation failed: %s", result.error)
     elif result.attempted:
         logger.info(
-            "Published compatibility editor revision %s (pending=%s)",
+            "Retried authorized compatibility publication revision %s (pending=%s)",
             result.revision,
             result.pending,
         )
@@ -535,12 +535,12 @@ def start_scheduler():
             publish_compatibility_editor_snapshot,
             trigger=IntervalTrigger(seconds=reconcile_seconds),
             id="compatibility_editor_publish",
-            name="Publish compatibility_superapp.json",
+            name="Retry authorized compatibility_superapp.json publication",
             replace_existing=True,
             next_run_time=datetime.now() + timedelta(seconds=reconcile_seconds),
         )
         logger.info(
-            "Compatibility editor WebDAV reconciliation enabled every %s seconds",
+            "Compatibility editor WebDAV retry reconciliation enabled every %s seconds",
             reconcile_seconds,
         )
 

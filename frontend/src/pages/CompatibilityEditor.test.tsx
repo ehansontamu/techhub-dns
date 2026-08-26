@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { compatibilityEditorApi, type CompatibilityEditorDocument } from "../api/compatibilityEditor";
 import { useAuth } from "../contexts/AuthContext";
@@ -14,6 +14,7 @@ vi.mock("../api/compatibilityEditor", async (importOriginal) => {
       getData: vi.fn(),
       mutate: vi.fn(),
       publish: vi.fn(),
+      review: vi.fn(),
     },
   };
 });
@@ -41,10 +42,20 @@ const document: CompatibilityEditorDocument = {
     docks: { D1: { name: "Dock", hidden: false } },
   },
   revision: 1,
+  workspaceRevision: 1,
   versions: {
     computers: { C1: 1 },
     docks: { D1: 1 },
     cells: { C1: { D1: 4 } },
+  },
+  approvedVersions: {
+    computers: { C1: 1 },
+    docks: { D1: 1 },
+    cells: { C1: { D1: 4 } },
+  },
+  approval: {
+    pendingCount: 0,
+    pendingChanges: [],
   },
   publication: {
     configured: true,
@@ -60,6 +71,8 @@ const document: CompatibilityEditorDocument = {
 };
 
 describe("CompatibilityEditor", () => {
+  afterEach(() => vi.restoreAllMocks());
+
   beforeEach(() => {
     vi.clearAllMocks();
     mockedUseAuth.mockReturnValue({
@@ -81,6 +94,15 @@ describe("CompatibilityEditor", () => {
     });
     mockedApi.getData.mockResolvedValue(document);
     mockedApi.mutate.mockResolvedValue({ ...document, revision: 2 });
+    mockedApi.publish.mockResolvedValue({
+      attempted: true,
+      success: true,
+      revision: 1,
+      pending: false,
+      error: null,
+      filename: "compatibility_superapp.json",
+      snapshotId: "snapshot-1",
+    });
   });
 
   it("saves a cell as a versioned database mutation", async () => {
@@ -88,7 +110,7 @@ describe("CompatibilityEditor", () => {
 
     const cell = await screen.findByTitle("Computer / Dock: Compatible");
     fireEvent.click(cell);
-    fireEvent.click(screen.getByRole("button", { name: "Save Cell" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save and Approve" }));
 
     await waitFor(() => expect(mockedApi.mutate).toHaveBeenCalledTimes(1));
     expect(mockedApi.mutate.mock.calls[0][0]).toMatchObject({
@@ -97,9 +119,19 @@ describe("CompatibilityEditor", () => {
       dockKey: "D1",
       expectedVersion: 4,
     });
+    expect(mockedApi.publish).not.toHaveBeenCalled();
   });
 
-  it("does not load editor data for a non-admin", async () => {
+  it("publishes only when an admin clicks Save to WebDAV", async () => {
+    vi.spyOn(window, "confirm").mockReturnValueOnce(true);
+    render(<CompatibilityEditor />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Save to WebDAV" }));
+
+    await waitFor(() => expect(mockedApi.publish).toHaveBeenCalledTimes(1));
+  });
+
+  it("lets a non-admin load the contributor editor", async () => {
     mockedUseAuth.mockReturnValue({
       ...mockedUseAuth.mock.results[0]?.value,
       user: null,
@@ -114,7 +146,8 @@ describe("CompatibilityEditor", () => {
 
     render(<CompatibilityEditor />);
 
-    expect(await screen.findByText("Access denied")).toBeInTheDocument();
-    expect(mockedApi.getData).not.toHaveBeenCalled();
+    expect(await screen.findByText(/cannot update the website JSON directly/i)).toBeInTheDocument();
+    expect(mockedApi.getData).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: "Save to WebDAV" })).not.toBeInTheDocument();
   });
 });

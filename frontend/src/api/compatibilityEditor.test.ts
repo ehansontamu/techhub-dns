@@ -22,10 +22,20 @@ const document: CompatibilityEditorDocument = {
     docks: { D1: { name: "Dock" } },
   },
   revision: 3,
+  workspaceRevision: 4,
   versions: {
     computers: { C1: 1 },
     docks: { D1: 1 },
     cells: { C1: { D1: 2 } },
+  },
+  approvedVersions: {
+    computers: { C1: 1 },
+    docks: { D1: 1 },
+    cells: { C1: { D1: 2 } },
+  },
+  approval: {
+    pendingCount: 0,
+    pendingChanges: [],
   },
   publication: {
     configured: true,
@@ -66,5 +76,16 @@ describe("compatibilityEditorApi", () => {
       operationId: "operation-1",
       mutation,
     });
+  });
+
+  it("sends an admin review decision without publishing", async () => {
+    vi.mocked(apiClient.post).mockResolvedValueOnce({ data: document });
+
+    await compatibilityEditorApi.review("change-1", "approve");
+
+    expect(apiClient.post).toHaveBeenCalledWith(
+      "/system/compatibility-editor/changes/change-1/review",
+      { action: "approve" }
+    );
   });
 });

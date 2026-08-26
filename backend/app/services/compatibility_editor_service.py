@@ -312,8 +312,6 @@ def _serialize_computer(row: CompatibilityComputer) -> dict[str, Any]:
     value["name"] = row.name
     value["url"] = row.url or ""
     value["hidden"] = bool(row.hidden)
-    if row.student_edited is not None:
-        value["studentEdited"] = bool(row.student_edited)
     return value
 
 
@@ -322,8 +320,6 @@ def _serialize_dock(row: CompatibilityDock) -> dict[str, Any]:
     value["name"] = row.name
     value["url"] = row.url or ""
     value["hidden"] = bool(row.hidden)
-    if row.student_edited is not None:
-        value["studentEdited"] = bool(row.student_edited)
     return value
 
 
@@ -339,8 +335,6 @@ def _serialize_cell(row: CompatibilityCell) -> dict[str, Any]:
         value["rebootNeeded"] = bool(row.reboot_needed)
     if row.notes:
         value["notes"] = row.notes
-    if row.student_edited is not None:
-        value["studentEdited"] = bool(row.student_edited)
     return value
 
 
@@ -434,7 +428,8 @@ def _set_cell_values(row: CompatibilityCell, raw_cell: dict[str, Any]) -> None:
         setattr(row, column_name, cell.get(json_field))
     row.reboot_needed = cell.get("rebootNeeded")
     row.notes = cell.get("notes")
-    row.student_edited = cell.get("studentEdited")
+    # Approval state lives in CompatibilityChangeRequest, never in exported data.
+    row.student_edited = None
     row.extra_data = {
         key: copy.deepcopy(value)
         for key, value in cell.items()
@@ -448,7 +443,7 @@ def _set_computer_values(row: CompatibilityComputer, raw: dict[str, Any]) -> Non
     row.name = _clean_name(raw.get("name"))
     row.url = _optional_text(raw.get("url"), "url")
     row.hidden = bool(_optional_bool(raw.get("hidden", False), "hidden"))
-    row.student_edited = _optional_bool(raw.get("studentEdited"), "studentEdited")
+    row.student_edited = None
     row.extra_data = {
         key: copy.deepcopy(value)
         for key, value in raw.items()
@@ -462,7 +457,7 @@ def _set_dock_values(row: CompatibilityDock, raw: dict[str, Any]) -> None:
     row.name = _clean_name(raw.get("name"))
     row.url = _optional_text(raw.get("url"), "url")
     row.hidden = bool(_optional_bool(raw.get("hidden", False), "hidden"))
-    row.student_edited = _optional_bool(raw.get("studentEdited"), "studentEdited")
+    row.student_edited = None
     row.extra_data = {
         key: copy.deepcopy(value)
         for key, value in raw.items()
@@ -532,6 +527,7 @@ def import_payload(
             if key not in {"computers", "docks"}
         } or None
         state.revision = int(state.revision or 0) + 1
+        state.review_revision = int(state.review_revision or 0) + 1
         state.published_revision = 0
         state.pending_since = datetime.utcnow()
         state.last_publish_error = None
@@ -687,7 +683,7 @@ def apply_mutation(
                     CompatibilityCell(
                         computer_sku=key,
                         dock_sku=dock.sku,
-                        student_edited=True,
+                        student_edited=None,
                         version=1,
                         updated_by=actor,
                     )
@@ -744,7 +740,7 @@ def apply_mutation(
                     CompatibilityCell(
                         computer_sku=computer.sku,
                         dock_sku=key,
-                        student_edited=True,
+                        student_edited=None,
                         version=1,
                         updated_by=actor,
                     )
@@ -786,6 +782,7 @@ def apply_mutation(
             raise CompatibilityEditorError(f"Unsupported mutation type '{mutation_type}'.")
 
         state.revision = int(state.revision) + 1
+        state.review_revision = int(state.review_revision or 0) + 1
         if state.published_revision >= state.revision:
             state.published_revision = state.revision - 1
         if state.pending_since is None:

@@ -243,11 +243,13 @@ class Settings(BaseSettings):
     compatibility_editor_staging_download_url: Optional[str] = None
     compatibility_editor_staging_upload_url: Optional[str] = None
 
-    # Collaborative compatibility editor. The publisher appends the fixed
-    # compatibility_superapp.json filename to this folder URL.
+    # Collaborative compatibility editor. Publication requires an explicit
+    # admin action and always appends compatibility_superapp.json.
     compatibility_editor_webdav_folder_url: Optional[str] = None
+    # Retained so existing environments remain valid; automatic debouncing is retired.
     compatibility_editor_publish_debounce_seconds: int = 3
     compatibility_editor_publish_max_delay_seconds: int = 15
+    # Retries only a snapshot previously authorized by an admin.
     compatibility_editor_publish_reconcile_seconds: int = 300
     compatibility_editor_publish_verify: bool = True
 

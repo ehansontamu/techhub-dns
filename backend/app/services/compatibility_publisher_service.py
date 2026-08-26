@@ -6,7 +6,7 @@ import hashlib
 import json
 import logging
 import threading
-import time
+import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
@@ -20,7 +20,11 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database import get_db_session
-from app.models.compatibility_editor import CompatibilityEditorState
+from app.models.compatibility_editor import (
+    CompatibilityEditorState,
+    CompatibilityPublicationSnapshot,
+)
+from app.services.audit_service import AuditService
 from app.services.compatibility_editor_service import DATASET_ID, build_payload
 
 
@@ -29,9 +33,7 @@ logger = logging.getLogger(__name__)
 COMPATIBILITY_SUPERAPP_FILENAME = "compatibility_superapp.json"
 _PUBLISH_LOCK_NAME = "compatibility_editor:publish"
 _LOCAL_PUBLISH_LOCK = threading.Lock()
-_SCHEDULE_LOCK = threading.Lock()
-_SCHEDULE_TIMER: Optional[threading.Timer] = None
-_SCHEDULE_FIRST_PENDING: Optional[float] = None
+_RETRYABLE_SNAPSHOT_STATUSES = ("queued", "failed", "publishing")
 
 
 @dataclass(frozen=True)
@@ -41,6 +43,7 @@ class PublishResult:
     revision: int
     pending: bool
     error: Optional[str] = None
+    snapshot_id: Optional[str] = None
 
 
 def _webdav_folder_url() -> str:
@@ -164,8 +167,55 @@ def _put_and_verify(url: str, body: bytes) -> None:
     raise RuntimeError("WebDAV PUT failed (" + "; ".join(errors) + ")")
 
 
-def publish_latest(db: Optional[Session] = None) -> PublishResult:
-    """Publish the latest DB snapshot once, protected across app workers."""
+def request_publication(db: Session, *, actor: str) -> CompatibilityPublicationSnapshot:
+    """Capture the complete approved document after an explicit admin action."""
+
+    state = (
+        db.query(CompatibilityEditorState)
+        .filter(CompatibilityEditorState.id == DATASET_ID)
+        .with_for_update()
+        .first()
+    )
+    if state is None:
+        raise RuntimeError("Compatibility editor has not been initialized.")
+
+    payload = build_payload(db, state)
+    content = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+    content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    db.query(CompatibilityPublicationSnapshot).filter(
+        CompatibilityPublicationSnapshot.status.in_(_RETRYABLE_SNAPSHOT_STATUSES)
+    ).update({"status": "superseded"}, synchronize_session=False)
+    snapshot = CompatibilityPublicationSnapshot(
+        id=str(uuid.uuid4()),
+        revision=int(state.revision),
+        content=content,
+        sha256=content_hash,
+        status="queued",
+        requested_by=actor,
+    )
+    db.add(snapshot)
+    state.last_publish_error = None
+    AuditService(db).log_action(
+        "compatibility_editor",
+        snapshot.id,
+        "publication.requested",
+        user_id=actor,
+        description="Admin authorized compatibility_superapp.json publication",
+        audit_metadata={
+            "revision": snapshot.revision,
+            "sha256": content_hash,
+        },
+    )
+    db.commit()
+    return snapshot
+
+
+def publish_requested(
+    db: Optional[Session] = None,
+    *,
+    snapshot_id: Optional[str] = None,
+) -> PublishResult:
+    """Publish only a snapshot previously authorized by an admin."""
 
     owns_session = db is None
     session = db or get_db_session()
@@ -180,15 +230,39 @@ def publish_latest(db: Optional[Session] = None) -> PublishResult:
             state = session.get(CompatibilityEditorState, DATASET_ID)
             if state is None:
                 return PublishResult(False, True, 0, False)
-            target_revision = int(state.revision)
-            if int(state.published_revision) >= target_revision:
-                return PublishResult(False, True, target_revision, False)
+            query = session.query(CompatibilityPublicationSnapshot)
+            if snapshot_id:
+                snapshot = query.filter(
+                    CompatibilityPublicationSnapshot.id == snapshot_id,
+                    CompatibilityPublicationSnapshot.status.in_(
+                        _RETRYABLE_SNAPSHOT_STATUSES
+                    ),
+                ).first()
+            else:
+                snapshot = (
+                    query.filter(
+                        CompatibilityPublicationSnapshot.status.in_(
+                            _RETRYABLE_SNAPSHOT_STATUSES
+                        )
+                    )
+                    .order_by(CompatibilityPublicationSnapshot.requested_at.desc())
+                    .first()
+                )
+            if snapshot is None:
+                revision = int(state.revision)
+                return PublishResult(
+                    False,
+                    True,
+                    revision,
+                    int(state.published_revision) < revision,
+                )
 
-            payload = build_payload(session, state)
-            body = (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode(
-                "utf-8"
-            )
-            body_hash = hashlib.sha256(body).hexdigest()
+            target_revision = int(snapshot.revision)
+            target_snapshot_id = str(snapshot.id)
+            body = snapshot.content.encode("utf-8")
+            body_hash = snapshot.sha256
+            snapshot.status = "publishing"
+            snapshot.last_attempt_at = datetime.utcnow()
             state.last_publish_attempt_at = datetime.utcnow()
             session.commit()
 
@@ -197,6 +271,13 @@ def publish_latest(db: Optional[Session] = None) -> PublishResult:
             except Exception as exc:
                 session.rollback()
                 current = session.get(CompatibilityEditorState, DATASET_ID)
+                current_snapshot = session.get(
+                    CompatibilityPublicationSnapshot, target_snapshot_id
+                )
+                if current_snapshot is not None:
+                    current_snapshot.status = "failed"
+                    current_snapshot.last_attempt_at = datetime.utcnow()
+                    current_snapshot.last_error = f"{type(exc).__name__}: {exc}"[:4000]
                 if current is not None:
                     current.last_publish_attempt_at = datetime.utcnow()
                     current.last_publish_error = f"{type(exc).__name__}: {exc}"[:4000]
@@ -211,6 +292,7 @@ def publish_latest(db: Optional[Session] = None) -> PublishResult:
                     target_revision,
                     pending,
                     str(exc),
+                    target_snapshot_id,
                 )
 
             session.expire_all()
@@ -221,7 +303,21 @@ def publish_latest(db: Optional[Session] = None) -> PublishResult:
                 .first()
             )
             if current is None:
-                return PublishResult(True, True, target_revision, False)
+                return PublishResult(
+                    True,
+                    True,
+                    target_revision,
+                    False,
+                    snapshot_id=target_snapshot_id,
+                )
+            current_snapshot = session.get(
+                CompatibilityPublicationSnapshot, target_snapshot_id
+            )
+            if current_snapshot is not None:
+                current_snapshot.status = "published"
+                current_snapshot.published_at = datetime.utcnow()
+                current_snapshot.last_attempt_at = datetime.utcnow()
+                current_snapshot.last_error = None
             current.published_revision = max(
                 int(current.published_revision), target_revision
             )
@@ -233,47 +329,13 @@ def publish_latest(db: Optional[Session] = None) -> PublishResult:
             if not pending:
                 current.pending_since = None
             session.commit()
-            return PublishResult(True, True, target_revision, pending)
+            return PublishResult(
+                True,
+                True,
+                target_revision,
+                pending,
+                snapshot_id=target_snapshot_id,
+            )
     finally:
         if owns_session:
             session.close()
-
-
-def _scheduled_publish() -> None:
-    global _SCHEDULE_TIMER, _SCHEDULE_FIRST_PENDING
-    with _SCHEDULE_LOCK:
-        _SCHEDULE_TIMER = None
-        _SCHEDULE_FIRST_PENDING = None
-    result = publish_latest()
-    if result.pending:
-        schedule_publish(delay_seconds=3 if result.success else 30)
-
-
-def schedule_publish(*, delay_seconds: Optional[int] = None) -> None:
-    """Debounce publications without losing the durable DB pending state."""
-
-    if not is_publish_configured():
-        return
-
-    global _SCHEDULE_TIMER, _SCHEDULE_FIRST_PENDING
-    debounce = max(
-        0,
-        min(int(settings.compatibility_editor_publish_debounce_seconds or 3), 60),
-    )
-    max_delay = max(
-        debounce,
-        min(int(settings.compatibility_editor_publish_max_delay_seconds or 15), 300),
-    )
-    now = time.monotonic()
-    with _SCHEDULE_LOCK:
-        if _SCHEDULE_FIRST_PENDING is None:
-            _SCHEDULE_FIRST_PENDING = now
-        elapsed = now - _SCHEDULE_FIRST_PENDING
-        requested = debounce if delay_seconds is None else max(0, int(delay_seconds))
-        delay = min(requested, max(0.0, max_delay - elapsed))
-        if _SCHEDULE_TIMER is not None:
-            _SCHEDULE_TIMER.cancel()
-        timer = threading.Timer(delay, _scheduled_publish)
-        timer.daemon = True
-        _SCHEDULE_TIMER = timer
-        timer.start()

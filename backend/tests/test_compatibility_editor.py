@@ -11,10 +11,15 @@ os.environ.setdefault("DATABASE_URL", "sqlite+pysqlite:///:memory:")
 from app.config import settings
 from app.database import Base
 from app.services import compatibility_publisher_service
+from app.services.compatibility_approval_service import (
+    review_change,
+    submit_change,
+)
 from app.services.compatibility_editor_service import (
     DEFAULT_SEED_PATH,
     CompatibilityEditorConflict,
     apply_mutation,
+    build_payload,
     import_payload,
     validate_payload,
 )
@@ -93,6 +98,7 @@ def test_import_preserves_payload_and_creates_versions(db):
     assert document["versions"]["cells"]["C1"] == {"D1": 1, "D2": 1}
     assert document["data"]["docks"]["D1"]["customDockField"] == "preserved"
     assert document["data"]["computers"]["C1"]["incompatibleWith"] == ["D2"]
+    assert "studentEdited" not in document["data"]["computers"]["C1"]
 
 
 def test_different_cells_merge_and_same_cell_conflicts(db):
@@ -178,7 +184,79 @@ def test_operation_id_is_idempotent(db):
     assert first["revision"] == second["revision"] == 2
 
 
-def test_publisher_writes_only_fixed_filename_and_records_revision(db, monkeypatch):
+def test_contributor_change_stays_pending_until_admin_approval(db):
+    initial = import_payload(db, _payload(), actor="seed")
+    workspace, duplicate = submit_change(
+        db,
+        {
+            "operationId": "proposal-1",
+            "mutation": {
+                "type": "cell.update",
+                "computerKey": "C1",
+                "dockKey": "D1",
+                "expectedVersion": 1,
+                "cell": {"compatibilityStatus": "Incompatible", "notes": "Review me"},
+            },
+        },
+        actor="contributor@example.test",
+    )
+
+    assert duplicate is False
+    assert workspace["revision"] == initial["revision"]
+    assert workspace["approval"]["pendingCount"] == 1
+    assert workspace["data"]["computers"]["C1"]["compatibilityData"]["D1"][
+        "studentEdited"
+    ] is True
+    assert build_payload(db)["computers"]["C1"]["compatibilityData"]["D1"][
+        "compatibilityStatus"
+    ] == "Compatible"
+
+    approved = review_change(
+        db,
+        workspace["approval"]["pendingChanges"][0]["id"],
+        action="approve",
+        actor="admin@example.test",
+    )
+
+    assert approved["revision"] == initial["revision"] + 1
+    assert approved["approval"]["pendingCount"] == 0
+    assert build_payload(db)["computers"]["C1"]["compatibilityData"]["D1"] == {
+        "compatibilityStatus": "Incompatible",
+        "notes": "Review me",
+    }
+
+
+def test_pending_new_item_is_excluded_then_becomes_visible_on_approval(db):
+    import_payload(db, _payload(), actor="seed")
+    workspace, _ = submit_change(
+        db,
+        {
+            "operationId": "proposal-computer",
+            "mutation": {
+                "type": "computer.add",
+                "computerKey": "C2",
+                "computer": {"name": "Computer Two", "hidden": True},
+            },
+        },
+        actor="contributor@example.test",
+    )
+
+    assert "C2" not in build_payload(db)["computers"]
+    assert workspace["data"]["computers"]["C2"]["studentEdited"] is True
+
+    approved = review_change(
+        db,
+        workspace["approval"]["pendingChanges"][0]["id"],
+        action="approve",
+        actor="admin@example.test",
+    )
+    published_data = build_payload(db)
+    assert approved["approval"]["pendingCount"] == 0
+    assert published_data["computers"]["C2"]["hidden"] is False
+    assert "studentEdited" not in published_data["computers"]["C2"]
+
+
+def test_publisher_writes_only_explicit_snapshot_and_records_revision(db, monkeypatch):
     imported = import_payload(db, _payload(), actor="seed")
     monkeypatch.setattr(
         settings,
@@ -193,7 +271,12 @@ def test_publisher_writes_only_fixed_filename_and_records_revision(db, monkeypat
 
     monkeypatch.setattr(compatibility_publisher_service, "_put_and_verify", fake_put)
 
-    result = compatibility_publisher_service.publish_latest(db)
+    snapshot = compatibility_publisher_service.request_publication(
+        db, actor="admin@example.test"
+    )
+    result = compatibility_publisher_service.publish_requested(
+        db, snapshot_id=snapshot.id
+    )
 
     assert result.success is True
     assert result.revision == imported["revision"]
@@ -207,6 +290,60 @@ def test_publisher_writes_only_fixed_filename_and_records_revision(db, monkeypat
     refreshed = get_document(db)
     assert refreshed["publication"]["pending"] is False
     assert refreshed["publication"]["publishedRevision"] == imported["revision"]
+
+
+def test_publisher_does_nothing_without_an_admin_snapshot(db, monkeypatch):
+    imported = import_payload(db, _payload(), actor="seed")
+    called = []
+    monkeypatch.setattr(
+        compatibility_publisher_service,
+        "_put_and_verify",
+        lambda _url, _body: called.append(True),
+    )
+
+    result = compatibility_publisher_service.publish_requested(db)
+
+    assert result.attempted is False
+    assert result.pending is True
+    assert result.revision == imported["revision"]
+    assert called == []
+
+
+def test_publication_retry_uses_immutable_admin_snapshot(db, monkeypatch):
+    initial = import_payload(db, _payload(), actor="seed")
+    snapshot = compatibility_publisher_service.request_publication(
+        db, actor="admin@example.test"
+    )
+    apply_mutation(
+        db,
+        {
+            "operationId": "later-admin-edit",
+            "mutation": {
+                "type": "cell.update",
+                "computerKey": "C1",
+                "dockKey": "D1",
+                "expectedVersion": 1,
+                "cell": {"compatibilityStatus": "Incompatible", "notes": "Later"},
+            },
+        },
+        actor="admin@example.test",
+    )
+    captured = {}
+    monkeypatch.setattr(settings, "compatibility_editor_webdav_folder_url", "https://dav.example.test/folder/")
+    monkeypatch.setattr(
+        compatibility_publisher_service,
+        "_put_and_verify",
+        lambda _url, body: captured.update(body=body),
+    )
+
+    result = compatibility_publisher_service.publish_requested(
+        db, snapshot_id=snapshot.id
+    )
+
+    body = json.loads(captured["body"])
+    assert result.revision == initial["revision"]
+    assert result.pending is True
+    assert body["computers"]["C1"]["compatibilityData"]["D1"].get("notes") is None
 
 
 def test_seed_file_matches_supported_schema():

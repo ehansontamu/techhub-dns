@@ -1,5 +1,5 @@
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Cable, Cloud, CloudOff, Loader2, Monitor, Plus, RefreshCw, Save, Trash2, type LucideIcon } from "lucide-react";
+import { Cable, Check, Cloud, CloudOff, Loader2, Monitor, Plus, RefreshCw, Save, Trash2, X, type LucideIcon } from "lucide-react";
 import { io } from "socket.io-client";
 import { toast } from "sonner";
 import {
@@ -9,6 +9,7 @@ import {
   COMPATIBILITY_EDITOR_DETAIL_STATUS_VALUES,
   COMPATIBILITY_EDITOR_STATUS_VALUES,
   type CompatibilityEditorCell,
+  type CompatibilityEditorChange,
   type CompatibilityEditorComputer,
   type CompatibilityEditorDetailField,
   type CompatibilityEditorDetailStatus,
@@ -30,7 +31,6 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs"
 import { useAuth } from "../contexts/AuthContext";
 import { cn } from "../lib/utils";
 import { extractApiErrorMessage } from "../utils/apiErrors";
-import { getUserDisplayName } from "../utils/userDisplay";
 
 type MatrixAxis = "computer" | "dock";
 type AddItemKind = MatrixAxis | null;
@@ -195,21 +195,24 @@ const createCellForm = (
 };
 
 export default function CompatibilityEditor() {
-  const { isAdmin, isLoading: authLoading, user } = useAuth();
-  const currentUserLabel = getUserDisplayName(user, "you");
+  const { isAdmin, isLoading: authLoading } = useAuth();
   const [payload, setPayload] = useState<CompatibilityEditorPayload | null>(null);
   const [versions, setVersions] = useState<CompatibilityEditorVersions | null>(null);
+  const [approvedVersions, setApprovedVersions] = useState<CompatibilityEditorVersions | null>(null);
+  const [pendingChanges, setPendingChanges] = useState<CompatibilityEditorChange[]>([]);
   const [revision, setRevision] = useState(0);
   const [publication, setPublication] = useState<CompatibilityEditorPublication | null>(null);
   const [conflictMessage, setConflictMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [publishing, setPublishing] = useState(false);
+  const [reviewingId, setReviewingId] = useState<string | null>(null);
   const [activeCell, setActiveCell] = useState<ActiveCell | null>(null);
   const [cellForm, setCellForm] = useState<CellForm | null>(null);
   const [addItemKind, setAddItemKind] = useState<AddItemKind>(null);
   const [addItemForm, setAddItemForm] = useState<AddItemForm>(defaultAddItemForm);
   const [draftId] = useState(createClientId);
-  const revisionRef = useRef(0);
+  const workspaceRevisionRef = useRef(0);
 
   const computerKeys = useMemo(() => (payload ? sortKeysByName(payload.computers) : []), [payload]);
   const dockKeys = useMemo(() => (payload ? sortKeysByName(payload.docks) : []), [payload]);
@@ -223,22 +226,19 @@ export default function CompatibilityEditor() {
   );
 
   const applyDocument = useCallback((document: CompatibilityEditorDocument) => {
-    if (document.revision < revisionRef.current) {
+    if (document.workspaceRevision < workspaceRevisionRef.current) {
       return;
     }
     setPayload(document.data);
     setVersions(document.versions);
+    setApprovedVersions(document.approvedVersions);
+    setPendingChanges(document.approval.pendingChanges);
     setRevision(document.revision);
-    revisionRef.current = document.revision;
+    workspaceRevisionRef.current = document.workspaceRevision;
     setPublication(document.publication);
   }, []);
 
   const loadData = useCallback(async (silent = false) => {
-    if (!isAdmin) {
-      setLoading(false);
-      return;
-    }
-
     if (!silent) {
       setLoading(true);
     }
@@ -256,25 +256,24 @@ export default function CompatibilityEditor() {
         setLoading(false);
       }
     }
-  }, [applyDocument, isAdmin]);
+  }, [applyDocument]);
 
   useEffect(() => {
     void loadData(false);
   }, [loadData]);
 
   useEffect(() => {
-    if (!isAdmin) {
-      return;
-    }
-
     const socket = io(`${window.location.protocol}//${window.location.host}`, {
       path: "/socket.io",
       transports: ["websocket", "polling"],
       reconnection: true,
     });
     socket.on("connect", () => socket.emit("join", { room: "compatibility-editor" }));
-    socket.on("compatibility_editor_updated", (event: { revision?: number }) => {
-      if (typeof event.revision === "number" && event.revision > revisionRef.current) {
+    socket.on("compatibility_editor_updated", (event: { workspaceRevision?: number }) => {
+      if (
+        typeof event.workspaceRevision !== "number"
+        || event.workspaceRevision > workspaceRevisionRef.current
+      ) {
         void loadData(true);
       }
     });
@@ -283,7 +282,7 @@ export default function CompatibilityEditor() {
       window.clearInterval(interval);
       socket.disconnect();
     };
-  }, [isAdmin, loadData]);
+  }, [loadData]);
 
   const performMutation = async (
     mutation: CompatibilityEditorMutation,
@@ -336,7 +335,9 @@ export default function CompatibilityEditor() {
     setActiveCell({
       computerKey,
       dockKey,
-      expectedVersion: versions.cells[computerKey]?.[dockKey] ?? 0,
+      expectedVersion: isAdmin
+        ? approvedVersions?.cells[computerKey]?.[dockKey] ?? versions.cells[computerKey]?.[dockKey] ?? 0
+        : versions.cells[computerKey]?.[dockKey] ?? 0,
     });
   };
 
@@ -379,13 +380,13 @@ export default function CompatibilityEditor() {
           hidden: false,
           studentEdited: true,
           },
-        }, "Computer added");
+        }, isAdmin ? "Computer added to approved data" : "Computer submitted for review");
       } else {
         await performMutation({
           type: "dock.add",
           dockKey: sku,
           dock: { name, url, hidden: false, studentEdited: true },
-        }, "Dock added");
+        }, isAdmin ? "Dock added to approved data" : "Dock submitted for review");
       }
       setAddItemKind(null);
     } catch {
@@ -483,13 +484,54 @@ export default function CompatibilityEditor() {
           expectedVersion: activeCell.expectedVersion,
           cell,
         },
-        "Compatibility cell updated"
+        isAdmin ? "Compatibility cell approved" : "Compatibility change submitted for review"
       );
       setActiveCell(null);
       setCellForm(null);
       setConflictMessage(null);
     } catch {
       // Keep the modal open so the user can compare/retry after a conflict.
+    }
+  };
+
+  const reviewPendingChange = async (changeId: string, action: "approve" | "reject") => {
+    setReviewingId(changeId);
+    try {
+      const document = await compatibilityEditorApi.review(changeId, action);
+      applyDocument(document);
+      toast.success(action === "approve" ? "Change approved" : "Change rejected");
+    } catch (error: unknown) {
+      toast.error("Review failed", {
+        description: extractApiErrorMessage(error, "The pending change could not be reviewed."),
+      });
+      await loadData(true);
+    } finally {
+      setReviewingId(null);
+    }
+  };
+
+  const publishApprovedData = async () => {
+    const pendingWarning = pendingChanges.length
+      ? ` ${pendingChanges.length} pending change${pendingChanges.length === 1 ? "" : "s"} will remain excluded.`
+      : "";
+    if (!window.confirm(`Save approved revision ${revision} to compatibility_superapp.json?${pendingWarning}`)) {
+      return;
+    }
+    setPublishing(true);
+    try {
+      const result = await compatibilityEditorApi.publish();
+      if (!result.success) {
+        throw new Error(result.error || "WebDAV did not accept the file.");
+      }
+      toast.success("Approved compatibility JSON saved to WebDAV");
+      await loadData(true);
+    } catch (error: unknown) {
+      toast.error("WebDAV save failed", {
+        description: extractApiErrorMessage(error, "The approved snapshot is queued for retry."),
+      });
+      await loadData(true);
+    } finally {
+      setPublishing(false);
     }
   };
 
@@ -506,24 +548,6 @@ export default function CompatibilityEditor() {
     );
   }
 
-  if (!isAdmin) {
-    return (
-      <div className="container mx-auto space-y-4 py-6">
-        <div className="space-y-1">
-          <h1 className="text-2xl font-semibold tracking-tight text-foreground">Compatibility Editor</h1>
-          <p className="text-sm text-muted-foreground">Admin-only staging matrix editor.</p>
-        </div>
-        <section className="rounded-2xl border border-border/70 bg-card/80 p-5 shadow-none">
-          <h2 className="text-base font-semibold tracking-tight">Access denied</h2>
-          <p className="mt-1 text-sm text-muted-foreground">Admin access is required to view this page.</p>
-          <p className="mt-4 text-sm text-muted-foreground">
-            {currentUserLabel ? `Signed in as ${currentUserLabel}.` : "You are not signed in."}
-          </p>
-        </section>
-      </div>
-    );
-  }
-
   return (
     <div className="container mx-auto space-y-4 py-6">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
@@ -532,21 +556,36 @@ export default function CompatibilityEditor() {
           <p className="text-sm text-muted-foreground">Collaborative matrix for computers and docks.</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <Badge variant={!publication?.configured || publication?.lastError ? "destructive" : publication?.pending ? "warning" : "success"}>
-            {!publication?.configured || publication?.lastError ? (
-              <CloudOff className="mr-1.5 h-3.5 w-3.5" />
-            ) : (
-              <Cloud className="mr-1.5 h-3.5 w-3.5" />
-            )}
-            {!publication?.configured
-              ? "WebDAV not configured"
-              : publication?.lastError
-              ? "WebDAV retry pending"
-              : publication?.pending
-                ? "WebDAV sync pending"
-                : "WebDAV synced"}
+          <Badge variant={pendingChanges.length ? "warning" : "success"}>
+            {pendingChanges.length} pending review
           </Badge>
+          {isAdmin ? (
+            <Badge variant={!publication?.configured || publication?.lastError ? "destructive" : publication?.pending ? "warning" : "success"}>
+              {!publication?.configured || publication?.lastError ? (
+                <CloudOff className="mr-1.5 h-3.5 w-3.5" />
+              ) : (
+                <Cloud className="mr-1.5 h-3.5 w-3.5" />
+              )}
+              {!publication?.configured
+                ? "WebDAV not configured"
+                : publication?.lastError
+                ? "WebDAV retry pending"
+                : publication?.pending
+                  ? "Approved changes not published"
+                  : "WebDAV current"}
+            </Badge>
+          ) : null}
           <span className="text-xs text-muted-foreground">Revision {revision}</span>
+          {isAdmin ? (
+            <Button
+              type="button"
+              onClick={() => void publishApprovedData()}
+              disabled={publishing || saving || Boolean(reviewingId) || !publication?.configured}
+            >
+              {publishing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+              Save to WebDAV
+            </Button>
+          ) : null}
           <Button type="button" variant="outline" onClick={() => void loadData(false)} disabled={saving || loading}>
             <RefreshCw className="mr-2 h-4 w-4" />
             Refresh
@@ -554,7 +593,11 @@ export default function CompatibilityEditor() {
         </div>
       </div>
 
-      {!publication?.configured ? (
+      {!isAdmin ? (
+        <section className="rounded-lg border border-sky-300 bg-sky-50 px-4 py-3 text-sm text-sky-900">
+          Your changes are saved to the app for admin review and cannot update the website JSON directly.
+        </section>
+      ) : !publication?.configured ? (
         <section className="rounded-lg border border-destructive/40 bg-destructive/5 px-4 py-3 text-sm text-destructive">
           Database editing is available, but the WebDAV folder is not configured.
         </section>
@@ -574,6 +617,7 @@ export default function CompatibilityEditor() {
             <TabsTrigger value="matrix">Matrix</TabsTrigger>
             <TabsTrigger value="computers">Computers</TabsTrigger>
             <TabsTrigger value="docks">Docks</TabsTrigger>
+            {isAdmin ? <TabsTrigger value="review">Review ({pendingChanges.length})</TabsTrigger> : null}
           </TabsList>
 
           <TabsContent value="matrix" className="space-y-4">
@@ -664,7 +708,9 @@ export default function CompatibilityEditor() {
                     name={computer.name}
                     url={computer.url ?? ""}
                     hidden={Boolean(computer.hidden)}
-                    version={versions?.computers[computerKey] ?? 0}
+                    version={(isAdmin ? approvedVersions : versions)?.computers[computerKey] ?? 0}
+                    pending={Boolean(computer.studentEdited)}
+                    editable={isAdmin && !computer.studentEdited && !publishing}
                     onSave={(value, expectedVersion) => saveComputer(computerKey, { ...computer, ...value }, expectedVersion)}
                     onRemove={() => void removeComputer(computerKey)}
                   />
@@ -689,7 +735,9 @@ export default function CompatibilityEditor() {
                     name={dock.name}
                     url={dock.url ?? ""}
                     hidden={Boolean(dock.hidden)}
-                    version={versions?.docks[dockKey] ?? 0}
+                    version={(isAdmin ? approvedVersions : versions)?.docks[dockKey] ?? 0}
+                    pending={Boolean(dock.studentEdited)}
+                    editable={isAdmin && !dock.studentEdited && !publishing}
                     onSave={(value, expectedVersion) => saveDock(dockKey, { ...dock, ...value }, expectedVersion)}
                     onRemove={() => void removeDock(dockKey)}
                   />
@@ -697,6 +745,69 @@ export default function CompatibilityEditor() {
               })}
             </MatrixItemSection>
           </TabsContent>
+
+          {isAdmin ? (
+            <TabsContent value="review" className="space-y-4">
+              <section className="rounded-2xl border border-border/70 bg-card/80 p-5 shadow-none">
+                <div>
+                  <h2 className="text-base font-semibold tracking-tight">Pending review</h2>
+                  <p className="text-sm text-muted-foreground">
+                    Approvals update the database only. Use Save to WebDAV when the complete approved set is ready.
+                  </p>
+                </div>
+                {pendingChanges.length === 0 ? (
+                  <p className="mt-4 text-sm text-muted-foreground">There are no pending changes.</p>
+                ) : (
+                  <div className="mt-4 space-y-4">
+                    {pendingChanges.map((change) => (
+                      <div key={change.id} className="rounded-lg border bg-background p-4">
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                          <div>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <Badge variant="secondary">{change.mutationType}</Badge>
+                              <span className="font-mono text-sm font-medium">{change.target}</span>
+                            </div>
+                            <p className="mt-1 text-xs text-muted-foreground">
+                              Submitted by {change.submittedBy}{change.updatedAt ? ` · ${new Date(change.updatedAt).toLocaleString()}` : ""}
+                            </p>
+                          </div>
+                          <div className="flex gap-2">
+                            <Button
+                              type="button"
+                              variant="outline"
+                              onClick={() => void reviewPendingChange(change.id, "reject")}
+                              disabled={Boolean(reviewingId) || publishing}
+                            >
+                              {reviewingId === change.id ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <X className="mr-2 h-4 w-4" />}
+                              Reject
+                            </Button>
+                            <Button
+                              type="button"
+                              onClick={() => void reviewPendingChange(change.id, "approve")}
+                              disabled={Boolean(reviewingId) || publishing}
+                            >
+                              {reviewingId === change.id ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Check className="mr-2 h-4 w-4" />}
+                              Approve
+                            </Button>
+                          </div>
+                        </div>
+                        <div className="mt-3 grid gap-3 lg:grid-cols-2">
+                          <div>
+                            <div className="mb-1 text-xs font-medium uppercase text-muted-foreground">Currently approved</div>
+                            <pre className="max-h-52 overflow-auto rounded-md bg-muted p-3 text-xs">{JSON.stringify(change.currentData, null, 2)}</pre>
+                          </div>
+                          <div>
+                            <div className="mb-1 text-xs font-medium uppercase text-muted-foreground">Proposed</div>
+                            <pre className="max-h-52 overflow-auto rounded-md bg-sky-50 p-3 text-xs text-sky-950">{JSON.stringify(change.proposedData, null, 2)}</pre>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
+            </TabsContent>
+          ) : null}
         </Tabs>
       )}
 
@@ -807,9 +918,9 @@ export default function CompatibilityEditor() {
             <Button type="button" variant="outline" onClick={() => setActiveCell(null)}>
               Cancel
             </Button>
-            <Button type="button" onClick={() => void saveCell()} disabled={saving}>
+            <Button type="button" onClick={() => void saveCell()} disabled={saving || publishing}>
               {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
-              Save Cell
+              {isAdmin ? "Save and Approve" : "Submit for Review"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -859,9 +970,9 @@ export default function CompatibilityEditor() {
             <Button type="button" variant="outline" onClick={() => setAddItemKind(null)}>
               Cancel
             </Button>
-            <Button type="button" onClick={() => void addItem()} disabled={saving}>
+            <Button type="button" onClick={() => void addItem()} disabled={saving || publishing}>
               {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Plus className="mr-2 h-4 w-4" />}
-              Add
+              {isAdmin ? "Add" : "Submit for Review"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -907,6 +1018,8 @@ type MatrixItemRowProps = {
   url: string;
   hidden: boolean;
   version: number;
+  pending: boolean;
+  editable: boolean;
   onSave: (
     value: { name: string; url: string; hidden: boolean },
     expectedVersion: number
@@ -920,6 +1033,8 @@ function MatrixItemRow({
   url,
   hidden,
   version,
+  pending,
+  editable,
   onSave,
   onRemove,
 }: MatrixItemRowProps) {
@@ -961,14 +1076,17 @@ function MatrixItemRow({
     <div className="grid gap-3 rounded-lg border bg-card p-3 md:grid-cols-[minmax(8rem,0.8fr)_minmax(12rem,1.4fr)_minmax(12rem,1.8fr)_auto_auto] md:items-center">
       <div>
         <div className="text-xs font-medium uppercase text-muted-foreground">SKU</div>
-        <div className="break-words text-sm font-medium text-foreground">{sku}</div>
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="break-words text-sm font-medium text-foreground">{sku}</div>
+          {pending ? <Badge variant="secondary">Pending approval</Badge> : null}
+        </div>
       </div>
       <Input
         value={draft.name}
         onFocus={beginEditing}
         onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))}
         onBlur={() => void saveDraft()}
-        disabled={rowSaving}
+        disabled={rowSaving || !editable}
         aria-label={`Name for ${sku}`}
       />
       <Input
@@ -979,12 +1097,12 @@ function MatrixItemRow({
         onFocus={beginEditing}
         onChange={(event) => setDraft((current) => ({ ...current, url: event.target.value }))}
         onBlur={() => void saveDraft()}
-        disabled={rowSaving}
+        disabled={rowSaving || !editable}
         aria-label={`URL for ${sku}`}
       />
       <Checkbox
         checked={draft.hidden}
-        disabled={rowSaving}
+        disabled={rowSaving || !editable}
         onChange={(event) => {
           const nextDraft = { ...draft, hidden: event.target.checked };
           beginEditing();
@@ -993,7 +1111,7 @@ function MatrixItemRow({
         }}
         label="Hidden"
       />
-      <Button type="button" variant="destructive" size="icon" onClick={onRemove} disabled={rowSaving} aria-label={`Remove ${name || sku}`}>
+      <Button type="button" variant="destructive" size="icon" onClick={onRemove} disabled={rowSaving || !editable} aria-label={`Remove ${name || sku}`}>
         {rowSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
       </Button>
     </div>
