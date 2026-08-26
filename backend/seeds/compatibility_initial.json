@@ -1,0 +1,2620 @@
+{
+  "docks": {
+    "DDWD25TB4": {
+      "hidden": false,
+      "name": "Dell Pro Thunderbolt 4 Dock",
+      "studentEdited": true,
+      "url": "https://tamu.mybigcommerce.com/dell-pro-thunderbolt-4-dock/"
+    },
+    "DDWD25TB5": {
+      "hidden": false,
+      "name": "Dell Pro Thunderbolt 5 Dock",
+      "studentEdited": true,
+      "url": "https://tamu.mybigcommerce.com/dell-pro-thunderbolt-5-dock/"
+    },
+    "DMP2426HEB": {
+      "hidden": false,
+      "name": "Dell 24\" Video Conferencing Hub Monitor (2026)",
+      "studentEdited": true,
+      "url": "https://tamu.mybigcommerce.com/dell-24-video-conferencing-hub-monitor-2026/"
+    },
+    "DMP2724DEB": {
+      "hidden": false,
+      "name": "Dell 27\" Video Conferencing Hub Monitor",
+      "studentEdited": true,
+      "url": "https://tamu.mybigcommerce.com/dell-27-video-conferencing-hub-monitor/"
+    },
+    "DMP3225QE": {
+      "hidden": false,
+      "name": "Dell Pro 32\" 4K Hub Monitor (2025)",
+      "studentEdited": true,
+      "url": "https://tamu.mybigcommerce.com/dell-pro-32-4k-hub-monitor-2025/"
+    },
+    "DMP3425WE": {
+      "hidden": false,
+      "name": "Dell Pro 34\" Curved USB-C Hub Monitor (2025)",
+      "studentEdited": true,
+      "url": "https://tamu.mybigcommerce.com/dell-pro-34-curved-usb-c-hub-monitor-2025/"
+    },
+    "DMP3426WEB": {
+      "hidden": false,
+      "name": "Dell 34\" Video Conferencing Hub Monitor (2026)",
+      "studentEdited": true,
+      "url": "https://tamu.mybigcommerce.com/dell-34-video-conferencing-hub-monitor-2026"
+    },
+    "DMU2724DE": {
+      "hidden": false,
+      "name": "Dell UltraSharp 27\" Thunderbolt Hub Monitor",
+      "studentEdited": true,
+      "url": "https://tamu.mybigcommerce.com/dell-ultrasharp-27-thunderbolt-hub-monitor/"
+    },
+    "DMU4323QE": {
+      "hidden": false,
+      "name": "Dell UltraSharp 43\" 4K Hub Monitor",
+      "studentEdited": true,
+      "url": "https://tamu.mybigcommerce.com/dell-ultrasharp-43-4k-hub-monitor/?searchid=15445"
+    },
+    "DMU4924DW": {
+      "incompatibleWith": [],
+      "name": "Dell UltraSharp 49\" Hub Monitor",
+      "partiallyCompatibleWith": [],
+      "url": "https://tamu.mybigcommerce.com/dell-ultrasharp-49-curved-usb-c-hub-monitor/"
+    },
+    "HDG4": {
+      "incompatibleWith": [],
+      "name": "HP ThunderBolt Dock 120W",
+      "partiallyCompatibleWith": [],
+      "url": "https://tamu.mybigcommerce.com/hp-thunderbolt-dock-120w/"
+    },
+    "HME27M": {
+      "hidden": false,
+      "name": "HP 27\" USB-C Conference Monitor",
+      "studentEdited": true,
+      "url": "https://tamu.mybigcommerce.com/hp-27-usb-c-conference-monitor/"
+    },
+    "LDUUSBC": {
+      "hidden": false,
+      "name": "Lenovo Universal USB-C Docking Station",
+      "studentEdited": true,
+      "url": "https://tamu.mybigcommerce.com/lenovo-universal-usb-c-docking-station/"
+    },
+    "ODTB4DOCK": {
+      "incompatibleWith": [],
+      "name": "OWC 11-Port Thunderbolt Dock",
+      "partiallyCompatibleWith": [],
+      "url": "https://tamu.mybigcommerce.com/owc-14-port-thunderbolt-dock/"
+    },
+    "KAK63389WW": {
+      "name": "Kensington Universal 3-in-1 2.0 Keyed Laptop Lock",
+      "url": "Not available yet",
+      "hidden": false,
+      "studentEdited": true
+    }
+  },
+  "computers": {
+    "ALA15M4": {
+      "compatibilityData": {
+        "DDWD25TB4": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Partially Compatible",
+          "display": "Partially Functional",
+          "ethernet": "Functional",
+          "notes": "Dual Display does not function.",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DDWD25TB5": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP2426HEB": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP2724DEB": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP3225QE": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP3425WE": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP3426WEB": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMU2724DE": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMU4323QE": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMU4924DW": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "HDG4": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "HME27M": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "LDUUSBC": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "ODTB4DOCK": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "Functional",
+          "usbDetection": "Functional"
+        },
+        "KAK63389WW": {
+          "studentEdited": true
+        }
+      },
+      "compatibilityNotes": {},
+      "hidden": false,
+      "incompatibleWith": [],
+      "name": "Apple Macbook Air 15\" M4",
+      "partiallyCompatibleWith": [
+        "DDWD25TB4"
+      ],
+      "studentEdited": true,
+      "url": "https://tamu.mybigcommerce.com/apple-macbook-air-15-m4/?searchid=15598&search_query=15%22"
+    },
+    "ALMB14M51TB": {
+      "compatibilityData": {
+        "DDWD25TB4": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DDWD25TB5": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP2426HEB": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP2724DEB": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP3225QE": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP3425WE": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP3426WEB": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMU2724DE": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMU4323QE": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMU4924DW": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "HDG4": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "HME27M": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "LDUUSBC": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "ODTB4DOCK": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "Functional",
+          "usbDetection": "Functional"
+        },
+        "KAK63389WW": {
+          "studentEdited": true
+        }
+      },
+      "compatibilityNotes": {},
+      "hidden": false,
+      "incompatibleWith": [],
+      "name": "Apple MacBook Pro 14\" M5",
+      "partiallyCompatibleWith": [],
+      "studentEdited": true,
+      "url": "https://tamu.mybigcommerce.com/apple-macbook-pro-14-m5/"
+    },
+    "ALMBNEOBASE": {
+      "compatibilityData": {
+        "DDWD25TB4": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DDWD25TB5": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP2426HEB": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP2724DEB": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP3225QE": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP3425WE": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP3426WEB": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMU2724DE": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMU4323QE": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMU4924DW": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "HDG4": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "HME27M": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "LDUUSBC": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "ODTB4DOCK": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "KAK63389WW": {
+          "studentEdited": true
+        }
+      },
+      "compatibilityNotes": {},
+      "hidden": false,
+      "incompatibleWith": [],
+      "name": "Apple Macbook Neo 13\"",
+      "partiallyCompatibleWith": [],
+      "studentEdited": true,
+      "url": "https://tamu.mybigcommerce.com/apple-macbook-neo-13"
+    },
+    "DLP1425": {
+      "compatibilityData": {
+        "DDWD25TB4": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DDWD25TB5": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP2426HEB": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP2724DEB": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP3225QE": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP3425WE": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP3426WEB": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMU2724DE": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMU4323QE": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMU4924DW": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "HDG4": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Partially Functional",
+          "notes": "Requires a driver update for ethernet to work.",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "HME27M": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "LDUUSBC": {
+          "audio": "Non-functional",
+          "charging": "Non-functional",
+          "compatibilityStatus": "Incompatible",
+          "display": "Non-functional",
+          "ethernet": "Non-functional",
+          "notes": "Dock did not connect with the laptop.",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Non-functional"
+        },
+        "ODTB4DOCK": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "Functional",
+          "usbDetection": "Functional"
+        },
+        "KAK63389WW": {
+          "studentEdited": true
+        }
+      },
+      "compatibilityNotes": {},
+      "hidden": false,
+      "incompatibleWith": [
+        "LDUUSBC"
+      ],
+      "name": "Dell Pro 14\" Textured (2025)",
+      "partiallyCompatibleWith": [],
+      "studentEdited": true,
+      "url": "https://tamu.mybigcommerce.com/dell-pro-14-2025/"
+    },
+    "DLP14PR": {
+      "compatibilityData": {
+        "DDWD25TB4": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DDWD25TB5": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP2426HEB": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP2724DEB": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP3225QE": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP3425WE": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP3426WEB": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMU2724DE": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMU4323QE": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMU4924DW": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "HDG4": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "HME27M": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "LDUUSBC": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "ODTB4DOCK": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "Functional",
+          "usbDetection": "Functional"
+        },
+        "KAK63389WW": {
+          "studentEdited": true
+        }
+      },
+      "compatibilityNotes": {},
+      "hidden": false,
+      "incompatibleWith": [],
+      "name": "Dell Pro 14\" Premium (2025)",
+      "partiallyCompatibleWith": [],
+      "studentEdited": true,
+      "url": "https://tamu.mybigcommerce.com/dell-pro-14-premium-2025/"
+    },
+    "DLP1625": {
+      "compatibilityData": {
+        "DDWD25TB4": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DDWD25TB5": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP2426HEB": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP2724DEB": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP3225QE": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP3425WE": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP3426WEB": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMU2724DE": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMU4323QE": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMU4924DW": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "HDG4": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Incompatible",
+          "display": "Functional",
+          "ethernet": "Non-functional",
+          "notes": "Ethernet doesn't connect through the dock.",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "HME27M": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "LDUUSBC": {
+          "audio": "Non-functional",
+          "charging": "Non-functional",
+          "compatibilityStatus": "Incompatible",
+          "display": "Non-functional",
+          "ethernet": "Non-functional",
+          "notes": "Dock did not connect with the laptop. Ports do not work.",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Non-functional"
+        },
+        "ODTB4DOCK": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "Functional",
+          "usbDetection": "Functional"
+        },
+        "KAK63389WW": {
+          "studentEdited": true
+        }
+      },
+      "compatibilityNotes": {},
+      "hidden": false,
+      "incompatibleWith": [
+        "HDG4",
+        "LDUUSBC"
+      ],
+      "name": "Dell Pro 16\" (2025)",
+      "partiallyCompatibleWith": [],
+      "studentEdited": true,
+      "url": "https://tamu.mybigcommerce.com/dell-pro-16-2025/"
+    },
+    "DLPM14P": {
+      "compatibilityData": {
+        "DDWD25TB4": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DDWD25TB5": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP2426HEB": {
+          "audio": "Functional",
+          "charging": "Partially Functional",
+          "compatibilityStatus": "Partially Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "notes": "Slow charging",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP2724DEB": {
+          "audio": "Functional",
+          "charging": "Partially Functional",
+          "compatibilityStatus": "Partially Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "notes": "Slow charging",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP3225QE": {
+          "audio": "Functional",
+          "charging": "Partially Functional",
+          "compatibilityStatus": "Partially Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "notes": "Slow charging",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP3425WE": {
+          "audio": "N/A",
+          "charging": "Partially Functional",
+          "compatibilityStatus": "Partially Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "notes": "Slow charging",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP3426WEB": {
+          "audio": "N/A",
+          "charging": "Partially Functional",
+          "compatibilityStatus": "Partially Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "notes": "Slow Charging",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMU2724DE": {
+          "audio": "Functional",
+          "charging": "Partially Functional",
+          "compatibilityStatus": "Partially Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "notes": "Slow Charging",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMU4323QE": {
+          "audio": "Functional",
+          "charging": "Partially Functional",
+          "compatibilityStatus": "Partially Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "notes": "Slow charging",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMU4924DW": {
+          "audio": "Functional",
+          "charging": "Partially Functional",
+          "compatibilityStatus": "Partially Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "notes": "slow charging",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "HDG4": {
+          "audio": "N/A",
+          "charging": "Partially Functional",
+          "compatibilityStatus": "Partially Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "notes": "Slow charging",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "HME27M": {
+          "audio": "Functional",
+          "charging": "Partially Functional",
+          "compatibilityStatus": "Partially Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "notes": "Slow charging",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "LDUUSBC": {
+          "audio": "Functional",
+          "charging": "Partially Functional",
+          "compatibilityStatus": "Partially Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "notes": "Slow Charging",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "ODTB4DOCK": {
+          "audio": "Functional",
+          "charging": "Partially Functional",
+          "compatibilityStatus": "Partially Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "notes": "Slow charging",
+          "rebootNeeded": false,
+          "sdCard": "Functional",
+          "usbDetection": "Functional"
+        },
+        "KAK63389WW": {
+          "studentEdited": true
+        }
+      },
+      "compatibilityNotes": {},
+      "hidden": false,
+      "incompatibleWith": [],
+      "name": "Dell Pro Max 14 Premium (2025)",
+      "partiallyCompatibleWith": [
+        "DMP2724DEB",
+        "DMU4323QE",
+        "DMU4924DW",
+        "HME27M",
+        "HDG4",
+        "ODTB4DOCK",
+        "DMU2724DE",
+        "LDUUSBC",
+        "DMP3425WE",
+        "DMP2426HEB",
+        "DMP3426WEB",
+        "DMP3225QE"
+      ],
+      "studentEdited": true,
+      "url": "https://tamu.mybigcommerce.com/dell-pro-max-14-premium-2025"
+    },
+    "DLPM16P": {
+      "compatibilityData": {
+        "DDWD25TB4": {
+          "audio": "N/A",
+          "charging": "Partially Functional",
+          "compatibilityStatus": "Partially Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "notes": "Slow charging",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DDWD25TB5": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP2426HEB": {
+          "audio": "Functional",
+          "charging": "Partially Functional",
+          "compatibilityStatus": "Partially Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "notes": "Slow charging",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP2724DEB": {
+          "audio": "Functional",
+          "charging": "Partially Functional",
+          "compatibilityStatus": "Partially Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "notes": "Slow charging",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP3225QE": {
+          "audio": "N/A",
+          "charging": "Partially Functional",
+          "compatibilityStatus": "Partially Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "notes": "Slow charging",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP3425WE": {
+          "audio": "N/A",
+          "charging": "Partially Functional",
+          "compatibilityStatus": "Partially Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "notes": "Slow charging",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP3426WEB": {
+          "audio": "N/A",
+          "charging": "Partially Functional",
+          "compatibilityStatus": "Partially Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "notes": "Slow Charging",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMU2724DE": {
+          "audio": "Functional",
+          "charging": "Partially Functional",
+          "compatibilityStatus": "Partially Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "notes": "Slow charging",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMU4323QE": {
+          "audio": "Functional",
+          "charging": "Partially Functional",
+          "compatibilityStatus": "Partially Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "notes": "Slow charging",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMU4924DW": {
+          "audio": "Functional",
+          "charging": "Partially Functional",
+          "compatibilityStatus": "Partially Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "notes": "Slow charging",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "HDG4": {
+          "audio": "N/A",
+          "charging": "Partially Functional",
+          "compatibilityStatus": "Partially Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "notes": "Slow charging",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "HME27M": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Partially Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "notes": "slow charging",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Partially Functional"
+        },
+        "LDUUSBC": {
+          "audio": "Functional",
+          "charging": "Partially Functional",
+          "compatibilityStatus": "Partially Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "notes": "Slow charging",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "ODTB4DOCK": {
+          "audio": "Functional",
+          "charging": "Partially Functional",
+          "compatibilityStatus": "Partially Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "notes": "Slow charging",
+          "rebootNeeded": false,
+          "sdCard": "Functional",
+          "usbDetection": "Functional"
+        },
+        "KAK63389WW": {
+          "studentEdited": true
+        }
+      },
+      "compatibilityNotes": {},
+      "hidden": false,
+      "incompatibleWith": [],
+      "name": "Dell Pro Max 16 Premium (2025)",
+      "partiallyCompatibleWith": [
+        "DMP2724DEB",
+        "DMU2724DE",
+        "DMU4323QE",
+        "DMU4924DW",
+        "HME27M",
+        "HDG4",
+        "ODTB4DOCK",
+        "LDUUSBC",
+        "DMP3425WE",
+        "DMP2426HEB",
+        "DMP3426WEB",
+        "DDWD25TB4",
+        "DMP3225QE"
+      ],
+      "studentEdited": true,
+      "url": "https://tamu.mybigcommerce.com/dell-pro-max-16-premium-2025/"
+    },
+    "DLR14": {
+      "compatibilityData": {
+        "DDWD25TB4": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DDWD25TB5": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP2426HEB": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP2724DEB": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP3225QE": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP3425WE": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP3426WEB": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMU2724DE": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMU4323QE": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMU4924DW": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "HDG4": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Partially Compatible",
+          "display": "Functional",
+          "ethernet": "Partially Functional",
+          "notes": "Ethernet connectivity was not plug and play, driver installation is required to function",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "HME27M": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "LDUUSBC": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "ODTB4DOCK": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "Functional",
+          "usbDetection": "Functional"
+        },
+        "KAK63389WW": {
+          "studentEdited": true
+        }
+      },
+      "compatibilityNotes": {},
+      "hidden": false,
+      "incompatibleWith": [],
+      "name": "Dell Pro Rugged 14\"",
+      "partiallyCompatibleWith": [
+        "HDG4"
+      ],
+      "studentEdited": true,
+      "url": "https://tamu.mybigcommerce.com/dell-pro-rugged-14/?searchid=15742"
+    },
+    "HLA4JE4UT": {
+      "compatibilityData": {
+        "DDWD25TB4": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DDWD25TB5": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP2426HEB": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP2724DEB": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP3225QE": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP3425WE": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP3426WEB": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMU2724DE": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMU4323QE": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMU4924DW": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "HDG4": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "HME27M": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "LDUUSBC": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "ODTB4DOCK": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "Functional",
+          "usbDetection": "Functional"
+        },
+        "KAK63389WW": {
+          "studentEdited": true
+        }
+      },
+      "compatibilityNotes": {},
+      "hidden": false,
+      "incompatibleWith": [],
+      "name": "HP EliteBook Ultra G1q",
+      "partiallyCompatibleWith": [],
+      "studentEdited": true,
+      "url": "https://tamu.mybigcommerce.com/hp-elitebook-ultra-g1q/?searchid=15713"
+    },
+    "HLEXG1A14": {
+      "compatibilityData": {
+        "DDWD25TB4": {
+          "audio": "N/A",
+          "charging": "Partially Functional",
+          "compatibilityStatus": "Partially Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "notes": "Slow charging",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DDWD25TB5": {
+          "audio": "N/A",
+          "charging": "Partially Functional",
+          "compatibilityStatus": "Partially Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "notes": "Slow charging",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP2426HEB": {
+          "audio": "Functional",
+          "charging": "Partially Functional",
+          "compatibilityStatus": "Partially Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "notes": "Slow charging",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP2724DEB": {
+          "audio": "Functional",
+          "charging": "Partially Functional",
+          "compatibilityStatus": "Partially Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "notes": "Slow charging",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP3225QE": {
+          "audio": "N/A",
+          "charging": "Partially Functional",
+          "compatibilityStatus": "Partially Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "notes": "Slow charging",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP3425WE": {
+          "audio": "N/A",
+          "charging": "Partially Functional",
+          "compatibilityStatus": "Partially Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "notes": "Slow charging",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP3426WEB": {
+          "audio": "N/A",
+          "charging": "Partially Functional",
+          "compatibilityStatus": "Partially Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "notes": "Slow charging",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMU2724DE": {
+          "audio": "Functional",
+          "charging": "Partially Functional",
+          "compatibilityStatus": "Partially Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "notes": "Slow charging",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMU4323QE": {
+          "audio": "Functional",
+          "charging": "Partially Functional",
+          "compatibilityStatus": "Partially Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "notes": "Slow charging",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMU4924DW": {
+          "audio": "Functional",
+          "charging": "Partially Functional",
+          "compatibilityStatus": "Partially Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "notes": "Slow charging",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "HDG4": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "HME27M": {
+          "audio": "Functional",
+          "charging": "Partially Functional",
+          "compatibilityStatus": "Partially Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "notes": "Slow Charging",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "LDUUSBC": {
+          "audio": "Functional",
+          "charging": "Partially Functional",
+          "compatibilityStatus": "Partially Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "notes": "Slow charging",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "ODTB4DOCK": {
+          "audio": "Functional",
+          "charging": "Partially Functional",
+          "compatibilityStatus": "Partially Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "notes": "Slow Charging",
+          "rebootNeeded": false,
+          "sdCard": "Functional",
+          "usbDetection": "Functional"
+        },
+        "KAK63389WW": {
+          "studentEdited": true
+        }
+      },
+      "compatibilityNotes": {},
+      "hidden": false,
+      "incompatibleWith": [],
+      "name": "HP EliteBook X G1a 14",
+      "partiallyCompatibleWith": [
+        "DMP2724DEB",
+        "DMP2426HEB",
+        "DMP3426WEB",
+        "DMP3425WE",
+        "DDWD25TB5",
+        "DMU2724DE",
+        "DMU4323QE",
+        "DMU4924DW",
+        "HME27M",
+        "LDUUSBC",
+        "ODTB4DOCK",
+        "DDWD25TB4",
+        "DMP3225QE"
+      ],
+      "studentEdited": true,
+      "url": "https://tamu.mybigcommerce.com/hp-elitebook-x-g1a-14/"
+    },
+    "HLPG1A14": {
+      "compatibilityData": {
+        "DDWD25TB4": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DDWD25TB5": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP2426HEB": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP2724DEB": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP3225QE": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP3425WE": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP3426WEB": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMU2724DE": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMU4323QE": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMU4924DW": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "HDG4": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "HME27M": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "LDUUSBC": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "ODTB4DOCK": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "KAK63389WW": {
+          "studentEdited": true
+        }
+      },
+      "compatibilityNotes": {},
+      "hidden": false,
+      "incompatibleWith": [],
+      "name": "HP ProBook 4 G1a 14",
+      "partiallyCompatibleWith": [],
+      "studentEdited": true,
+      "url": "https://tamu.mybigcommerce.com/hp-probook-4-g1a-14/"
+    },
+    "LLTPL14": {
+      "compatibilityData": {
+        "DDWD25TB4": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DDWD25TB5": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP2426HEB": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP2724DEB": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP3225QE": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP3425WE": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP3426WEB": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMU2724DE": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMU4323QE": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMU4924DW": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "HDG4": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Partially Compatible",
+          "display": "Functional",
+          "ethernet": "Non-functional",
+          "notes": "Ethernet connection doesnt work",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "HME27M": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "LDUUSBC": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "ODTB4DOCK": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "Functional",
+          "usbDetection": "Functional"
+        },
+        "KAK63389WW": {
+          "studentEdited": true
+        }
+      },
+      "compatibilityNotes": {},
+      "hidden": false,
+      "incompatibleWith": [],
+      "name": "Lenovo ThinkPad L14",
+      "partiallyCompatibleWith": [
+        "HDG4"
+      ],
+      "studentEdited": true,
+      "url": "https://tamu.mybigcommerce.com/lenovo-thinkpad-l14/"
+    },
+    "MLS7I": {
+      "compatibilityData": {
+        "DDWD25TB4": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DDWD25TB5": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP2426HEB": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP2724DEB": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP3225QE": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP3425WE": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP3426WEB": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMU2724DE": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMU4323QE": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMU4924DW": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "HDG4": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "HME27M": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "LDUUSBC": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "ODTB4DOCK": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "Functional",
+          "usbDetection": "Functional"
+        },
+        "KAK63389WW": {
+          "studentEdited": true
+        }
+      },
+      "compatibilityNotes": {},
+      "hidden": false,
+      "incompatibleWith": [],
+      "name": "Microsoft Surface Laptop 7",
+      "partiallyCompatibleWith": [],
+      "studentEdited": true,
+      "url": "https://tamu.mybigcommerce.com/microsoft-surface-laptop-7"
+    },
+    "MLSL7E": {
+      "compatibilityData": {
+        "DDWD25TB4": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DDWD25TB5": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP2426HEB": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP2724DEB": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP3225QE": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP3425WE": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMP3426WEB": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMU2724DE": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMU4323QE": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "DMU4924DW": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "HDG4": {
+          "audio": "N/A",
+          "charging": "Functional",
+          "compatibilityStatus": "Incompatible",
+          "display": "Functional",
+          "ethernet": "Non-functional",
+          "notes": "Ethernet nonfunctional.",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "HME27M": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "LDUUSBC": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "N/A",
+          "usbDetection": "Functional"
+        },
+        "ODTB4DOCK": {
+          "audio": "Functional",
+          "charging": "Functional",
+          "compatibilityStatus": "Compatible",
+          "display": "Functional",
+          "ethernet": "Functional",
+          "rebootNeeded": false,
+          "sdCard": "Functional",
+          "usbDetection": "Functional"
+        },
+        "KAK63389WW": {
+          "studentEdited": true
+        }
+      },
+      "compatibilityNotes": {},
+      "hidden": false,
+      "incompatibleWith": [
+        "HDG4"
+      ],
+      "name": "Microsoft Surface Laptop 7th Edition",
+      "partiallyCompatibleWith": [],
+      "studentEdited": true,
+      "url": "https://tamu.mybigcommerce.com/microsoft-surface-laptop-7th-edition/?searchid=15703"
+    },
+    "MLSPRO12": {
+      "name": "Microsoft Surface Pro 12",
+      "url": "https://tamu.mybigcommerce.com/microsoft-surface-pro-12/",
+      "hidden": false,
+      "studentEdited": true,
+      "incompatibleWith": [],
+      "partiallyCompatibleWith": [],
+      "compatibilityNotes": {},
+      "compatibilityData": {
+        "DDWD25TB4": {
+          "studentEdited": true
+        },
+        "DDWD25TB5": {
+          "studentEdited": true
+        },
+        "DMP2426HEB": {
+          "studentEdited": true
+        },
+        "DMP2724DEB": {
+          "studentEdited": true
+        },
+        "DMP3225QE": {
+          "studentEdited": true
+        },
+        "DMP3425WE": {
+          "studentEdited": true
+        },
+        "DMP3426WEB": {
+          "studentEdited": true
+        },
+        "DMU2724DE": {
+          "studentEdited": true
+        },
+        "DMU4323QE": {
+          "studentEdited": true
+        },
+        "DMU4924DW": {
+          "studentEdited": true
+        },
+        "HDG4": {
+          "studentEdited": true
+        },
+        "HME27M": {
+          "studentEdited": true
+        },
+        "LDUUSBC": {
+          "studentEdited": true
+        },
+        "ODTB4DOCK": {
+          "studentEdited": true
+        },
+        "KAK63389WW": {
+          "studentEdited": true
+        }
+      }
+    },
+    "DLPP714": {
+      "name": "Dell Pro 7 14 (2026)",
+      "url": "https://tamu.mybigcommerce.com/dell-pro-7-14-2026/",
+      "hidden": false,
+      "studentEdited": true,
+      "incompatibleWith": [],
+      "partiallyCompatibleWith": [],
+      "compatibilityNotes": {},
+      "compatibilityData": {
+        "DDWD25TB4": {
+          "studentEdited": true
+        },
+        "DDWD25TB5": {
+          "studentEdited": true
+        },
+        "DMP2426HEB": {
+          "studentEdited": true
+        },
+        "DMP2724DEB": {
+          "studentEdited": true
+        },
+        "DMP3225QE": {
+          "studentEdited": true
+        },
+        "DMP3425WE": {
+          "studentEdited": true
+        },
+        "DMP3426WEB": {
+          "studentEdited": true
+        },
+        "DMU2724DE": {
+          "studentEdited": true
+        },
+        "DMU4323QE": {
+          "studentEdited": true
+        },
+        "DMU4924DW": {
+          "studentEdited": true
+        },
+        "HDG4": {
+          "studentEdited": true
+        },
+        "HME27M": {
+          "studentEdited": true
+        },
+        "LDUUSBC": {
+          "studentEdited": true
+        },
+        "ODTB4DOCK": {
+          "studentEdited": true
+        },
+        "KAK63389WW": {
+          "studentEdited": true
+        }
+      }
+    }
+  }
+}
+
+

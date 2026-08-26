@@ -37,6 +37,20 @@ from app.services.print_job_service import (
     emit_orders_update,
     emit_print_job_available,
 )
+from app.services.compatibility_editor_service import (
+    CompatibilityEditorConflict,
+    CompatibilityEditorError,
+    CompatibilityEditorNotInitialized,
+    apply_mutation as apply_compatibility_editor_mutation,
+    get_document as get_compatibility_editor_document,
+    import_bundled_seed_if_empty,
+)
+from app.services.compatibility_publisher_service import (
+    COMPATIBILITY_SUPERAPP_FILENAME,
+    is_publish_configured as is_compatibility_publish_configured,
+    publish_latest as publish_latest_compatibility_document,
+    schedule_publish as schedule_compatibility_publish,
+)
 import logging
 
 bp = Blueprint("system", __name__, url_prefix="/api/system")
@@ -1527,90 +1541,124 @@ def save_vetting_editor_data():
     return jsonify({"success": True})
 
 
-@bp.route("/compatibility-editor-staging", methods=["GET"])
-@require_auth
-def get_compatibility_editor_staging_data():
-    download_url = (settings.compatibility_editor_staging_download_url or "").strip()
-    upload_url = (settings.compatibility_editor_staging_upload_url or "").strip()
-    if not download_url and not upload_url:
-        return jsonify(
-            {
-                "error": (
-                    "Compatibility editor staging is not configured "
-                    "(missing COMPATIBILITY_EDITOR_STAGING_DOWNLOAD_URL)."
-                )
-            }
-        ), 500
-
+def _emit_compatibility_editor_update(document: dict[str, Any]) -> None:
     try:
-        username, password = _get_compatibility_editor_staging_auth()
-    except RuntimeError as exc:
-        return jsonify({"error": str(exc)}), 500
+        from app.main import socketio
 
-    candidate_urls: list[str] = []
-    for candidate in (download_url, upload_url):
-        if candidate and candidate not in candidate_urls:
-            candidate_urls.append(candidate)
-
-    payload: Optional[dict[str, Any]] = None
-    for url in candidate_urls:
-        payload = _try_download_compatibility_editor_staging_json(
-            url, username, password
+        socketio.emit(
+            "compatibility_editor_updated",
+            {"revision": document["revision"]},
+            room="compatibility-editor",
         )
-        if payload is not None:
-            break
+    except Exception:
+        logger.exception("Failed to broadcast compatibility editor update")
 
-    if payload is None:
-        return jsonify(
-            {"error": "Failed to fetch compatibility editor staging JSON from WebDAV."}
-        ), 502
 
+@bp.route("/compatibility-editor", methods=["GET"])
+@require_admin
+def get_compatibility_editor_data():
+    db = get_db_session()
     try:
-        normalized = _validate_compatibility_editor_staging_payload(payload)
-    except ValueError as exc:
-        return jsonify(
-            {"error": f"Remote compatibility editor staging JSON is invalid: {exc}"}
-        ), 502
+        document = get_compatibility_editor_document(db)
+    except CompatibilityEditorNotInitialized as exc:
+        try:
+            document = import_bundled_seed_if_empty(
+                db, actor=get_current_user_email()
+            )
+        except (OSError, ValueError) as seed_exc:
+            logger.exception("Failed to initialize compatibility editor seed")
+            return jsonify(
+                {"error": f"Failed to initialize compatibility editor: {seed_exc}"}
+            ), 503
+    finally:
+        db.close()
 
-    return jsonify(normalized)
+    if document["publication"]["pending"]:
+        schedule_compatibility_publish()
+    document["publication"]["filename"] = COMPATIBILITY_SUPERAPP_FILENAME
+    document["publication"]["configured"] = is_compatibility_publish_configured()
+    return jsonify(document)
 
 
-@bp.route("/compatibility-editor-staging", methods=["PUT"])
-@require_auth
-def save_compatibility_editor_staging_data():
-    upload_url = (settings.compatibility_editor_staging_upload_url or "").strip()
-    if not upload_url:
-        return jsonify(
-            {
-                "error": (
-                    "Compatibility editor staging is not configured "
-                    "(missing COMPATIBILITY_EDITOR_STAGING_UPLOAD_URL)."
-                )
-            }
-        ), 500
-
+@bp.route("/compatibility-editor", methods=["PATCH"])
+@require_admin
+def mutate_compatibility_editor_data():
     payload = request.get_json(silent=True)
     if payload is None:
         return jsonify({"error": "Missing JSON request body."}), 400
 
+    db = get_db_session()
     try:
-        normalized = _validate_compatibility_editor_staging_payload(payload)
-    except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
-
-    try:
-        username, password = _get_compatibility_editor_staging_auth()
-    except RuntimeError as exc:
-        return jsonify({"error": str(exc)}), 500
-
-    if not _upload_compatibility_editor_staging_json(
-        upload_url, normalized, username, password
-    ):
+        document, duplicate = apply_compatibility_editor_mutation(
+            db,
+            payload,
+            actor=get_current_user_email(),
+        )
+    except CompatibilityEditorConflict as exc:
+        try:
+            current_document = get_compatibility_editor_document(db)
+            current_document["publication"]["filename"] = (
+                COMPATIBILITY_SUPERAPP_FILENAME
+            )
+            current_document["publication"]["configured"] = (
+                is_compatibility_publish_configured()
+            )
+        except CompatibilityEditorNotInitialized:
+            current_document = None
         return jsonify(
-            {"error": "Failed to upload compatibility editor staging JSON to WebDAV."}
-        ), 502
+            {
+                "error": str(exc),
+                "conflict": {
+                    "target": exc.target,
+                    "currentVersion": exc.current_version,
+                },
+                "document": current_document,
+            }
+        ), 409
+    except CompatibilityEditorNotInitialized as exc:
+        return jsonify({"error": str(exc)}), 503
+    except CompatibilityEditorError as exc:
+        return jsonify({"error": str(exc)}), 400
+    finally:
+        db.close()
 
-    return jsonify({"success": True})
+    schedule_compatibility_publish()
+    if not duplicate:
+        _emit_compatibility_editor_update(document)
+    document["duplicate"] = duplicate
+    document["publication"]["filename"] = COMPATIBILITY_SUPERAPP_FILENAME
+    document["publication"]["configured"] = is_compatibility_publish_configured()
+    return jsonify(document)
+
+
+@bp.route("/compatibility-editor/publish", methods=["POST"])
+@require_admin
+def publish_compatibility_editor_data():
+    result = publish_latest_compatibility_document()
+    status = 200 if result.success else 502
+    return jsonify(
+        {
+            "attempted": result.attempted,
+            "success": result.success,
+            "revision": result.revision,
+            "pending": result.pending,
+            "error": result.error,
+            "filename": COMPATIBILITY_SUPERAPP_FILENAME,
+        }
+    ), status
+
+
+@bp.route("/compatibility-editor-staging", methods=["GET", "PUT"])
+@require_admin
+def compatibility_editor_staging_retired():
+    return jsonify(
+        {
+            "error": (
+                "The legacy compatibility staging endpoint is retired. "
+                "Use /api/system/compatibility-editor."
+            )
+        }
+    ), 410
 
 
 # ============ Inventory Reorder Tool Endpoints ============

@@ -1,5 +1,6 @@
-import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
-import { Cable, Loader2, Monitor, Plus, RefreshCw, Save, Trash2, type LucideIcon } from "lucide-react";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Cable, Cloud, CloudOff, Loader2, Monitor, Plus, RefreshCw, Save, Trash2, type LucideIcon } from "lucide-react";
+import { io } from "socket.io-client";
 import { toast } from "sonner";
 import {
   compatibilityEditorApi,
@@ -12,8 +13,12 @@ import {
   type CompatibilityEditorDetailField,
   type CompatibilityEditorDetailStatus,
   type CompatibilityEditorDock,
+  type CompatibilityEditorDocument,
+  type CompatibilityEditorMutation,
   type CompatibilityEditorPayload,
+  type CompatibilityEditorPublication,
   type CompatibilityEditorStatus,
+  type CompatibilityEditorVersions,
 } from "../api/compatibilityEditor";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
@@ -39,6 +44,7 @@ type AddItemForm = {
 type ActiveCell = {
   computerKey: string;
   dockKey: string;
+  expectedVersion: number;
 };
 
 type CellForm = {
@@ -71,9 +77,6 @@ const isCompatibilityStatus = (value: unknown): value is CompatibilityEditorStat
 
 const isDetailStatus = (value: unknown): value is CompatibilityEditorDetailStatus =>
   typeof value === "string" && COMPATIBILITY_EDITOR_DETAIL_STATUS_VALUES.includes(value as CompatibilityEditorDetailStatus);
-
-const clonePayload = (payload: CompatibilityEditorPayload): CompatibilityEditorPayload =>
-  JSON.parse(JSON.stringify(payload)) as CompatibilityEditorPayload;
 
 const createClientId = () =>
   typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
@@ -191,28 +194,14 @@ const createCellForm = (
   };
 };
 
-const applyStatusToComputer = (
-  computer: CompatibilityEditorComputer,
-  dockKey: string,
-  status: CompatibilityEditorStatus
-) => {
-  computer.incompatibleWith = (computer.incompatibleWith ?? []).filter((key) => key !== dockKey);
-  computer.partiallyCompatibleWith = (computer.partiallyCompatibleWith ?? []).filter((key) => key !== dockKey);
-
-  if (status === "Incompatible") {
-    computer.incompatibleWith.push(dockKey);
-    return;
-  }
-
-  if (status === "Partially Compatible") {
-    computer.partiallyCompatibleWith.push(dockKey);
-  }
-};
-
 export default function CompatibilityEditor() {
   const { isAdmin, isLoading: authLoading, user } = useAuth();
   const currentUserLabel = getUserDisplayName(user, "you");
   const [payload, setPayload] = useState<CompatibilityEditorPayload | null>(null);
+  const [versions, setVersions] = useState<CompatibilityEditorVersions | null>(null);
+  const [revision, setRevision] = useState(0);
+  const [publication, setPublication] = useState<CompatibilityEditorPublication | null>(null);
+  const [conflictMessage, setConflictMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [activeCell, setActiveCell] = useState<ActiveCell | null>(null);
@@ -220,6 +209,7 @@ export default function CompatibilityEditor() {
   const [addItemKind, setAddItemKind] = useState<AddItemKind>(null);
   const [addItemForm, setAddItemForm] = useState<AddItemForm>(defaultAddItemForm);
   const [draftId] = useState(createClientId);
+  const revisionRef = useRef(0);
 
   const computerKeys = useMemo(() => (payload ? sortKeysByName(payload.computers) : []), [payload]);
   const dockKeys = useMemo(() => (payload ? sortKeysByName(payload.docks) : []), [payload]);
@@ -232,71 +222,121 @@ export default function CompatibilityEditor() {
     [dockKeys, payload]
   );
 
-  const loadData = useCallback(async () => {
+  const applyDocument = useCallback((document: CompatibilityEditorDocument) => {
+    if (document.revision < revisionRef.current) {
+      return;
+    }
+    setPayload(document.data);
+    setVersions(document.versions);
+    setRevision(document.revision);
+    revisionRef.current = document.revision;
+    setPublication(document.publication);
+  }, []);
+
+  const loadData = useCallback(async (silent = false) => {
     if (!isAdmin) {
       setLoading(false);
       return;
     }
 
-    setLoading(true);
-    try {
-      const nextPayload = await compatibilityEditorApi.getStagingData();
-      setPayload(nextPayload);
-    } catch (error: unknown) {
-      const message = extractApiErrorMessage(error, "Failed to load compatibility staging data.");
-      toast.error("Failed to load Compatibility Editor", { description: message });
-      setPayload(null);
-    } finally {
-      setLoading(false);
+    if (!silent) {
+      setLoading(true);
     }
-  }, [isAdmin]);
+    try {
+      const document = await compatibilityEditorApi.getData();
+      applyDocument(document);
+    } catch (error: unknown) {
+      const message = extractApiErrorMessage(error, "Failed to load compatibility data.");
+      if (!silent) {
+        toast.error("Failed to load Compatibility Editor", { description: message });
+        setPayload(null);
+      }
+    } finally {
+      if (!silent) {
+        setLoading(false);
+      }
+    }
+  }, [applyDocument, isAdmin]);
 
   useEffect(() => {
-    void loadData();
+    void loadData(false);
   }, [loadData]);
 
   useEffect(() => {
-    if (!payload || !activeCell) {
-      setCellForm(null);
+    if (!isAdmin) {
       return;
     }
 
-    const computer = payload.computers[activeCell.computerKey];
-    const cell = computer?.compatibilityData?.[activeCell.dockKey];
-    if (!computer) {
-      setCellForm(null);
-      return;
-    }
+    const socket = io(`${window.location.protocol}//${window.location.host}`, {
+      path: "/socket.io",
+      transports: ["websocket", "polling"],
+      reconnection: true,
+    });
+    socket.on("connect", () => socket.emit("join", { room: "compatibility-editor" }));
+    socket.on("compatibility_editor_updated", (event: { revision?: number }) => {
+      if (typeof event.revision === "number" && event.revision > revisionRef.current) {
+        void loadData(true);
+      }
+    });
+    const interval = window.setInterval(() => void loadData(true), 15_000);
+    return () => {
+      window.clearInterval(interval);
+      socket.disconnect();
+    };
+  }, [isAdmin, loadData]);
 
-    setCellForm(createCellForm(computer, activeCell.dockKey, cell));
-  }, [activeCell, payload]);
-
-  const saveData = async () => {
-    if (!payload) {
-      return;
-    }
-
+  const performMutation = async (
+    mutation: CompatibilityEditorMutation,
+    successMessage: string
+  ): Promise<void> => {
     setSaving(true);
     try {
-      await compatibilityEditorApi.saveStagingData(payload);
-      toast.success("Compatibility staging data saved");
+      const document = await compatibilityEditorApi.mutate(mutation, createClientId());
+      applyDocument(document);
+      toast.success(successMessage);
     } catch (error: unknown) {
       const message = extractApiErrorMessage(error, "Save failed.");
-      toast.error("Failed to save Compatibility Editor", { description: message });
+      const conflictDocument = (
+        error as { response?: { status?: number; data?: { document?: CompatibilityEditorDocument } } }
+      ).response?.data?.document;
+      if (conflictDocument) {
+        applyDocument(conflictDocument);
+        if (mutation.type === "cell.update") {
+          const latestVersion = conflictDocument.versions.cells[mutation.computerKey]?.[mutation.dockKey];
+          if (typeof latestVersion === "number") {
+            setActiveCell((current) => current ? { ...current, expectedVersion: latestVersion } : current);
+          }
+          setConflictMessage(
+            "This cell changed after you opened it. Your draft is preserved; review it, then save again to replace the newer value."
+          );
+        }
+      }
+      toast.error(
+        (error as { response?: { status?: number } }).response?.status === 409
+          ? "Another editor changed this item"
+          : "Failed to save Compatibility Editor",
+        { description: message }
+      );
+      throw error;
     } finally {
       setSaving(false);
     }
   };
 
-  const updatePayload = (updater: (draft: CompatibilityEditorPayload) => void) => {
-    setPayload((current) => {
-      if (!current) {
-        return current;
-      }
-
-      const draft = clonePayload(current);
-      updater(draft);
-      return draft;
+  const openCell = (computerKey: string, dockKey: string) => {
+    if (!payload || !versions) {
+      return;
+    }
+    const computer = payload.computers[computerKey];
+    if (!computer) {
+      return;
+    }
+    setCellForm(createCellForm(computer, dockKey, computer.compatibilityData?.[dockKey]));
+    setConflictMessage(null);
+    setActiveCell({
+      computerKey,
+      dockKey,
+      expectedVersion: versions.cells[computerKey]?.[dockKey] ?? 0,
     });
   };
 
@@ -305,7 +345,7 @@ export default function CompatibilityEditor() {
     setAddItemForm(defaultAddItemForm);
   };
 
-  const addItem = () => {
+  const addItem = async () => {
     if (!payload || !addItemKind) {
       return;
     }
@@ -328,106 +368,98 @@ export default function CompatibilityEditor() {
       return;
     }
 
-    updatePayload((draft) => {
+    try {
       if (addItemKind === "computer") {
-        draft.computers[sku] = {
+        await performMutation({
+          type: "computer.add",
+          computerKey: sku,
+          computer: {
           name,
           url,
           hidden: false,
           studentEdited: true,
-          incompatibleWith: [],
-          partiallyCompatibleWith: [],
-          compatibilityNotes: {},
-          compatibilityData: Object.fromEntries(
-            Object.keys(draft.docks).map((dockKey) => [dockKey, { studentEdited: true }])
-          ),
-        };
-        return;
+          },
+        }, "Computer added");
+      } else {
+        await performMutation({
+          type: "dock.add",
+          dockKey: sku,
+          dock: { name, url, hidden: false, studentEdited: true },
+        }, "Dock added");
       }
-
-      draft.docks[sku] = {
-        name,
-        url,
-        hidden: false,
-        studentEdited: true,
-      };
-
-      for (const computer of Object.values(draft.computers)) {
-        computer.compatibilityData = {
-          ...(computer.compatibilityData ?? {}),
-          [sku]: { studentEdited: true },
-        };
-      }
-    });
-
-    setAddItemKind(null);
+      setAddItemKind(null);
+    } catch {
+      // The shared mutation handler displays the error and refreshes conflicts.
+    }
   };
 
-  const updateComputer = (
+  const saveComputer = async (
     computerKey: string,
-    updater: (computer: CompatibilityEditorComputer) => void
+    computer: CompatibilityEditorComputer,
+    expectedVersion: number
   ) => {
-    updatePayload((draft) => {
-      const computer = draft.computers[computerKey];
-      if (computer) {
-        updater(computer);
-      }
-    });
+    await performMutation(
+      { type: "computer.update", computerKey, computer, expectedVersion },
+      "Computer updated"
+    );
   };
 
-  const updateDock = (dockKey: string, updater: (dock: CompatibilityEditorDock) => void) => {
-    updatePayload((draft) => {
-      const dock = draft.docks[dockKey];
-      if (dock) {
-        updater(dock);
-      }
-    });
+  const saveDock = async (
+    dockKey: string,
+    dock: CompatibilityEditorDock,
+    expectedVersion: number
+  ) => {
+    await performMutation(
+      { type: "dock.update", dockKey, dock, expectedVersion },
+      "Dock updated"
+    );
   };
 
-  const removeComputer = (computerKey: string) => {
-    if (!window.confirm(`Remove ${payload?.computers[computerKey]?.name ?? "this computer"} from staging?`)) {
+  const removeComputer = async (computerKey: string) => {
+    if (!window.confirm(`Remove ${payload?.computers[computerKey]?.name ?? "this computer"} from the compatibility matrix?`)) {
       return;
     }
-
-    updatePayload((draft) => {
-      delete draft.computers[computerKey];
-    });
+    try {
+      await performMutation(
+        {
+          type: "computer.delete",
+          computerKey,
+          expectedVersion: versions?.computers[computerKey] ?? 0,
+          expectedRevision: revision,
+        },
+        "Computer removed"
+      );
+    } catch {
+      // Error already displayed.
+    }
   };
 
-  const removeDock = (dockKey: string) => {
-    if (!window.confirm(`Remove ${payload?.docks[dockKey]?.name ?? "this dock"} from staging?`)) {
+  const removeDock = async (dockKey: string) => {
+    if (!window.confirm(`Remove ${payload?.docks[dockKey]?.name ?? "this dock"} from the compatibility matrix?`)) {
       return;
     }
-
-    updatePayload((draft) => {
-      delete draft.docks[dockKey];
-      for (const computer of Object.values(draft.computers)) {
-        computer.incompatibleWith = (computer.incompatibleWith ?? []).filter((key) => key !== dockKey);
-        computer.partiallyCompatibleWith = (computer.partiallyCompatibleWith ?? []).filter((key) => key !== dockKey);
-        if (computer.compatibilityNotes) {
-          delete computer.compatibilityNotes[dockKey];
-        }
-        if (computer.compatibilityData) {
-          delete computer.compatibilityData[dockKey];
-        }
-      }
-    });
+    try {
+      await performMutation(
+        {
+          type: "dock.delete",
+          dockKey,
+          expectedVersion: versions?.docks[dockKey] ?? 0,
+          expectedRevision: revision,
+        },
+        "Dock removed"
+      );
+    } catch {
+      // Error already displayed.
+    }
   };
 
-  const saveCell = () => {
+  const saveCell = async () => {
     if (!activeCell || !cellForm) {
       return;
     }
-
-    updatePayload((draft) => {
-      const computer = draft.computers[activeCell.computerKey];
-      if (!computer) {
-        return;
-      }
-
-      computer.compatibilityData = computer.compatibilityData ?? {};
-      const cell: CompatibilityEditorCell = {
-        ...(computer.compatibilityData[activeCell.dockKey] ?? {}),
+    const currentCell = payload?.computers[activeCell.computerKey]?.compatibilityData?.[activeCell.dockKey];
+    const cell: CompatibilityEditorCell = {
+        ...(currentCell ?? {}),
         compatibilityStatus: cellForm.status,
         rebootNeeded: cellForm.rebootNeeded,
       };
@@ -437,21 +469,28 @@ export default function CompatibilityEditor() {
       }
 
       const notes = cellForm.notes.trim();
-      computer.compatibilityNotes = computer.compatibilityNotes ?? {};
       if (notes) {
         cell.notes = notes;
-        computer.compatibilityNotes[activeCell.dockKey] = notes;
       } else {
         delete cell.notes;
-        delete computer.compatibilityNotes[activeCell.dockKey];
       }
-
-      computer.compatibilityData[activeCell.dockKey] = cell;
-      applyStatusToComputer(computer, activeCell.dockKey, cellForm.status);
-    });
-
-    setActiveCell(null);
-    toast.success("Compatibility cell updated");
+    try {
+      await performMutation(
+        {
+          type: "cell.update",
+          computerKey: activeCell.computerKey,
+          dockKey: activeCell.dockKey,
+          expectedVersion: activeCell.expectedVersion,
+          cell,
+        },
+        "Compatibility cell updated"
+      );
+      setActiveCell(null);
+      setCellForm(null);
+      setConflictMessage(null);
+    } catch {
+      // Keep the modal open so the user can compare/retry after a conflict.
+    }
   };
 
   if (authLoading || loading) {
@@ -490,19 +529,40 @@ export default function CompatibilityEditor() {
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div className="space-y-1">
           <h1 className="text-2xl font-semibold tracking-tight text-foreground">Compatibility Editor</h1>
-          <p className="text-sm text-muted-foreground">Staging matrix for computers and docks.</p>
+          <p className="text-sm text-muted-foreground">Collaborative matrix for computers and docks.</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <Button type="button" variant="outline" onClick={() => void loadData()} disabled={saving || loading}>
+          <Badge variant={!publication?.configured || publication?.lastError ? "destructive" : publication?.pending ? "warning" : "success"}>
+            {!publication?.configured || publication?.lastError ? (
+              <CloudOff className="mr-1.5 h-3.5 w-3.5" />
+            ) : (
+              <Cloud className="mr-1.5 h-3.5 w-3.5" />
+            )}
+            {!publication?.configured
+              ? "WebDAV not configured"
+              : publication?.lastError
+              ? "WebDAV retry pending"
+              : publication?.pending
+                ? "WebDAV sync pending"
+                : "WebDAV synced"}
+          </Badge>
+          <span className="text-xs text-muted-foreground">Revision {revision}</span>
+          <Button type="button" variant="outline" onClick={() => void loadData(false)} disabled={saving || loading}>
             <RefreshCw className="mr-2 h-4 w-4" />
             Refresh
           </Button>
-          <Button type="button" onClick={() => void saveData()} disabled={!payload || saving} className="btn-lift">
-            {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
-            Save Staging
-          </Button>
         </div>
       </div>
+
+      {!publication?.configured ? (
+        <section className="rounded-lg border border-destructive/40 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+          Database editing is available, but the WebDAV folder is not configured.
+        </section>
+      ) : publication?.lastError ? (
+        <section className="rounded-lg border border-destructive/40 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+          Database changes are safe, but WebDAV publishing is retrying: {publication.lastError}
+        </section>
+      ) : null}
 
       {!payload ? (
         <section className="rounded-2xl border border-border/70 bg-card/80 p-5 shadow-none">
@@ -567,7 +627,7 @@ export default function CompatibilityEditor() {
                               <TableCell key={dockKey} className="p-1.5 text-center">
                                 <button
                                   type="button"
-                                  onClick={() => setActiveCell({ computerKey, dockKey })}
+                                  onClick={() => openCell(computerKey, dockKey)}
                                   title={`${computer.name} / ${dock.name}: ${visual.label}`}
                                   className={cn(
                                     "h-12 w-full min-w-[6.5rem] rounded-md border px-2 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
@@ -604,10 +664,9 @@ export default function CompatibilityEditor() {
                     name={computer.name}
                     url={computer.url ?? ""}
                     hidden={Boolean(computer.hidden)}
-                    onNameChange={(name) => updateComputer(computerKey, (draft) => { draft.name = name; })}
-                    onUrlChange={(url) => updateComputer(computerKey, (draft) => { draft.url = url; })}
-                    onHiddenChange={(hidden) => updateComputer(computerKey, (draft) => { draft.hidden = hidden; })}
-                    onRemove={() => removeComputer(computerKey)}
+                    version={versions?.computers[computerKey] ?? 0}
+                    onSave={(value, expectedVersion) => saveComputer(computerKey, { ...computer, ...value }, expectedVersion)}
+                    onRemove={() => void removeComputer(computerKey)}
                   />
                 );
               })}
@@ -630,10 +689,9 @@ export default function CompatibilityEditor() {
                     name={dock.name}
                     url={dock.url ?? ""}
                     hidden={Boolean(dock.hidden)}
-                    onNameChange={(name) => updateDock(dockKey, (draft) => { draft.name = name; })}
-                    onUrlChange={(url) => updateDock(dockKey, (draft) => { draft.url = url; })}
-                    onHiddenChange={(hidden) => updateDock(dockKey, (draft) => { draft.hidden = hidden; })}
-                    onRemove={() => removeDock(dockKey)}
+                    version={versions?.docks[dockKey] ?? 0}
+                    onSave={(value, expectedVersion) => saveDock(dockKey, { ...dock, ...value }, expectedVersion)}
+                    onRemove={() => void removeDock(dockKey)}
                   />
                 );
               })}
@@ -654,6 +712,11 @@ export default function CompatibilityEditor() {
 
           {cellForm ? (
             <div className="space-y-5">
+              {conflictMessage ? (
+                <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                  {conflictMessage}
+                </div>
+              ) : null}
               <div className="grid gap-3 sm:grid-cols-3">
                 {COMPATIBILITY_EDITOR_STATUS_VALUES.map((status) => (
                   <label
@@ -744,8 +807,8 @@ export default function CompatibilityEditor() {
             <Button type="button" variant="outline" onClick={() => setActiveCell(null)}>
               Cancel
             </Button>
-            <Button type="button" onClick={saveCell}>
-              <Save className="mr-2 h-4 w-4" />
+            <Button type="button" onClick={() => void saveCell()} disabled={saving}>
+              {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
               Save Cell
             </Button>
           </DialogFooter>
@@ -796,8 +859,8 @@ export default function CompatibilityEditor() {
             <Button type="button" variant="outline" onClick={() => setAddItemKind(null)}>
               Cancel
             </Button>
-            <Button type="button" onClick={addItem}>
-              <Plus className="mr-2 h-4 w-4" />
+            <Button type="button" onClick={() => void addItem()} disabled={saving}>
+              {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Plus className="mr-2 h-4 w-4" />}
               Add
             </Button>
           </DialogFooter>
@@ -843,9 +906,11 @@ type MatrixItemRowProps = {
   name: string;
   url: string;
   hidden: boolean;
-  onNameChange: (name: string) => void;
-  onUrlChange: (url: string) => void;
-  onHiddenChange: (hidden: boolean) => void;
+  version: number;
+  onSave: (
+    value: { name: string; url: string; hidden: boolean },
+    expectedVersion: number
+  ) => Promise<void>;
   onRemove: () => void;
 };
 
@@ -854,29 +919,82 @@ function MatrixItemRow({
   name,
   url,
   hidden,
-  onNameChange,
-  onUrlChange,
-  onHiddenChange,
+  version,
+  onSave,
   onRemove,
 }: MatrixItemRowProps) {
+  const [draft, setDraft] = useState({ name, url, hidden });
+  const [rowSaving, setRowSaving] = useState(false);
+  const editingRef = useRef(false);
+  const baseVersionRef = useRef(version);
+
+  useEffect(() => {
+    if (!editingRef.current && !rowSaving) {
+      setDraft({ name, url, hidden });
+      baseVersionRef.current = version;
+    }
+  }, [hidden, name, rowSaving, url, version]);
+
+  const beginEditing = () => {
+    if (!editingRef.current) {
+      editingRef.current = true;
+      baseVersionRef.current = version;
+    }
+  };
+
+  const saveDraft = async (nextDraft = draft) => {
+    editingRef.current = false;
+    if (nextDraft.name === name && nextDraft.url === url && nextDraft.hidden === hidden) {
+      return;
+    }
+    setRowSaving(true);
+    try {
+      await onSave(nextDraft, baseVersionRef.current);
+    } catch {
+      setDraft({ name, url, hidden });
+    } finally {
+      setRowSaving(false);
+    }
+  };
+
   return (
     <div className="grid gap-3 rounded-lg border bg-card p-3 md:grid-cols-[minmax(8rem,0.8fr)_minmax(12rem,1.4fr)_minmax(12rem,1.8fr)_auto_auto] md:items-center">
       <div>
         <div className="text-xs font-medium uppercase text-muted-foreground">SKU</div>
         <div className="break-words text-sm font-medium text-foreground">{sku}</div>
       </div>
-      <Input value={name} onChange={(event) => onNameChange(event.target.value)} aria-label={`Name for ${sku}`} />
       <Input
-        value={url}
+        value={draft.name}
+        onFocus={beginEditing}
+        onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))}
+        onBlur={() => void saveDraft()}
+        disabled={rowSaving}
+        aria-label={`Name for ${sku}`}
+      />
+      <Input
+        value={draft.url}
         type="url"
         inputMode="url"
         autoCapitalize="off"
-        onChange={(event) => onUrlChange(event.target.value)}
+        onFocus={beginEditing}
+        onChange={(event) => setDraft((current) => ({ ...current, url: event.target.value }))}
+        onBlur={() => void saveDraft()}
+        disabled={rowSaving}
         aria-label={`URL for ${sku}`}
       />
-      <Checkbox checked={hidden} onChange={(event) => onHiddenChange(event.target.checked)} label="Hidden" />
-      <Button type="button" variant="destructive" size="icon" onClick={onRemove} aria-label={`Remove ${name || sku}`}>
-        <Trash2 className="h-4 w-4" />
+      <Checkbox
+        checked={draft.hidden}
+        disabled={rowSaving}
+        onChange={(event) => {
+          const nextDraft = { ...draft, hidden: event.target.checked };
+          beginEditing();
+          setDraft(nextDraft);
+          void saveDraft(nextDraft);
+        }}
+        label="Hidden"
+      />
+      <Button type="button" variant="destructive" size="icon" onClick={onRemove} disabled={rowSaving} aria-label={`Remove ${name || sku}`}>
+        {rowSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
       </Button>
     </div>
   );

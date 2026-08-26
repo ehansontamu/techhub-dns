@@ -132,6 +132,7 @@ class Settings(BaseSettings):
     rate_limit_window_seconds: int = 60
     admin_read_rate_limit_requests: int = 30
     admin_write_rate_limit_requests: int = 10
+    compatibility_editor_write_rate_limit_requests: int = 120
 
     # Background scheduler runner (used by backend/run_scheduler.py)
     scheduler_enabled: bool = False
@@ -241,6 +242,14 @@ class Settings(BaseSettings):
     # Compatibility Editor Staging (env-only, no Key Vault integration)
     compatibility_editor_staging_download_url: Optional[str] = None
     compatibility_editor_staging_upload_url: Optional[str] = None
+
+    # Collaborative compatibility editor. The publisher appends the fixed
+    # compatibility_superapp.json filename to this folder URL.
+    compatibility_editor_webdav_folder_url: Optional[str] = None
+    compatibility_editor_publish_debounce_seconds: int = 3
+    compatibility_editor_publish_max_delay_seconds: int = 15
+    compatibility_editor_publish_reconcile_seconds: int = 300
+    compatibility_editor_publish_verify: bool = True
 
     # Inventory Reorder Tool (manual admin refresh, env-only)
     inventory_reorder_location_id: str = "e5945760-568d-4f4b-be3c-47d3587851a7"

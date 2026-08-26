@@ -57,6 +57,7 @@ describe("Sidebar", () => {
         expect(screen.queryByLabelText("Open sidebar")).not.toBeInTheDocument();
         expect(screen.getByLabelText("Collapse sidebar")).toBeInTheDocument();
         expect(screen.queryByLabelText("Close sidebar overlay")).not.toBeInTheDocument();
+        expect(screen.queryByRole("link", { name: "Compatibility Editor" })).not.toBeInTheDocument();
         await waitFor(() => {
             expect(container.querySelector("aside")).toHaveStyle({ transform: "none", width: "256px" });
         });

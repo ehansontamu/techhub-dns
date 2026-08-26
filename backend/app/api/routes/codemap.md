@@ -33,7 +33,7 @@
 - **External systems.**
   - **Inflow API:** sync endpoints, webhooks, order fulfillment, and asset-tag logic all call `InflowService` (via `sync_recent_started_orders_sync`, `get_order_by_number_sync`, `fulfill_sales_order_sync`).
   - **TAMU SAML / Entra ID:** `auth.py` and `_get_saml_status` use Microsoft Entra OIDC plus `python3-saml` to authenticate and persist sessions.
-  - **Microsoft Graph / Teams / SharePoint:** Teams notifications (`teams_recipient_service`), SharePoint uploads/downloads (`SharePointService`), and Graph-backed status checks (`graph_service`, `sharepoint_service._get_access_token`). Vetting/compatibility editor endpoints talk to remote WebDAV endpoints secured with Azure identities.
+  - **Microsoft Graph / Teams / SharePoint:** Teams notifications (`teams_recipient_service`), SharePoint uploads/downloads (`SharePointService`), and Graph-backed status checks (`graph_service`, `sharepoint_service._get_access_token`). The vetting editor remains WebDAV-backed; the compatibility editor is admin-only and database-backed, with an asynchronous one-way WebDAV projection to `compatibility_superapp.json`.
   - **Email & PDF:** `pdf_service`, `email_service`, and `pdf_service.generate_order_details_pdf` support downloads and outgoing emails, often triggered by order or system routes.
   - **Print tooling & Canopy upload:** `PrintJobService`, `emit_orders_update`, and `CanopyOrdersUploaderService` surface job status, require-agent flows, and upload notifications.
   - **Realtime / Socket.IO:** `_broadcast_orders_sync`, `_broadcast_active_runs_sync`, and `broadcast_vehicle_status_update_sync` emit payloads to `socketio` rooms so dashboards stay current.

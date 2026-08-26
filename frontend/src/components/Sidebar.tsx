@@ -35,7 +35,6 @@ const navItems: LeafNavItem[] = [
   { path: "/order-qa", label: "QA Checklist", icon: ClipboardCheck },
   { path: "/delivery", to: "/delivery/dispatch", label: "Delivery", icon: Truck },
   { path: "/shipping", label: "Shipping", icon: Send },
-  { path: "/compatibility-editor", label: "Compatibility Editor", icon: Cable },
 ];
 
 const adminItems = [
@@ -253,6 +252,25 @@ export function Sidebar({ className }: { className?: string }) {
 
           {isAdmin && (
             <>
+              <NavLink
+                key="/compatibility-editor"
+                to="/compatibility-editor"
+                aria-label="Compatibility Editor"
+                title="Compatibility Editor"
+                className={({ isActive: isCurrentCompatibilityEditor }) =>
+                  cn(
+                    "flex min-h-[44px] items-center rounded-lg py-2.5 text-sm font-medium transition-colors",
+                    showExpandedContent ? "gap-3 px-3" : "justify-center px-0",
+                    isCurrentCompatibilityEditor
+                      ? activeNavItemClassName
+                      : "text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+                  )
+                }
+              >
+                <Cable className="h-5 w-5 flex-shrink-0" />
+                {showExpandedContent && <span className="overflow-hidden whitespace-nowrap">Compatibility Editor</span>}
+              </NavLink>
+
               <NavLink
                 key="/vetting-editor"
                 to="/vetting-editor"

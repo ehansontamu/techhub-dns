@@ -8,6 +8,10 @@ import asyncio
 from app.database import get_db_session
 from app.services.inflow_service import InflowService
 from app.services.inventory_reorder_service import InventoryReorderService
+from app.services.compatibility_publisher_service import (
+    is_publish_configured as is_compatibility_publish_configured,
+    publish_latest as publish_latest_compatibility_document,
+)
 from app.models.inflow_webhook import InflowWebhook, WebhookStatus
 from app.config import settings
 from app.api.routes.inflow import _run_inflow_sync
@@ -26,6 +30,18 @@ _INFLOW_EVENT_MAPPING = {
     "orderStatusChanged": "salesOrder.updated",
 }
 inventory_reorder_service = InventoryReorderService(settings)
+
+
+def publish_compatibility_editor_snapshot() -> None:
+    result = publish_latest_compatibility_document()
+    if result.error:
+        logger.warning("Compatibility editor reconciliation failed: %s", result.error)
+    elif result.attempted:
+        logger.info(
+            "Published compatibility editor revision %s (pending=%s)",
+            result.revision,
+            result.pending,
+        )
 
 
 def _normalize_webhook_url(url: str | None) -> str:
@@ -505,6 +521,27 @@ def start_scheduler():
     else:
         logger.info(
             "Inventory reorder scheduled refresh disabled via INVENTORY_REORDER_SCHEDULED_REFRESH_ENABLED"
+        )
+
+    if is_compatibility_publish_configured():
+        reconcile_seconds = max(
+            30,
+            min(
+                int(settings.compatibility_editor_publish_reconcile_seconds or 300),
+                3600,
+            ),
+        )
+        scheduler.add_job(
+            publish_compatibility_editor_snapshot,
+            trigger=IntervalTrigger(seconds=reconcile_seconds),
+            id="compatibility_editor_publish",
+            name="Publish compatibility_superapp.json",
+            replace_existing=True,
+            next_run_time=datetime.now() + timedelta(seconds=reconcile_seconds),
+        )
+        logger.info(
+            "Compatibility editor WebDAV reconciliation enabled every %s seconds",
+            reconcile_seconds,
         )
 
     scheduler.start()

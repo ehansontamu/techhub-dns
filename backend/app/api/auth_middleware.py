@@ -70,6 +70,11 @@ def _compact_rate_limit_queue(
 
 def _get_rate_limit_rule(path: str, method: str) -> tuple[str, int] | None:
     normalized_method = (method or "GET").upper()
+    if normalized_method == "PATCH" and path == "/api/system/compatibility-editor":
+        return (
+            "compatibility_editor_writes",
+            settings.compatibility_editor_write_rate_limit_requests,
+        )
     if normalized_method == "GET" and (
         path.startswith("/api/observability/")
         or path in {"/api/system/status", "/api/system/sync-health"}
@@ -233,6 +238,9 @@ def get_rate_limit_snapshot() -> dict:
         "rules": {
             "admin_reads": settings.admin_read_rate_limit_requests,
             "admin_writes": settings.admin_write_rate_limit_requests,
+            "compatibility_editor_writes": (
+                settings.compatibility_editor_write_rate_limit_requests
+            ),
         },
         "active_events": bucket_totals,
         "active_scopes": bucket_scopes,
