@@ -102,6 +102,8 @@ export interface CompatibilityEditorChange {
   proposedData: Record<string, unknown>;
   currentData: Record<string, unknown> | null;
   status: "pending" | "approved" | "rejected";
+  readyForReview: boolean;
+  bundle: CompatibilityEditorBundle | null;
   submittedBy: string;
   updatedBy: string;
   submittedAt: string | null;
@@ -111,9 +113,20 @@ export interface CompatibilityEditorChange {
   reviewNote: string | null;
 }
 
+export interface CompatibilityEditorBundle {
+  axis: "computer" | "dock";
+  itemKey: string;
+  completedCells: number;
+  requiredCells: number;
+  missingTargets: string[];
+  ready: boolean;
+}
+
 export interface CompatibilityEditorApproval {
   pendingCount: number;
   pendingChanges: CompatibilityEditorChange[];
+  draftCount: number;
+  draftBundles: CompatibilityEditorChange[];
 }
 
 export interface CompatibilityEditorDocument {
@@ -201,6 +214,11 @@ export const compatibilityEditorApi = {
       action,
       ...(note ? { note } : {}),
     });
+    return response.data;
+  },
+
+  async submitBundle(changeId: string): Promise<CompatibilityEditorDocument> {
+    const response = await apiClient.post(`/system/compatibility-editor/changes/${changeId}/submit`);
     return response.data;
   },
 };

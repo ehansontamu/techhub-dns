@@ -53,6 +53,7 @@ from app.services.compatibility_approval_service import (
     get_workspace_document as get_compatibility_editor_workspace,
     resolve_pending_after_admin_mutation,
     review_change as review_compatibility_change_request,
+    submit_bundle as submit_compatibility_editor_bundle,
     submit_change as submit_compatibility_editor_change,
 )
 from app.services.compatibility_publisher_service import (
@@ -1704,6 +1705,41 @@ def review_compatibility_editor_change(change_id: str):
     _emit_compatibility_editor_update(document)
     document["publication"]["filename"] = COMPATIBILITY_SUPERAPP_FILENAME
     document["publication"]["configured"] = is_compatibility_publish_configured()
+    return jsonify(document)
+
+
+@bp.route("/compatibility-editor/changes/<change_id>/submit", methods=["POST"])
+@require_auth
+def submit_compatibility_editor_bundle_for_review(change_id: str):
+    db = get_db_session()
+    try:
+        document = submit_compatibility_editor_bundle(
+            db,
+            change_id,
+            actor=get_current_user_email(),
+        )
+    except CompatibilityEditorConflict as exc:
+        return jsonify(
+            {
+                "error": str(exc),
+                "conflict": {
+                    "target": exc.target,
+                    "currentVersion": exc.current_version,
+                },
+            }
+        ), 409
+    except CompatibilityEditorNotInitialized as exc:
+        return jsonify({"error": str(exc)}), 503
+    except CompatibilityEditorError as exc:
+        return jsonify({"error": str(exc)}), 400
+    finally:
+        db.close()
+
+    _emit_compatibility_editor_update(document)
+    document["publication"]["filename"] = COMPATIBILITY_SUPERAPP_FILENAME
+    document["publication"]["configured"] = (
+        is_compatibility_publish_configured()
+    )
     return jsonify(document)
 
 

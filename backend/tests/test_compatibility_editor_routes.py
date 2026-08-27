@@ -21,7 +21,12 @@ def _document():
         "workspaceRevision": 1,
         "versions": {"computers": {}, "docks": {}, "cells": {}},
         "approvedVersions": {"computers": {}, "docks": {}, "cells": {}},
-        "approval": {"pendingCount": 0, "pendingChanges": []},
+        "approval": {
+            "pendingCount": 0,
+            "pendingChanges": [],
+            "draftCount": 0,
+            "draftBundles": [],
+        },
         "publication": {
             "publishedRevision": 0,
             "pending": True,
@@ -59,6 +64,15 @@ def test_non_admin_can_submit_but_cannot_review_or_publish(monkeypatch):
     monkeypatch.setattr(
         system_routes, "submit_compatibility_editor_change", fake_submit
     )
+    submitted_bundles = []
+
+    def fake_submit_bundle(_db, change_id, *, actor):
+        submitted_bundles.append((change_id, actor))
+        return _document()
+
+    monkeypatch.setattr(
+        system_routes, "submit_compatibility_editor_bundle", fake_submit_bundle
+    )
 
     with app.test_client() as client:
         assert client.get("/api/system/compatibility-editor").status_code == 200
@@ -67,6 +81,10 @@ def test_non_admin_can_submit_but_cannot_review_or_publish(monkeypatch):
             json={"operationId": "op", "mutation": {"type": "cell.update"}},
         ).status_code == 200
         assert submitted[0][1] == "non-admin@example.test"
+        assert client.post(
+            "/api/system/compatibility-editor/changes/change-1/submit"
+        ).status_code == 200
+        assert submitted_bundles == [("change-1", "non-admin@example.test")]
         assert client.post(
             "/api/system/compatibility-editor/changes/change-1/review",
             json={"action": "approve"},

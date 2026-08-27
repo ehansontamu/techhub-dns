@@ -13,11 +13,13 @@ from app.database import Base
 from app.services import compatibility_publisher_service
 from app.services.compatibility_approval_service import (
     review_change,
+    submit_bundle,
     submit_change,
 )
 from app.services.compatibility_editor_service import (
     DEFAULT_SEED_PATH,
     CompatibilityEditorConflict,
+    CompatibilityEditorError,
     apply_mutation,
     build_payload,
     import_payload,
@@ -226,7 +228,7 @@ def test_contributor_change_stays_pending_until_admin_approval(db):
     }
 
 
-def test_pending_new_item_is_excluded_then_becomes_visible_on_approval(db):
+def test_new_item_is_submitted_and_reviewed_as_a_complete_bundle(db):
     import_payload(db, _payload(), actor="seed")
     workspace, _ = submit_change(
         db,
@@ -243,10 +245,57 @@ def test_pending_new_item_is_excluded_then_becomes_visible_on_approval(db):
 
     assert "C2" not in build_payload(db)["computers"]
     assert workspace["data"]["computers"]["C2"]["studentEdited"] is True
+    assert workspace["approval"]["pendingCount"] == 0
+    assert workspace["approval"]["draftCount"] == 1
+    bundle_change = workspace["approval"]["draftBundles"][0]
+    assert bundle_change["bundle"]["completedCells"] == 0
+    assert bundle_change["bundle"]["requiredCells"] == 2
+
+    with pytest.raises(CompatibilityEditorError):
+        submit_bundle(
+            db,
+            bundle_change["id"],
+            actor="contributor@example.test",
+        )
+
+    for index, dock_key in enumerate(("D1", "D2"), start=1):
+        workspace, _ = submit_change(
+            db,
+            {
+                "operationId": f"proposal-computer-cell-{index}",
+                "mutation": {
+                    "type": "cell.update",
+                    "computerKey": "C2",
+                    "dockKey": dock_key,
+                    "expectedVersion": 0,
+                    "cell": {
+                        "compatibilityStatus": (
+                            "Compatible" if dock_key == "D1" else "Incompatible"
+                        ),
+                        "notes": f"Tested with {dock_key}",
+                    },
+                },
+            },
+            actor="contributor@example.test",
+        )
+
+    assert workspace["approval"]["pendingCount"] == 0
+    bundle_change = workspace["approval"]["draftBundles"][0]
+    assert bundle_change["bundle"]["completedCells"] == 2
+
+    submitted = submit_bundle(
+        db,
+        bundle_change["id"],
+        actor="contributor@example.test",
+    )
+    assert submitted["approval"]["draftCount"] == 0
+    assert submitted["approval"]["pendingCount"] == 1
+    ready_change = submitted["approval"]["pendingChanges"][0]
+    assert ready_change["bundle"]["ready"] is True
 
     approved = review_change(
         db,
-        workspace["approval"]["pendingChanges"][0]["id"],
+        ready_change["id"],
         action="approve",
         actor="admin@example.test",
     )
@@ -254,6 +303,10 @@ def test_pending_new_item_is_excluded_then_becomes_visible_on_approval(db):
     assert approved["approval"]["pendingCount"] == 0
     assert published_data["computers"]["C2"]["hidden"] is False
     assert "studentEdited" not in published_data["computers"]["C2"]
+    assert published_data["computers"]["C2"]["compatibilityData"]["D2"] == {
+        "compatibilityStatus": "Incompatible",
+        "notes": "Tested with D2",
+    }
 
 
 def test_publisher_writes_only_explicit_snapshot_and_records_revision(db, monkeypatch):

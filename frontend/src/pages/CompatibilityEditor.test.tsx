@@ -15,6 +15,7 @@ vi.mock("../api/compatibilityEditor", async (importOriginal) => {
       mutate: vi.fn(),
       publish: vi.fn(),
       review: vi.fn(),
+      submitBundle: vi.fn(),
     },
   };
 });
@@ -56,6 +57,8 @@ const document: CompatibilityEditorDocument = {
   approval: {
     pendingCount: 0,
     pendingChanges: [],
+    draftCount: 0,
+    draftBundles: [],
   },
   publication: {
     configured: true,
@@ -94,6 +97,7 @@ describe("CompatibilityEditor", () => {
     });
     mockedApi.getData.mockResolvedValue(document);
     mockedApi.mutate.mockResolvedValue({ ...document, revision: 2 });
+    mockedApi.submitBundle.mockResolvedValue(document);
     mockedApi.publish.mockResolvedValue({
       attempted: true,
       success: true,
@@ -149,5 +153,73 @@ describe("CompatibilityEditor", () => {
     expect(await screen.findByText(/cannot update the website JSON directly/i)).toBeInTheDocument();
     expect(mockedApi.getData).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("button", { name: "Save to WebDAV" })).not.toBeInTheDocument();
+  });
+
+  it("lets a contributor submit a completed new-item bundle", async () => {
+    mockedUseAuth.mockReturnValue({
+      ...mockedUseAuth.mock.results[0]?.value,
+      user: null,
+      session: null,
+      isAuthenticated: true,
+      isAdmin: false,
+      isLoading: false,
+      login: vi.fn(),
+      logout: vi.fn(),
+      refreshAuth: vi.fn(),
+    });
+    mockedApi.getData.mockResolvedValueOnce({
+      ...document,
+      data: {
+        ...document.data,
+        computers: {
+          ...document.data.computers,
+          C2: {
+            name: "New Computer",
+            studentEdited: true,
+            compatibilityData: {
+              D1: { compatibilityStatus: "Compatible", studentEdited: true },
+            },
+          },
+        },
+      },
+      approval: {
+        pendingCount: 0,
+        pendingChanges: [],
+        draftCount: 1,
+        draftBundles: [{
+          id: "bundle-1",
+          target: "computer:C2",
+          mutationType: "computer.add",
+          baseVersion: 0,
+          version: 1,
+          proposedData: { name: "New Computer" },
+          currentData: null,
+          status: "pending",
+          readyForReview: false,
+          bundle: {
+            axis: "computer",
+            itemKey: "C2",
+            completedCells: 1,
+            requiredCells: 1,
+            missingTargets: [],
+            ready: false,
+          },
+          submittedBy: "student@example.test",
+          updatedBy: "student@example.test",
+          submittedAt: "2026-08-27T12:00:00Z",
+          updatedAt: "2026-08-27T12:01:00Z",
+          reviewedBy: null,
+          reviewedAt: null,
+          reviewNote: null,
+        }],
+      },
+    });
+
+    render(<CompatibilityEditor />);
+
+    fireEvent.click(await screen.findByRole("tab", { name: "Computers" }));
+    fireEvent.click(screen.getByRole("button", { name: "Submit item for review" }));
+
+    await waitFor(() => expect(mockedApi.submitBundle).toHaveBeenCalledWith("bundle-1"));
   });
 });

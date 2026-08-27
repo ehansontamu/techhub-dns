@@ -19,6 +19,7 @@ from app.models.compatibility_editor import (
 )
 from app.services.audit_service import AuditService
 from app.services.compatibility_editor_service import (
+    COMPATIBILITY_STATUS_VALUES,
     DATASET_ID,
     CompatibilityEditorConflict,
     CompatibilityEditorError,
@@ -111,7 +112,73 @@ def _current_value(db: Session, change: CompatibilityChangeRequest) -> Optional[
     return None
 
 
+def _bundle_parents_for_cell(
+    db: Session,
+    computer_key: str,
+    dock_key: str,
+) -> list[CompatibilityChangeRequest]:
+    parents = []
+    computer_change = _pending_change(db, f"computer:{computer_key}")
+    if computer_change is not None and computer_change.mutation_type == "computer.add":
+        parents.append(computer_change)
+    dock_change = _pending_change(db, f"dock:{dock_key}")
+    if dock_change is not None and dock_change.mutation_type == "dock.add":
+        parents.append(dock_change)
+    return parents
+
+
+def _bundle_summary(
+    db: Session,
+    change: CompatibilityChangeRequest,
+) -> Optional[dict[str, Any]]:
+    parts = change.target.split(":")
+    if change.mutation_type == "computer.add" and len(parts) == 2:
+        axis = "computer"
+        item_key = parts[1]
+        required_keys = {row.sku for row in db.query(CompatibilityDock).all()}
+        child_index = 2
+    elif change.mutation_type == "dock.add" and len(parts) == 2:
+        axis = "dock"
+        item_key = parts[1]
+        required_keys = {row.sku for row in db.query(CompatibilityComputer).all()}
+        child_index = 1
+    else:
+        return None
+
+    completed_keys: set[str] = set()
+    child_changes = (
+        db.query(CompatibilityChangeRequest)
+        .filter(
+            CompatibilityChangeRequest.status == PENDING_STATUS,
+            CompatibilityChangeRequest.mutation_type == "cell.update",
+        )
+        .all()
+    )
+    for child in child_changes:
+        child_parts = child.target.split(":")
+        if len(child_parts) != 3:
+            continue
+        if axis == "computer" and child_parts[1] != item_key:
+            continue
+        if axis == "dock" and child_parts[2] != item_key:
+            continue
+        if child.proposed_data.get("compatibilityStatus") not in COMPATIBILITY_STATUS_VALUES:
+            continue
+        completed_keys.add(child_parts[child_index])
+
+    missing_keys = sorted(required_keys - completed_keys)
+    return {
+        "axis": axis,
+        "itemKey": item_key,
+        "completedCells": len(required_keys & completed_keys),
+        "requiredCells": len(required_keys),
+        "missingTargets": missing_keys,
+        "ready": bool(change.ready_for_review) and not missing_keys,
+    }
+
+
 def _serialize_change(db: Session, row: CompatibilityChangeRequest) -> dict[str, Any]:
+    bundle = _bundle_summary(db, row)
     return {
         "id": row.id,
         "target": row.target,
@@ -121,6 +188,8 @@ def _serialize_change(db: Session, row: CompatibilityChangeRequest) -> dict[str,
         "proposedData": copy.deepcopy(row.proposed_data),
         "currentData": _current_value(db, row),
         "status": row.status,
+        "readyForReview": bool(row.ready_for_review),
+        "bundle": bundle,
         "submittedBy": row.submitted_by,
         "updatedBy": row.updated_by,
         "submittedAt": _iso(row.submitted_at),
@@ -212,13 +281,37 @@ def get_workspace_document(db: Session) -> dict[str, Any]:
 
     _rebuild_derived_fields(data)
     state = db.get(CompatibilityEditorState, DATASET_ID)
+    reviewable_changes: list[dict[str, Any]] = []
+    draft_bundles: list[dict[str, Any]] = []
+    for change in pending:
+        serialized = _serialize_change(db, change)
+        bundle = serialized.get("bundle")
+        if bundle is not None:
+            if bundle["ready"]:
+                reviewable_changes.append(serialized)
+            else:
+                draft_bundles.append(serialized)
+            continue
+
+        parts = change.target.split(":")
+        if (
+            change.mutation_type == "cell.update"
+            and len(parts) == 3
+            and (parts[1] in pending_computers or parts[2] in pending_docks)
+        ):
+            # Cell changes for new items are reviewed with their parent bundle.
+            continue
+        reviewable_changes.append(serialized)
+
     document["data"] = data
     document["versions"] = versions
     document["approvedVersions"] = approved_versions
     document["workspaceRevision"] = int(state.review_revision or 0) if state else 0
     document["approval"] = {
-        "pendingCount": len(pending),
-        "pendingChanges": [_serialize_change(db, row) for row in pending],
+        "pendingCount": len(reviewable_changes),
+        "pendingChanges": reviewable_changes,
+        "draftCount": len(draft_bundles),
+        "draftBundles": draft_bundles,
     }
     return document
 
@@ -269,6 +362,7 @@ def submit_change(
     target, primary_key, secondary_key = _target_for_mutation(mutation)
     existing = _pending_change(db, target)
     base_version = 0
+    bundle_parents: list[CompatibilityChangeRequest] = []
 
     if mutation_type == "computer.add":
         if db.get(CompatibilityComputer, primary_key) is not None:
@@ -290,6 +384,7 @@ def submit_change(
         proposed_data = _normalize_dock(mutation.get("dock"))
     else:
         assert secondary_key is not None
+        bundle_parents = _bundle_parents_for_cell(db, primary_key, secondary_key)
         computer_exists = db.get(CompatibilityComputer, primary_key) is not None or _pending_axis_exists(
             db, "computer", primary_key
         )
@@ -344,10 +439,15 @@ def submit_change(
             proposal_version=1,
             proposed_data=proposed_data,
             status=PENDING_STATUS,
+            ready_for_review=mutation_type not in {"computer.add", "dock.add"},
             submitted_by=actor,
             updated_by=actor,
         )
         db.add(change)
+
+    for parent in bundle_parents:
+        parent.ready_for_review = False
+        parent.updated_by = actor
 
     state.review_revision = int(state.review_revision or 0) + 1
     db.add(
@@ -373,6 +473,77 @@ def submit_change(
         db.rollback()
         raise
     return get_workspace_document(db), False
+
+
+def submit_bundle(
+    db: Session,
+    change_id: str,
+    *,
+    actor: str,
+) -> dict[str, Any]:
+    """Mark a complete new-computer or new-dock bundle ready for admin review."""
+
+    state = (
+        db.query(CompatibilityEditorState)
+        .filter(CompatibilityEditorState.id == DATASET_ID)
+        .with_for_update()
+        .first()
+    )
+    change = (
+        db.query(CompatibilityChangeRequest)
+        .filter(CompatibilityChangeRequest.id == change_id)
+        .with_for_update()
+        .first()
+    )
+    if state is None:
+        raise CompatibilityEditorNotInitialized(
+            "Compatibility editor has not been initialized. Import the seed JSON first."
+        )
+    if (
+        change is None
+        or change.status != PENDING_STATUS
+        or change.mutation_type not in {"computer.add", "dock.add"}
+    ):
+        raise CompatibilityEditorConflict(
+            "This new-item bundle no longer exists.",
+            target=f"change:{change_id}",
+            current_version=None,
+        )
+
+    summary = _bundle_summary(db, change)
+    if summary is None:
+        raise CompatibilityEditorError("This change is not a new-item bundle.")
+    missing_targets = summary["missingTargets"]
+    if missing_targets:
+        preview = ", ".join(missing_targets[:5])
+        suffix = "" if len(missing_targets) <= 5 else ", …"
+        raise CompatibilityEditorError(
+            f"Complete all compatibility cells before submitting this item. "
+            f"Missing: {preview}{suffix} ({len(missing_targets)} total)."
+        )
+    if change.ready_for_review:
+        return get_workspace_document(db)
+
+    change.ready_for_review = True
+    change.updated_by = actor
+    state.review_revision = int(state.review_revision or 0) + 1
+    AuditService(db).log_action(
+        "compatibility_editor",
+        change.id,
+        "proposal.bundle_submitted",
+        user_id=actor,
+        new_value={
+            "target": change.target,
+            "completed_cells": summary["completedCells"],
+            "required_cells": summary["requiredCells"],
+        },
+    )
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    return get_workspace_document(db)
 
 
 def _resolve_child_cell_changes(
@@ -415,6 +586,24 @@ def _resolve_child_cell_changes(
     return resolved
 
 
+def _return_incomplete_bundles_to_draft(db: Session, *, actor: str) -> None:
+    db.flush()
+    bundle_changes = (
+        db.query(CompatibilityChangeRequest)
+        .filter(
+            CompatibilityChangeRequest.status == PENDING_STATUS,
+            CompatibilityChangeRequest.mutation_type.in_(("computer.add", "dock.add")),
+            CompatibilityChangeRequest.ready_for_review.is_(True),
+        )
+        .all()
+    )
+    for bundle_change in bundle_changes:
+        summary = _bundle_summary(db, bundle_change)
+        if summary is not None and summary["missingTargets"]:
+            bundle_change.ready_for_review = False
+            bundle_change.updated_by = actor
+
+
 def review_change(
     db: Session,
     change_id: str,
@@ -452,6 +641,18 @@ def review_change(
     old_value = _current_value(db, change)
     applied_value: Optional[dict[str, Any]] = None
     parts = change.target.split(":")
+    bundle = _bundle_summary(db, change)
+
+    if action == "approve" and bundle is not None:
+        if bundle["missingTargets"]:
+            raise CompatibilityEditorError(
+                "This new-item bundle is incomplete. The contributor must finish all "
+                "required cells and submit it again."
+            )
+        if not change.ready_for_review:
+            raise CompatibilityEditorError(
+                "This new-item bundle has not been submitted for review yet."
+            )
 
     try:
         if action == "reject":
@@ -464,6 +665,7 @@ def review_change(
                 _resolve_child_cell_changes(
                     db, dock_key=parts[1], actor=actor, approved=False
                 )
+            _return_incomplete_bundles_to_draft(db, actor=actor)
         elif change.mutation_type == "cell.update" and len(parts) == 3:
             row = db.get(CompatibilityCell, (parts[1], parts[2]))
             if row is None:

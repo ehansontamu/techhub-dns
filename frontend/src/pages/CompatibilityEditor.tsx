@@ -200,6 +200,7 @@ export default function CompatibilityEditor() {
   const [versions, setVersions] = useState<CompatibilityEditorVersions | null>(null);
   const [approvedVersions, setApprovedVersions] = useState<CompatibilityEditorVersions | null>(null);
   const [pendingChanges, setPendingChanges] = useState<CompatibilityEditorChange[]>([]);
+  const [draftBundles, setDraftBundles] = useState<CompatibilityEditorChange[]>([]);
   const [revision, setRevision] = useState(0);
   const [publication, setPublication] = useState<CompatibilityEditorPublication | null>(null);
   const [conflictMessage, setConflictMessage] = useState<string | null>(null);
@@ -207,6 +208,7 @@ export default function CompatibilityEditor() {
   const [saving, setSaving] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [reviewingId, setReviewingId] = useState<string | null>(null);
+  const [submittingBundleId, setSubmittingBundleId] = useState<string | null>(null);
   const [activeCell, setActiveCell] = useState<ActiveCell | null>(null);
   const [cellForm, setCellForm] = useState<CellForm | null>(null);
   const [addItemKind, setAddItemKind] = useState<AddItemKind>(null);
@@ -224,6 +226,22 @@ export default function CompatibilityEditor() {
     () => dockKeys.filter((key) => !payload?.docks[key].hidden).length,
     [dockKeys, payload]
   );
+  const bundleChangesByTarget = useMemo(
+    () => new Map(
+      [...pendingChanges, ...draftBundles]
+        .filter((change) => change.bundle)
+        .map((change) => [change.target, change])
+    ),
+    [draftBundles, pendingChanges]
+  );
+  const reviewQueueCount = pendingChanges.length + draftBundles.length;
+  const activeCellBelongsToBundle = Boolean(
+    activeCell
+    && (
+      bundleChangesByTarget.has(`computer:${activeCell.computerKey}`)
+      || bundleChangesByTarget.has(`dock:${activeCell.dockKey}`)
+    )
+  );
 
   const applyDocument = useCallback((document: CompatibilityEditorDocument) => {
     if (document.workspaceRevision < workspaceRevisionRef.current) {
@@ -233,6 +251,7 @@ export default function CompatibilityEditor() {
     setVersions(document.versions);
     setApprovedVersions(document.approvedVersions);
     setPendingChanges(document.approval.pendingChanges);
+    setDraftBundles(document.approval.draftBundles);
     setRevision(document.revision);
     workspaceRevisionRef.current = document.workspaceRevision;
     setPublication(document.publication);
@@ -484,7 +503,11 @@ export default function CompatibilityEditor() {
           expectedVersion: activeCell.expectedVersion,
           cell,
         },
-        isAdmin ? "Compatibility cell approved" : "Compatibility change submitted for review"
+        activeCellBelongsToBundle
+          ? "Compatibility cell saved to the new-item draft"
+          : isAdmin
+            ? "Compatibility cell approved"
+            : "Compatibility change submitted for review"
       );
       setActiveCell(null);
       setCellForm(null);
@@ -510,9 +533,29 @@ export default function CompatibilityEditor() {
     }
   };
 
+  const submitNewItemBundle = async (changeId: string) => {
+    setSubmittingBundleId(changeId);
+    try {
+      const document = await compatibilityEditorApi.submitBundle(changeId);
+      applyDocument(document);
+      toast.success("New item submitted for review");
+    } catch (error: unknown) {
+      toast.error("Bundle is not ready", {
+        description: extractApiErrorMessage(
+          error,
+          "Complete every required compatibility cell before submitting this item."
+        ),
+      });
+      await loadData(true);
+    } finally {
+      setSubmittingBundleId(null);
+    }
+  };
+
   const publishApprovedData = async () => {
-    const pendingWarning = pendingChanges.length
-      ? ` ${pendingChanges.length} pending change${pendingChanges.length === 1 ? "" : "s"} will remain excluded.`
+    const excludedCount = pendingChanges.length + draftBundles.length;
+    const pendingWarning = excludedCount
+      ? ` ${excludedCount} pending or draft item${excludedCount === 1 ? "" : "s"} will remain excluded.`
       : "";
     if (!window.confirm(`Save approved revision ${revision} to compatibility_superapp.json?${pendingWarning}`)) {
       return;
@@ -559,6 +602,11 @@ export default function CompatibilityEditor() {
           <Badge variant={pendingChanges.length ? "warning" : "success"}>
             {pendingChanges.length} pending review
           </Badge>
+          {draftBundles.length ? (
+            <Badge variant="secondary">
+              {draftBundles.length} new-item draft{draftBundles.length === 1 ? "" : "s"}
+            </Badge>
+          ) : null}
           {isAdmin ? (
             <Badge variant={!publication?.configured || publication?.lastError ? "destructive" : publication?.pending ? "warning" : "success"}>
               {!publication?.configured || publication?.lastError ? (
@@ -580,7 +628,7 @@ export default function CompatibilityEditor() {
             <Button
               type="button"
               onClick={() => void publishApprovedData()}
-              disabled={publishing || saving || Boolean(reviewingId) || !publication?.configured}
+              disabled={publishing || saving || Boolean(reviewingId) || Boolean(submittingBundleId) || !publication?.configured}
             >
               {publishing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
               Save to WebDAV
@@ -595,7 +643,7 @@ export default function CompatibilityEditor() {
 
       {!isAdmin ? (
         <section className="rounded-lg border border-sky-300 bg-sky-50 px-4 py-3 text-sm text-sky-900">
-          Your changes are saved to the app for admin review and cannot update the website JSON directly.
+          Cell corrections go directly to admin review. For a new computer or dock, complete every cell and then submit the whole item for review. Your work cannot update the website JSON directly.
         </section>
       ) : !publication?.configured ? (
         <section className="rounded-lg border border-destructive/40 bg-destructive/5 px-4 py-3 text-sm text-destructive">
@@ -617,7 +665,7 @@ export default function CompatibilityEditor() {
             <TabsTrigger value="matrix">Matrix</TabsTrigger>
             <TabsTrigger value="computers">Computers</TabsTrigger>
             <TabsTrigger value="docks">Docks</TabsTrigger>
-            {isAdmin ? <TabsTrigger value="review">Review ({pendingChanges.length})</TabsTrigger> : null}
+            {isAdmin ? <TabsTrigger value="review">Review ({reviewQueueCount})</TabsTrigger> : null}
           </TabsList>
 
           <TabsContent value="matrix" className="space-y-4">
@@ -710,9 +758,15 @@ export default function CompatibilityEditor() {
                     hidden={Boolean(computer.hidden)}
                     version={(isAdmin ? approvedVersions : versions)?.computers[computerKey] ?? 0}
                     pending={Boolean(computer.studentEdited)}
+                    bundleChange={bundleChangesByTarget.get(`computer:${computerKey}`)}
                     editable={isAdmin && !computer.studentEdited && !publishing}
                     onSave={(value, expectedVersion) => saveComputer(computerKey, { ...computer, ...value }, expectedVersion)}
                     onRemove={() => void removeComputer(computerKey)}
+                    onSubmitBundle={!isAdmin ? () => {
+                      const change = bundleChangesByTarget.get(`computer:${computerKey}`);
+                      if (change) void submitNewItemBundle(change.id);
+                    } : undefined}
+                    submittingBundle={submittingBundleId === bundleChangesByTarget.get(`computer:${computerKey}`)?.id}
                   />
                 );
               })}
@@ -737,9 +791,15 @@ export default function CompatibilityEditor() {
                     hidden={Boolean(dock.hidden)}
                     version={(isAdmin ? approvedVersions : versions)?.docks[dockKey] ?? 0}
                     pending={Boolean(dock.studentEdited)}
+                    bundleChange={bundleChangesByTarget.get(`dock:${dockKey}`)}
                     editable={isAdmin && !dock.studentEdited && !publishing}
                     onSave={(value, expectedVersion) => saveDock(dockKey, { ...dock, ...value }, expectedVersion)}
                     onRemove={() => void removeDock(dockKey)}
+                    onSubmitBundle={!isAdmin ? () => {
+                      const change = bundleChangesByTarget.get(`dock:${dockKey}`);
+                      if (change) void submitNewItemBundle(change.id);
+                    } : undefined}
+                    submittingBundle={submittingBundleId === bundleChangesByTarget.get(`dock:${dockKey}`)?.id}
                   />
                 );
               })}
@@ -755,10 +815,34 @@ export default function CompatibilityEditor() {
                     Approvals update the database only. Use Save to WebDAV when the complete approved set is ready.
                   </p>
                 </div>
-                {pendingChanges.length === 0 ? (
+                {reviewQueueCount === 0 ? (
                   <p className="mt-4 text-sm text-muted-foreground">There are no pending changes.</p>
                 ) : (
                   <div className="mt-4 space-y-4">
+                    {draftBundles.map((change) => (
+                      <div key={change.id} className="rounded-lg border border-dashed bg-muted/30 p-4">
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                          <div>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <Badge variant="secondary">Draft new {change.bundle?.axis}</Badge>
+                              <span className="font-mono text-sm font-medium">{change.bundle?.itemKey}</span>
+                            </div>
+                            <p className="mt-1 text-xs text-muted-foreground">
+                              {change.bundle?.completedCells ?? 0} of {change.bundle?.requiredCells ?? 0} required cells completed. Waiting for the contributor to submit the bundle.
+                            </p>
+                          </div>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            onClick={() => void reviewPendingChange(change.id, "reject")}
+                            disabled={Boolean(reviewingId) || publishing}
+                          >
+                            {reviewingId === change.id ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <X className="mr-2 h-4 w-4" />}
+                            Reject draft
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
                     {pendingChanges.map((change) => (
                       <div key={change.id} className="rounded-lg border bg-background p-4">
                         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -770,6 +854,11 @@ export default function CompatibilityEditor() {
                             <p className="mt-1 text-xs text-muted-foreground">
                               Submitted by {change.submittedBy}{change.updatedAt ? ` · ${new Date(change.updatedAt).toLocaleString()}` : ""}
                             </p>
+                            {change.bundle ? (
+                              <p className="mt-1 text-xs font-medium text-emerald-700">
+                                All {change.bundle.requiredCells} compatibility cells are included and will be reviewed with this item.
+                              </p>
+                            ) : null}
                           </div>
                           <div className="flex gap-2">
                             <Button
@@ -920,7 +1009,11 @@ export default function CompatibilityEditor() {
             </Button>
             <Button type="button" onClick={() => void saveCell()} disabled={saving || publishing}>
               {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
-              {isAdmin ? "Save and Approve" : "Submit for Review"}
+              {activeCellBelongsToBundle
+                ? "Save Cell to Draft"
+                : isAdmin
+                  ? "Save and Approve"
+                  : "Submit for Review"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1019,12 +1112,15 @@ type MatrixItemRowProps = {
   hidden: boolean;
   version: number;
   pending: boolean;
+  bundleChange?: CompatibilityEditorChange;
   editable: boolean;
   onSave: (
     value: { name: string; url: string; hidden: boolean },
     expectedVersion: number
   ) => Promise<void>;
   onRemove: () => void;
+  onSubmitBundle?: () => void;
+  submittingBundle: boolean;
 };
 
 function MatrixItemRow({
@@ -1034,9 +1130,12 @@ function MatrixItemRow({
   hidden,
   version,
   pending,
+  bundleChange,
   editable,
   onSave,
   onRemove,
+  onSubmitBundle,
+  submittingBundle,
 }: MatrixItemRowProps) {
   const [draft, setDraft] = useState({ name, url, hidden });
   const [rowSaving, setRowSaving] = useState(false);
@@ -1114,6 +1213,37 @@ function MatrixItemRow({
       <Button type="button" variant="destructive" size="icon" onClick={onRemove} disabled={rowSaving || !editable} aria-label={`Remove ${name || sku}`}>
         {rowSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
       </Button>
+      {bundleChange?.bundle ? (
+        <div className="flex flex-col gap-2 rounded-md border border-dashed bg-muted/30 px-3 py-2 md:col-span-5 sm:flex-row sm:items-center sm:justify-between">
+          <div className="text-sm">
+            <span className="font-medium">
+              {bundleChange.bundle.completedCells} of {bundleChange.bundle.requiredCells} required cells completed
+            </span>
+            <span className="ml-2 text-muted-foreground">
+              {bundleChange.bundle.ready
+                ? "Submitted as one bundle for admin review."
+                : "Finish every cell before submitting this new item."}
+            </span>
+          </div>
+          {bundleChange.bundle.ready ? (
+            <Badge variant="success">Ready for review</Badge>
+          ) : onSubmitBundle ? (
+            <Button
+              type="button"
+              size="sm"
+              onClick={onSubmitBundle}
+              disabled={submittingBundle || bundleChange.bundle.missingTargets.length > 0}
+            >
+              {submittingBundle ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Check className="mr-2 h-4 w-4" />}
+              {bundleChange.bundle.missingTargets.length > 0
+                ? `Complete ${bundleChange.bundle.missingTargets.length} more`
+                : "Submit item for review"}
+            </Button>
+          ) : (
+            <Badge variant="secondary">Student draft</Badge>
+          )}
+        </div>
+      ) : null}
     </div>
   );
 }

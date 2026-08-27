@@ -36,6 +36,8 @@ const document: CompatibilityEditorDocument = {
   approval: {
     pendingCount: 0,
     pendingChanges: [],
+    draftCount: 0,
+    draftBundles: [],
   },
   publication: {
     configured: true,
@@ -86,6 +88,16 @@ describe("compatibilityEditorApi", () => {
     expect(apiClient.post).toHaveBeenCalledWith(
       "/system/compatibility-editor/changes/change-1/review",
       { action: "approve" }
+    );
+  });
+
+  it("submits a completed new-item bundle for review", async () => {
+    vi.mocked(apiClient.post).mockResolvedValueOnce({ data: document });
+
+    await compatibilityEditorApi.submitBundle("change-1");
+
+    expect(apiClient.post).toHaveBeenCalledWith(
+      "/system/compatibility-editor/changes/change-1/submit"
     );
   });
 });

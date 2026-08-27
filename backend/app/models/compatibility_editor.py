@@ -153,6 +153,7 @@ class CompatibilityChangeRequest(Base):
     proposal_version = Column(Integer, nullable=False, default=1)
     proposed_data = Column(JSON, nullable=False)
     status = Column(String(20), nullable=False, default="pending")
+    ready_for_review = Column(Boolean, nullable=False, default=True)
     submitted_by = Column(String(255), nullable=False)
     updated_by = Column(String(255), nullable=False)
     reviewed_by = Column(String(255), nullable=True)
