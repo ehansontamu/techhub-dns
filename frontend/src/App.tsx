@@ -11,6 +11,7 @@ import { Breadcrumbs } from "./components/Breadcrumbs";
 import { AccountControls } from "./components/AccountControls";
 import { SyncHealthBanner } from "./components/SyncHealthBanner";
 import { OfflineBanner } from "./components/OfflineBanner";
+import { DevelopmentBanner, isDevelopmentHostname } from "./components/DevelopmentBanner";
 
 const Dashboard = lazy(() => import("./pages/Dashboard"));
 const Orders = lazy(() => import("./pages/Orders"));
@@ -69,9 +70,14 @@ function AppRoutes() {
     );
 }
 
-function AppContent() {
+interface AppContentProps {
+    isDevelopmentSite: boolean;
+}
+
+function AppContent({ isDevelopmentSite }: AppContentProps) {
     const { isAuthenticated, isLoading } = useAuth();
     const location = useLocation();
+    const minimumViewportHeight = isDevelopmentSite ? "min-h-[calc(100vh-2rem)]" : "min-h-screen";
 
     useEffect(() => {
         if (typeof window === "undefined") return;
@@ -95,7 +101,7 @@ function AppContent() {
 
     if (isLoading) {
         return (
-            <div className="min-h-screen bg-background flex items-center justify-center">
+            <div className={`${minimumViewportHeight} bg-background flex items-center justify-center`}>
                 <Skeleton className="w-96 h-96 rounded-lg" />
             </div>
         );
@@ -103,7 +109,7 @@ function AppContent() {
 
     if (!isAuthenticated) {
         return (
-            <div className="min-h-screen bg-background flex items-center justify-center">
+            <div className={`${minimumViewportHeight} bg-background flex items-center justify-center`}>
                 <Suspense fallback={<Skeleton className="w-96 h-96 rounded-lg" />}>
                     <RouteContentErrorBoundary>
                         <Routes>
@@ -119,10 +125,10 @@ function AppContent() {
     const isOrdersRoute = location.pathname === "/orders" || location.pathname.startsWith("/orders/");
 
     return (
-        <div className="min-h-screen bg-background overflow-x-hidden">
-            <Sidebar />
+        <div className={`${minimumViewportHeight} bg-background overflow-x-hidden`}>
+            <Sidebar className={isDevelopmentSite ? "top-8 h-[calc(100vh-2rem)]" : undefined} />
 
-            <main className={`transition-[margin] duration-300 lg:ml-[var(--sidebar-width)] ${isOrdersRoute ? "flex h-screen flex-col overflow-hidden" : "min-h-screen"}`}>
+            <main className={`transition-[margin] duration-300 lg:ml-[var(--sidebar-width)] ${isOrdersRoute ? `flex ${isDevelopmentSite ? "h-[calc(100vh-2rem)]" : "h-screen"} flex-col overflow-hidden` : minimumViewportHeight}`}>
                 <div className="sticky top-0 z-30 h-12 border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
                     <div className="flex h-full min-w-0 items-center gap-4 px-4 pl-16 sm:px-6 lg:px-8 lg:pl-8">
                         <div className="min-w-0 flex-1">
@@ -179,13 +185,19 @@ function AppContent() {
 }
 
 function App() {
+    const currentHostname = typeof window === "undefined" ? "" : window.location.hostname;
+    const isDevelopmentSite = isDevelopmentHostname(currentHostname);
+
     return (
         <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
-            <AppShellErrorBoundary>
-                <AuthProvider>
-                    <AppContent />
-                </AuthProvider>
-            </AppShellErrorBoundary>
+            {isDevelopmentSite && <DevelopmentBanner />}
+            <div className={isDevelopmentSite ? "pt-8" : undefined}>
+                <AppShellErrorBoundary>
+                    <AuthProvider>
+                        <AppContent isDevelopmentSite={isDevelopmentSite} />
+                    </AuthProvider>
+                </AppShellErrorBoundary>
+            </div>
         </BrowserRouter>
     );
 }
