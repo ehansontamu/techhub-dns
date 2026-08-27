@@ -45,7 +45,13 @@ const adminItems = [
 
 const activeNavItemClassName = "bg-accent text-accent-foreground shadow-lg shadow-accent/25";
 
-export function Sidebar({ className }: { className?: string }) {
+export function Sidebar({
+  className,
+  mobileLauncherClassName,
+}: {
+  className?: string;
+  mobileLauncherClassName?: string;
+}) {
   const [collapsed, setCollapsed] = useState(() => {
     if (typeof window === "undefined") return false;
     return window.matchMedia("(max-width: 1023px)").matches;
@@ -163,7 +169,10 @@ export function Sidebar({ className }: { className?: string }) {
           type="button"
           aria-label="Open sidebar"
           onClick={() => setIsMobileOpen(true)}
-          className="fixed left-3 top-1 z-40 flex h-10 w-10 items-center justify-center rounded-full border border-border bg-card text-muted-foreground shadow-lg touch-manipulation"
+          className={cn(
+            "fixed left-3 z-40 flex h-10 w-10 items-center justify-center rounded-full border border-border bg-card text-muted-foreground shadow-lg touch-manipulation",
+            mobileLauncherClassName ?? "top-1"
+          )}
         >
           <ChevronRight className="h-5 w-5" />
         </button>

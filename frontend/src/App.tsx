@@ -126,7 +126,10 @@ function AppContent({ isDevelopmentSite }: AppContentProps) {
 
     return (
         <div className={`${minimumViewportHeight} bg-background overflow-x-hidden`}>
-            <Sidebar className={isDevelopmentSite ? "top-8 h-[calc(100vh-2rem)]" : undefined} />
+            <Sidebar
+                className={isDevelopmentSite ? "top-8 h-[calc(100vh-2rem)]" : undefined}
+                mobileLauncherClassName={isDevelopmentSite ? "top-9" : undefined}
+            />
 
             <main className={`transition-[margin] duration-300 lg:ml-[var(--sidebar-width)] ${isOrdersRoute ? `flex ${isDevelopmentSite ? "h-[calc(100vh-2rem)]" : "h-screen"} flex-col overflow-hidden` : minimumViewportHeight}`}>
                 <div className="sticky top-0 z-30 h-12 border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">

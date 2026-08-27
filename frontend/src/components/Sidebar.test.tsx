@@ -63,6 +63,16 @@ describe("Sidebar", () => {
         });
     });
 
+    it("supports offsetting the mobile launcher below a fixed banner", () => {
+        render(
+            <MemoryRouter>
+                <Sidebar mobileLauncherClassName="top-9" />
+            </MemoryRouter>
+        );
+
+        expect(screen.getAllByLabelText("Open sidebar")[0]).toHaveClass("top-9");
+    });
+
     it.each([
         ["/", "Dashboard"],
         ["/settings", "Settings"],
