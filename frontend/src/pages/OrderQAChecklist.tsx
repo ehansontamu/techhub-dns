@@ -6,7 +6,11 @@ import { Order, OrderStatus } from "../types/order";
 import { ordersApi } from "../api/orders";
 import { settingsApi } from "../api/settings";
 import { useAuth } from "../contexts/AuthContext";
-import { getOrderPickerLabel, isSameUserQaBlocked } from "../utils/qaEligibility";
+import {
+    getOrderPickerLabel,
+    getQaStorageLocation,
+    isSameUserQaBlocked,
+} from "../utils/qaEligibility";
 import { isValidOrderId } from "../utils/orderIds";
 
 function safeArray<T>(value: unknown): T[] {
@@ -137,12 +141,13 @@ export default function OrderQAChecklist() {
                     <div className="p-4">Loading...</div>
                 ) : (
                     <div className="mt-4 overflow-x-auto ios-scroll rounded-lg border border-border bg-card shadow-sm">
-                        <table className="min-w-[640px] w-full md:min-w-[720px]">
+                        <table className="min-w-[760px] w-full md:min-w-[880px]">
                             <thead className="bg-muted/50">
                                 <tr>
                                     <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground">Order</th>
                                     <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground">Recipient</th>
-                                    <th className="hidden px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground lg:table-cell">Location</th>
+                                    <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground">QA Location</th>
+                                    <th className="hidden px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground lg:table-cell">Delivery Location</th>
                                     <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground">Picked By</th>
                                     <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground">QA</th>
                                 </tr>
@@ -157,6 +162,7 @@ export default function OrderQAChecklist() {
                                             settingsQuery.data?.require_different_user_for_pick_and_qa?.value,
                                         );
                                         const pickerLabel = getOrderPickerLabel(o);
+                                        const qaStorageLocation = getQaStorageLocation(o);
 
                                         return (
                                         <tr key={o.id} className="transition-colors hover:bg-muted/30">
@@ -171,6 +177,7 @@ export default function OrderQAChecklist() {
                                                 </button>
                                             </td>
                                             <td className="px-3 py-2 text-sm text-foreground">{o.recipient_name || "N/A"}</td>
+                                            <td className="px-3 py-2 text-sm font-medium text-foreground">{qaStorageLocation}</td>
                                             <td className="hidden px-3 py-2 text-sm text-foreground lg:table-cell">{o.delivery_location || "N/A"}</td>
                                             <td className="px-3 py-2 text-sm text-foreground">
                                                 <div className="max-w-[12rem] truncate" title={pickerLabel}>
@@ -203,7 +210,7 @@ export default function OrderQAChecklist() {
 
                                 {qaCandidateOrders.length === 0 && (
                                         <tr>
-                                            <td className="px-3 py-6 text-center text-sm text-muted-foreground" colSpan={5}>
+                                            <td className="px-3 py-6 text-center text-sm text-muted-foreground" colSpan={6}>
                                                 {displayOrders.length === 0
                                                     ? "No orders need QA at this time."
                                                     : "All eligible orders have completed QA."}

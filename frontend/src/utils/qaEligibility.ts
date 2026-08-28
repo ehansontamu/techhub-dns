@@ -1,5 +1,6 @@
 import type { User } from "../contexts/AuthContext";
 import type { Order } from "../types/order";
+import { isLocalDelivery } from "./location";
 
 function identityCandidates(...values: Array<string | null | undefined>): Set<string> {
   const candidates = new Set<string>();
@@ -30,6 +31,16 @@ function identityCandidates(...values: Array<string | null | undefined>): Set<st
 
 export function getOrderPickerLabel(order: Pick<Order, "picklist_generated_by">): string {
   return order.picklist_generated_by?.trim() || "Not recorded";
+}
+
+export function getQaStorageLocation(
+  order: Pick<Order, "asset_tag_required" | "inflow_data">,
+): "Tagging Bench" | "Shelf" | "Shipping Shelf" {
+  if (order.asset_tag_required) {
+    return "Tagging Bench";
+  }
+
+  return isLocalDelivery(order) ? "Shelf" : "Shipping Shelf";
 }
 
 export function isOrderPickedByUser(
