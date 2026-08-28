@@ -57,6 +57,7 @@ COMMON_BUILDING_CODES = {
     "SBIS",  # Student Business & Information Services
     "VPIS",  # Visualization Sciences Building
     "JCAIN", # J. Mike Walker '66 Mechanical Engineering
+    "GILC",  # Gilchrist Building
 }
 
 SPECIFIC_BUILDING_PATTERNS = [
@@ -83,6 +84,9 @@ ESL_RELLIS_PATTERN = re.compile(
 )
 ALLEN_PATTERN = re.compile(
     r"\b(?:4220\s+TAMU|ALLEN(?:\s+BLDG|\s+BUILDING)?)\b"
+)
+GILCHRIST_PATTERN = re.compile(
+    r"\b(?:4243\s+TAMU|GILCHRIST(?:\s+BLDG|\s+BUILDING)?)\b"
 )
 ZACH_ADDRESS_PATTERN = re.compile(
     r"\b(?:125\s+SPENCE\s+ST(?:REET)?|TAMU\s+3579|3579\s+TAMU)\b"
@@ -294,20 +298,29 @@ def extract_building_code_from_location(location: str) -> Optional[str]:
         )
         return "ALLEN"
 
-    # Pattern P5: ZACH / 125 Spence Street / TAMU 3579 variants
-    patterns_checked.append("Pattern P5: ZACH / 125 Spence Street / TAMU 3579 variants")
+    # Pattern P5: GILC / 4243 TAMU variants
+    patterns_checked.append("Pattern P5: GILC / 4243 TAMU variants")
+    if GILCHRIST_PATTERN.search(location_upper):
+        logger.info(
+            "Normalized Gilchrist location from '%s' to 'GILC' (Pattern P5)",
+            location,
+        )
+        return "GILC"
+
+    # Pattern P6: ZACH / 125 Spence Street / TAMU 3579 variants
+    patterns_checked.append("Pattern P6: ZACH / 125 Spence Street / TAMU 3579 variants")
     if ZACH_ADDRESS_PATTERN.search(location_upper):
         logger.info(
-            "Normalized Zachry location from '%s' to 'ZACH' (Pattern P5)",
+            "Normalized Zachry location from '%s' to 'ZACH' (Pattern P6)",
             location,
         )
         return "ZACH"
 
-    # Pattern P6: FERM / Fermier Hall variants
-    patterns_checked.append("Pattern P6: FERM / Fermier Hall variants")
+    # Pattern P7: FERM / Fermier Hall variants
+    patterns_checked.append("Pattern P7: FERM / Fermier Hall variants")
     if FERMIER_PATTERN.search(location_upper):
         logger.info(
-            "Normalized Fermier location from '%s' to 'FERM' (Pattern P6)",
+            "Normalized Fermier location from '%s' to 'FERM' (Pattern P7)",
             location,
         )
         return "FERM"
