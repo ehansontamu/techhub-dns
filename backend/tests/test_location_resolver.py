@@ -449,6 +449,40 @@ def test_allen_variants_normalize_to_display_label():
     print("[PASS] ALLEN normalization test passed")
 
 
+def test_gilchrist_variants_normalize_to_display_label():
+    """4243 TAMU and Gilchrist labels resolve to the Gilchrist building code."""
+    from app.services.location_resolver_service import LocationResolverService
+    from app.utils.building_mapper import extract_building_code_from_location
+
+    variants = [
+        "4243 TAMU",
+        "Gilchrist Bldg Room 105",
+        "4243 TAMU Gilchrist Building Room 105, College Station, TX, 77843",
+    ]
+
+    for address in variants:
+        assert extract_building_code_from_location(address) == "GILC"
+
+    service = LocationResolverService()
+    resolved = service.resolve_location(
+        {
+            "orderNumber": "TESTGILC1",
+            "orderRemarks": "",
+            "shippingAddress": {
+                "address1": "4243 TAMU",
+                "address2": "Room 105",
+                "city": "College Station",
+                "state": "TX",
+                "postalCode": "77843",
+            },
+        }
+    )
+
+    assert resolved.building_code == "GILC"
+    assert resolved.display_location == "GILC"
+    assert resolved.source == "address"
+
+
 def test_langford_building_a_resolves_to_arch():
     """Langford Building A must not be captured by the generic LAAH rule."""
     from app.services.location_resolver_service import LocationResolverService
