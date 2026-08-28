@@ -130,10 +130,11 @@ const getCellNotes = (computer: CompatibilityEditorComputer, dockKey: string, ce
 const getCellVisual = (
   computer: CompatibilityEditorComputer,
   dock: CompatibilityEditorDock,
-  dockKey: string
+  dockKey: string,
+  isNewItemBundleCell = false
 ): CellVisual => {
   const cell = computer.compatibilityData?.[dockKey];
-  if (computer.hidden || dock.hidden) {
+  if (!isNewItemBundleCell && (computer.hidden || dock.hidden)) {
     return {
       symbol: "Hidden",
       label: "Hidden",
@@ -142,6 +143,45 @@ const getCellVisual = (
   }
 
   const hasNotes = Boolean(getCellNotes(computer, dockKey, cell));
+  if (isNewItemBundleCell && !isCompatibilityStatus(cell?.compatibilityStatus)) {
+    return {
+      symbol: "Not started",
+      label: "Draft cell not completed",
+      className: "border-dashed border-slate-300 bg-slate-50 text-slate-600 hover:bg-slate-100",
+    };
+  }
+
+  const status = getStatusForCell(computer, dockKey, cell);
+  let visual: CellVisual;
+  if (status === "Incompatible") {
+    visual = {
+      symbol: hasNotes ? "No *" : "No",
+      label: "Incompatible",
+      className: "border-red-200 bg-red-50 text-red-800 hover:bg-red-100",
+    };
+  } else if (status === "Partially Compatible") {
+    visual = {
+      symbol: hasNotes ? "Partial *" : "Partial",
+      label: "Partially compatible",
+      className: "border-amber-200 bg-amber-50 text-amber-900 hover:bg-amber-100",
+    };
+  } else {
+    visual = {
+      symbol: hasNotes ? "Yes *" : "Yes",
+      label: "Compatible",
+      className: "border-emerald-200 bg-emerald-50 text-emerald-900 hover:bg-emerald-100",
+    };
+  }
+
+  if (isNewItemBundleCell) {
+    return {
+      ...visual,
+      symbol: `✓ ${visual.symbol}`,
+      label: `Draft saved · ${visual.label}`,
+      className: `${visual.className} ring-1 ring-inset ring-sky-400`,
+    };
+  }
+
   if (cell?.studentEdited) {
     return {
       symbol: hasNotes ? "? *" : "?",
@@ -150,28 +190,7 @@ const getCellVisual = (
     };
   }
 
-  const status = getStatusForCell(computer, dockKey, cell);
-  if (status === "Incompatible") {
-    return {
-      symbol: hasNotes ? "No *" : "No",
-      label: "Incompatible",
-      className: "border-red-200 bg-red-50 text-red-800 hover:bg-red-100",
-    };
-  }
-
-  if (status === "Partially Compatible") {
-    return {
-      symbol: hasNotes ? "Partial *" : "Partial",
-      label: "Partially compatible",
-      className: "border-amber-200 bg-amber-50 text-amber-900 hover:bg-amber-100",
-    };
-  }
-
-  return {
-    symbol: hasNotes ? "Yes *" : "Yes",
-    label: "Compatible",
-    className: "border-emerald-200 bg-emerald-50 text-emerald-900 hover:bg-emerald-100",
-  };
+  return visual;
 };
 
 const createCellForm = (
@@ -211,6 +230,7 @@ export default function CompatibilityEditor() {
   const [submittingBundleId, setSubmittingBundleId] = useState<string | null>(null);
   const [activeCell, setActiveCell] = useState<ActiveCell | null>(null);
   const [cellForm, setCellForm] = useState<CellForm | null>(null);
+  const [initialCellForm, setInitialCellForm] = useState<CellForm | null>(null);
   const [addItemKind, setAddItemKind] = useState<AddItemKind>(null);
   const [addItemForm, setAddItemForm] = useState<AddItemForm>(defaultAddItemForm);
   const [draftId] = useState(createClientId);
@@ -241,6 +261,11 @@ export default function CompatibilityEditor() {
       bundleChangesByTarget.has(`computer:${activeCell.computerKey}`)
       || bundleChangesByTarget.has(`dock:${activeCell.dockKey}`)
     )
+  );
+  const cellFormHasUnsavedChanges = Boolean(
+    cellForm
+    && initialCellForm
+    && JSON.stringify(cellForm) !== JSON.stringify(initialCellForm)
   );
 
   const applyDocument = useCallback((document: CompatibilityEditorDocument) => {
@@ -349,7 +374,9 @@ export default function CompatibilityEditor() {
     if (!computer) {
       return;
     }
-    setCellForm(createCellForm(computer, dockKey, computer.compatibilityData?.[dockKey]));
+    const initialForm = createCellForm(computer, dockKey, computer.compatibilityData?.[dockKey]);
+    setCellForm(initialForm);
+    setInitialCellForm(initialForm);
     setConflictMessage(null);
     setActiveCell({
       computerKey,
@@ -358,6 +385,22 @@ export default function CompatibilityEditor() {
         ? approvedVersions?.cells[computerKey]?.[dockKey] ?? versions.cells[computerKey]?.[dockKey] ?? 0
         : versions.cells[computerKey]?.[dockKey] ?? 0,
     });
+  };
+
+  const closeCellEditor = () => {
+    if (saving) {
+      return;
+    }
+    if (
+      cellFormHasUnsavedChanges
+      && !window.confirm("Discard the unsaved changes in this compatibility cell?")
+    ) {
+      return;
+    }
+    setActiveCell(null);
+    setCellForm(null);
+    setInitialCellForm(null);
+    setConflictMessage(null);
   };
 
   const openAddDialog = (kind: MatrixAxis) => {
@@ -511,16 +554,29 @@ export default function CompatibilityEditor() {
       );
       setActiveCell(null);
       setCellForm(null);
+      setInitialCellForm(null);
       setConflictMessage(null);
     } catch {
       // Keep the modal open so the user can compare/retry after a conflict.
     }
   };
 
-  const reviewPendingChange = async (changeId: string, action: "approve" | "reject") => {
-    setReviewingId(changeId);
+  const reviewPendingChange = async (change: CompatibilityEditorChange, action: "approve" | "reject") => {
+    if (action === "reject") {
+      const itemName = typeof change.proposedData.name === "string"
+        ? ` “${change.proposedData.name}”`
+        : "";
+      const warning = change.bundle
+        ? `Reject this new ${change.bundle.axis}${itemName}? This will discard the item and all ${change.bundle.completedCells} saved compatibility cell changes. This cannot be undone from the editor.`
+        : `Reject this proposed change to ${change.target}? It will be removed from the review queue.`;
+      if (!window.confirm(warning)) {
+        return;
+      }
+    }
+
+    setReviewingId(change.id);
     try {
-      const document = await compatibilityEditorApi.review(changeId, action);
+      const document = await compatibilityEditorApi.review(change.id, action);
       applyDocument(document);
       toast.success(action === "approve" ? "Change approved" : "Change rejected");
     } catch (error: unknown) {
@@ -682,6 +738,12 @@ export default function CompatibilityEditor() {
                   <Badge variant="warning">Partial</Badge>
                   <Badge variant="destructive">Incompatible</Badge>
                   <Badge variant="secondary">Needs review</Badge>
+                  {bundleChangesByTarget.size ? (
+                    <>
+                      <Badge variant="outline">Not started</Badge>
+                      <Badge variant="secondary">✓ Draft saved</Badge>
+                    </>
+                  ) : null}
                 </div>
               </div>
 
@@ -714,7 +776,11 @@ export default function CompatibilityEditor() {
                           </TableCell>
                           {dockKeys.map((dockKey) => {
                             const dock = payload.docks[dockKey];
-                            const visual = getCellVisual(computer, dock, dockKey);
+                            const isNewItemBundleCell = (
+                              bundleChangesByTarget.has(`computer:${computerKey}`)
+                              || bundleChangesByTarget.has(`dock:${dockKey}`)
+                            );
+                            const visual = getCellVisual(computer, dock, dockKey, isNewItemBundleCell);
                             return (
                               <TableCell key={dockKey} className="p-1.5 text-center">
                                 <button
@@ -834,13 +900,14 @@ export default function CompatibilityEditor() {
                           <Button
                             type="button"
                             variant="outline"
-                            onClick={() => void reviewPendingChange(change.id, "reject")}
+                            onClick={() => void reviewPendingChange(change, "reject")}
                             disabled={Boolean(reviewingId) || publishing}
                           >
                             {reviewingId === change.id ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <X className="mr-2 h-4 w-4" />}
                             Reject draft
                           </Button>
                         </div>
+                        <ReviewChangeDetails change={change} />
                       </div>
                     ))}
                     {pendingChanges.map((change) => (
@@ -864,7 +931,7 @@ export default function CompatibilityEditor() {
                             <Button
                               type="button"
                               variant="outline"
-                              onClick={() => void reviewPendingChange(change.id, "reject")}
+                              onClick={() => void reviewPendingChange(change, "reject")}
                               disabled={Boolean(reviewingId) || publishing}
                             >
                               {reviewingId === change.id ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <X className="mr-2 h-4 w-4" />}
@@ -872,7 +939,7 @@ export default function CompatibilityEditor() {
                             </Button>
                             <Button
                               type="button"
-                              onClick={() => void reviewPendingChange(change.id, "approve")}
+                              onClick={() => void reviewPendingChange(change, "approve")}
                               disabled={Boolean(reviewingId) || publishing}
                             >
                               {reviewingId === change.id ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Check className="mr-2 h-4 w-4" />}
@@ -880,16 +947,7 @@ export default function CompatibilityEditor() {
                             </Button>
                           </div>
                         </div>
-                        <div className="mt-3 grid gap-3 lg:grid-cols-2">
-                          <div>
-                            <div className="mb-1 text-xs font-medium uppercase text-muted-foreground">Currently approved</div>
-                            <pre className="max-h-52 overflow-auto rounded-md bg-muted p-3 text-xs">{JSON.stringify(change.currentData, null, 2)}</pre>
-                          </div>
-                          <div>
-                            <div className="mb-1 text-xs font-medium uppercase text-muted-foreground">Proposed</div>
-                            <pre className="max-h-52 overflow-auto rounded-md bg-sky-50 p-3 text-xs text-sky-950">{JSON.stringify(change.proposedData, null, 2)}</pre>
-                          </div>
-                        </div>
+                        <ReviewChangeDetails change={change} />
                       </div>
                     ))}
                   </div>
@@ -900,7 +958,9 @@ export default function CompatibilityEditor() {
         </Tabs>
       )}
 
-      <Dialog open={Boolean(activeCell)} onOpenChange={(open) => !open && setActiveCell(null)}>
+      <Dialog open={Boolean(activeCell)} onOpenChange={(open) => {
+        if (!open) closeCellEditor();
+      }}>
         <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto">
           <DialogHeader>
             <DialogTitle>
@@ -1004,7 +1064,7 @@ export default function CompatibilityEditor() {
           ) : null}
 
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setActiveCell(null)}>
+            <Button type="button" variant="outline" onClick={closeCellEditor}>
               Cancel
             </Button>
             <Button type="button" onClick={() => void saveCell()} disabled={saving || publishing}>
@@ -1070,6 +1130,169 @@ export default function CompatibilityEditor() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+    </div>
+  );
+}
+
+const formatReviewValue = (value: unknown): string => {
+  if (value === null || value === undefined || value === "") {
+    return "Not set";
+  }
+  if (typeof value === "boolean") {
+    return value ? "Yes" : "No";
+  }
+  if (Array.isArray(value)) {
+    return value.length ? value.map(String).join(", ") : "None";
+  }
+  if (typeof value === "object") {
+    return JSON.stringify(value);
+  }
+  return String(value);
+};
+
+function ReviewSetting({ label, value }: { label: string; value: unknown }) {
+  return (
+    <div className="rounded-md border bg-background px-3 py-2">
+      <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</dt>
+      <dd className="mt-1 break-words text-sm font-medium text-foreground">{formatReviewValue(value)}</dd>
+    </div>
+  );
+}
+
+function ReviewComparison({
+  fields,
+  currentData,
+  proposedData,
+}: {
+  fields: Array<{ key: string; label: string }>;
+  currentData: Record<string, unknown> | null;
+  proposedData: Record<string, unknown>;
+}) {
+  return (
+    <div className="overflow-hidden rounded-lg border">
+      <div className="hidden grid-cols-[minmax(10rem,1.2fr)_minmax(8rem,1fr)_minmax(8rem,1fr)] gap-3 bg-muted/60 px-3 py-2 text-xs font-medium uppercase tracking-wide text-muted-foreground sm:grid">
+        <div>Setting</div>
+        <div>Currently approved</div>
+        <div>Proposed</div>
+      </div>
+      {fields.map((field) => (
+        <div
+          key={field.key}
+          className="grid gap-2 border-t px-3 py-3 first:border-t-0 sm:grid-cols-[minmax(10rem,1.2fr)_minmax(8rem,1fr)_minmax(8rem,1fr)] sm:gap-3"
+        >
+          <div className="text-sm font-medium text-foreground">{field.label}</div>
+          <div className="text-sm text-muted-foreground">
+            <span className="mr-2 text-xs font-medium uppercase sm:hidden">Current:</span>
+            {formatReviewValue(currentData?.[field.key])}
+          </div>
+          <div className="rounded bg-sky-50 px-2 py-1 text-sm font-medium text-sky-950 sm:-my-1">
+            <span className="mr-2 text-xs font-medium uppercase text-sky-700 sm:hidden">Proposed:</span>
+            {formatReviewValue(proposedData[field.key])}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function RawJsonDetails({ change }: { change: CompatibilityEditorChange }) {
+  return (
+    <details className="rounded-lg border bg-background">
+      <summary className="cursor-pointer px-3 py-2 text-sm font-medium text-muted-foreground hover:text-foreground">
+        View raw JSON
+      </summary>
+      <div className="grid gap-3 border-t p-3 lg:grid-cols-2">
+        <div>
+          <div className="mb-1 text-xs font-medium uppercase text-muted-foreground">Currently approved</div>
+          {change.currentData === null ? (
+            <div className="rounded-md bg-muted p-3 text-xs text-muted-foreground">
+              No approved JSON exists because this is a new item.
+            </div>
+          ) : (
+            <pre className="max-h-52 overflow-auto rounded-md bg-muted p-3 text-xs">{JSON.stringify(change.currentData, null, 2)}</pre>
+          )}
+        </div>
+        <div>
+          <div className="mb-1 text-xs font-medium uppercase text-muted-foreground">Proposed</div>
+          <pre className="max-h-52 overflow-auto rounded-md bg-sky-50 p-3 text-xs text-sky-950">{JSON.stringify(change.proposedData, null, 2)}</pre>
+        </div>
+      </div>
+    </details>
+  );
+}
+
+function ReviewChangeDetails({ change }: { change: CompatibilityEditorChange }) {
+  if (change.mutationType === "computer.add" || change.mutationType === "dock.add") {
+    const axis = change.mutationType === "computer.add" ? "computer" : "dock";
+    const itemKey = change.bundle?.itemKey ?? change.target.split(":")[1] ?? "Unknown";
+    const name = change.proposedData.name;
+    const url = change.proposedData.url;
+    const hidden = change.proposedData.hidden === true;
+
+    return (
+      <div className="mt-4 space-y-3">
+        <section className="rounded-lg border border-sky-200 bg-sky-50/60 p-4">
+          <div>
+            <h3 className="font-semibold text-foreground">New {axis}</h3>
+            <p className="text-sm text-muted-foreground">
+              No approved {axis} with this SKU exists yet. Approving this proposal will create it.
+            </p>
+          </div>
+          <dl className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            <ReviewSetting label="SKU" value={itemKey} />
+            <ReviewSetting label="Name" value={name} />
+            <ReviewSetting label="Product URL" value={url} />
+            <ReviewSetting label="Website visibility" value={hidden ? "Hidden" : "Visible"} />
+            {change.bundle ? (
+              <ReviewSetting
+                label="Compatibility cells included"
+                value={`${change.bundle.completedCells} of ${change.bundle.requiredCells}`}
+              />
+            ) : null}
+          </dl>
+        </section>
+        <RawJsonDetails change={change} />
+      </div>
+    );
+  }
+
+  if (change.mutationType === "cell.update") {
+    const parts = change.target.split(":");
+    const fields = [
+      { key: "compatibilityStatus", label: "Overall compatibility" },
+      ...COMPATIBILITY_EDITOR_DETAIL_FIELDS.map((field) => ({
+        key: field,
+        label: COMPATIBILITY_EDITOR_DETAIL_LABELS[field],
+      })),
+      { key: "rebootNeeded", label: "Reboot needed" },
+      { key: "notes", label: "Notes" },
+    ];
+
+    return (
+      <div className="mt-4 space-y-3">
+        <div>
+          <h3 className="font-semibold text-foreground">Compatibility cell correction</h3>
+          <p className="text-sm text-muted-foreground">
+            Computer <span className="font-mono text-foreground">{parts[1] ?? "Unknown"}</span>
+            {" · "}
+            Dock <span className="font-mono text-foreground">{parts[2] ?? "Unknown"}</span>
+          </p>
+        </div>
+        <ReviewComparison fields={fields} currentData={change.currentData} proposedData={change.proposedData} />
+        <RawJsonDetails change={change} />
+      </div>
+    );
+  }
+
+  const fields = Array.from(new Set([
+    ...Object.keys(change.currentData ?? {}),
+    ...Object.keys(change.proposedData),
+  ])).filter((key) => key !== "studentEdited").map((key) => ({ key, label: key }));
+
+  return (
+    <div className="mt-4 space-y-3">
+      <ReviewComparison fields={fields} currentData={change.currentData} proposedData={change.proposedData} />
+      <RawJsonDetails change={change} />
     </div>
   );
 }

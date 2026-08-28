@@ -1,7 +1,11 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { compatibilityEditorApi, type CompatibilityEditorDocument } from "../api/compatibilityEditor";
+import {
+  compatibilityEditorApi,
+  type CompatibilityEditorChange,
+  type CompatibilityEditorDocument,
+} from "../api/compatibilityEditor";
 import { useAuth } from "../contexts/AuthContext";
 import CompatibilityEditor from "./CompatibilityEditor";
 
@@ -73,6 +77,47 @@ const document: CompatibilityEditorDocument = {
   },
 };
 
+const readyComputerChange: CompatibilityEditorChange = {
+  id: "ready-computer-1",
+  target: "computer:C2",
+  mutationType: "computer.add",
+  baseVersion: 0,
+  version: 1,
+  proposedData: {
+    name: "New Computer",
+    url: "https://example.test/computer",
+    hidden: false,
+  },
+  currentData: null,
+  status: "pending",
+  readyForReview: true,
+  bundle: {
+    axis: "computer",
+    itemKey: "C2",
+    completedCells: 1,
+    requiredCells: 1,
+    missingTargets: [],
+    ready: true,
+  },
+  submittedBy: "student@example.test",
+  updatedBy: "student@example.test",
+  submittedAt: "2026-08-28T12:00:00Z",
+  updatedAt: "2026-08-28T12:01:00Z",
+  reviewedBy: null,
+  reviewedAt: null,
+  reviewNote: null,
+};
+
+const reviewDocument: CompatibilityEditorDocument = {
+  ...document,
+  approval: {
+    pendingCount: 1,
+    pendingChanges: [readyComputerChange],
+    draftCount: 0,
+    draftBundles: [],
+  },
+};
+
 describe("CompatibilityEditor", () => {
   afterEach(() => vi.restoreAllMocks());
 
@@ -98,6 +143,7 @@ describe("CompatibilityEditor", () => {
     mockedApi.getData.mockResolvedValue(document);
     mockedApi.mutate.mockResolvedValue({ ...document, revision: 2 });
     mockedApi.submitBundle.mockResolvedValue(document);
+    mockedApi.review.mockResolvedValue(document);
     mockedApi.publish.mockResolvedValue({
       attempted: true,
       success: true,
@@ -217,9 +263,57 @@ describe("CompatibilityEditor", () => {
 
     render(<CompatibilityEditor />);
 
+    expect(await screen.findByTitle("New Computer / Dock: Draft saved · Compatible")).toHaveTextContent("✓ Yes");
     fireEvent.click(await screen.findByRole("tab", { name: "Computers" }));
     fireEvent.click(screen.getByRole("button", { name: "Submit item for review" }));
 
     await waitFor(() => expect(mockedApi.submitBundle).toHaveBeenCalledWith("bundle-1"));
+  });
+
+  it("shows readable new-item settings with raw JSON available on demand", async () => {
+    mockedApi.getData.mockResolvedValueOnce(reviewDocument);
+
+    render(<CompatibilityEditor />);
+
+    fireEvent.click(await screen.findByRole("tab", { name: "Review (1)" }));
+
+    expect(screen.getByRole("heading", { name: "New computer" })).toBeInTheDocument();
+    expect(screen.getByText(/No approved computer with this SKU exists yet/i)).toBeInTheDocument();
+    expect(screen.getByText("Product URL")).toBeInTheDocument();
+    expect(screen.getByText("Website visibility")).toBeInTheDocument();
+    expect(screen.getByText("View raw JSON")).toBeInTheDocument();
+  });
+
+  it("requires confirmation before rejecting a proposed item", async () => {
+    mockedApi.getData.mockResolvedValueOnce(reviewDocument);
+    const confirm = vi.spyOn(window, "confirm").mockReturnValueOnce(false).mockReturnValueOnce(true);
+
+    render(<CompatibilityEditor />);
+    fireEvent.click(await screen.findByRole("tab", { name: "Review (1)" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Reject" }));
+    expect(confirm).toHaveBeenCalledWith(expect.stringMatching(/discard the item and all 1 saved compatibility cell/i));
+    expect(mockedApi.review).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Reject" }));
+    await waitFor(() => expect(mockedApi.review).toHaveBeenCalledWith("ready-computer-1", "reject"));
+  });
+
+  it("warns before closing a cell editor with unsaved changes", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValueOnce(false).mockReturnValueOnce(true);
+
+    render(<CompatibilityEditor />);
+
+    fireEvent.click(await screen.findByTitle("Computer / Dock: Compatible"));
+    fireEvent.change(screen.getByLabelText("Notes"), { target: { value: "Unsaved test result" } });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(confirm).toHaveBeenCalledWith("Discard the unsaved changes in this compatibility cell?");
+    expect(screen.getByRole("button", { name: "Save and Approve" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "Save and Approve" })).not.toBeInTheDocument();
+    });
   });
 });
