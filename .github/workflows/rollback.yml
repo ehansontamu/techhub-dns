@@ -25,6 +25,9 @@ jobs:
       cancel-in-progress: false
 
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Set target variables
         id: vars
         shell: bash
@@ -70,6 +73,13 @@ jobs:
           WEBAPP_DOMAIN="${{ steps.vars.outputs.webapp_domain }}"
           BRANCH="${{ steps.vars.outputs.branch }}"
           STEPS="${{ steps.vars.outputs.steps }}"
+
+          if [ "$STEPS" = "sync-dev-db" ]; then
+            echo "Running dev database sync from main..."
+            python3 scripts/sync_dev_db_from_main.py
+            echo "Database sync complete"
+            exit 0
+          fi
 
           ssh -4 \
             -o AddressFamily=inet \
