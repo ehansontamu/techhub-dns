@@ -117,21 +117,6 @@ export default function DeliveryRunDetailPage() {
     run?.orders.every((order) => order.status.toLowerCase() === "delivered") ?? false;
   const runIsActive = run?.status.toLowerCase() === "active";
 
-  const blockingOrders = useMemo(
-    () => run?.orders.filter((order) => order.status.toLowerCase() !== "delivered") ?? [],
-    [run?.orders]
-  );
-
-  const pendingSignatureOrders = useMemo(
-    () => blockingOrders.filter((order) => order.status === OrderStatus.IN_DELIVERY),
-    [blockingOrders]
-  );
-
-  const nonSignableBlockingOrders = useMemo(
-    () => blockingOrders.filter((order) => order.status !== OrderStatus.IN_DELIVERY),
-    [blockingOrders]
-  );
-
   useEffect(() => {
     if (!run) {
       return;
@@ -481,76 +466,6 @@ export default function DeliveryRunDetailPage() {
           ) : null}
         </div>
       </div>
-
-            <section className="rounded-2xl border border-border/70 bg-card/80 p-5 shadow-none">
-        <div className="space-y-4">
-          <h3 className="text-xl font-semibold tracking-tight">Completion Readiness</h3>
-          <p className="text-sm text-muted-foreground">
-            Resolve blockers below before completing this run.
-          </p>
-        </div>
-        <div className="mt-4 space-y-3">
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-            <div className="rounded-lg border border-border/70 p-3">
-              <div className="text-xs text-muted-foreground">Blocking orders</div>
-              <div className="text-lg font-semibold text-foreground">{blockingOrders.length}</div>
-            </div>
-            <div className="rounded-lg border border-border/70 p-3">
-              <div className="text-xs text-muted-foreground">Pending signature</div>
-              <div className="text-lg font-semibold text-foreground">{pendingSignatureOrders.length}</div>
-            </div>
-            <div className="rounded-lg border border-border/70 p-3">
-              <div className="text-xs text-muted-foreground">Non-signable blockers</div>
-              <div className="text-lg font-semibold text-foreground">{nonSignableBlockingOrders.length}</div>
-            </div>
-          </div>
-
-          {blockingOrders.length === 0 ? (
-            <div className="rounded-lg border border-emerald-300/40 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
-              All orders are delivered. This run is ready for completion.
-            </div>
-          ) : nonSignableBlockingOrders.length > 0 ? (
-            <div className="space-y-2">
-              {nonSignableBlockingOrders.map((order) => {
-                const orderLabel = order.inflow_order_id || order.id.slice(0, 8);
-
-                return (
-                  <div
-                    key={`blocker-${order.id}`}
-                    className="flex flex-col gap-2 rounded-lg border border-amber-300/40 bg-amber-50/60 p-3 sm:flex-row sm:items-center sm:justify-between"
-                  >
-                    <div>
-                      <div className="text-sm font-medium text-foreground">Order {orderLabel}</div>
-                      <div className="text-xs text-muted-foreground">
-                        Status: {order.status.toLowerCase().replace("_", " ")}
-                      </div>
-                    </div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      {isValidOrderId(order.id) ? (
-                        <Link to={`/orders/${order.inflow_order_id || order.id}`} state={{ fromPath: location.pathname }}>
-                          <Button variant="outline" size="sm">
-                            View Order
-                          </Button>
-                        </Link>
-                      ) : (
-                        <Button variant="outline" size="sm" disabled>
-                          View Order
-                        </Button>
-                      )}
-                      <Badge variant="warning">Move to In Delivery first</Badge>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          ) : (
-            <div className="rounded-lg border border-amber-300/40 bg-amber-50/60 px-3 py-2 text-sm text-amber-900">
-              {pendingSignatureOrders.length} order{pendingSignatureOrders.length !== 1 ? "s" : ""} still need
-              signature or proof. Use the run list below to sign them.
-            </div>
-          )}
-        </div>
-      </section>
 
       <section className="rounded-2xl border border-border/70 bg-card/80 p-5 shadow-none">
         <div className="flex flex-col gap-4">
