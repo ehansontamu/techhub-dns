@@ -316,4 +316,104 @@ describe("CompatibilityEditor", () => {
       expect(screen.queryByRole("button", { name: "Save and Approve" })).not.toBeInTheDocument();
     });
   });
+
+  it("offers review once when a contributor completes the final bundle cell", async () => {
+    mockedUseAuth.mockReturnValue({
+      ...mockedUseAuth.mock.results[0]?.value,
+      user: null,
+      session: null,
+      isAuthenticated: true,
+      isAdmin: false,
+      isLoading: false,
+      login: vi.fn(),
+      logout: vi.fn(),
+      refreshAuth: vi.fn(),
+    });
+    const incompleteChange: CompatibilityEditorChange = {
+      ...readyComputerChange,
+      id: "completion-prompt-bundle",
+      readyForReview: false,
+      bundle: {
+        ...readyComputerChange.bundle!,
+        completedCells: 0,
+        missingTargets: ["D1"],
+        ready: false,
+      },
+    };
+    const completedChange: CompatibilityEditorChange = {
+      ...incompleteChange,
+      bundle: {
+        ...incompleteChange.bundle!,
+        completedCells: 1,
+        missingTargets: [],
+      },
+    };
+    const incompleteDocument: CompatibilityEditorDocument = {
+      ...document,
+      data: {
+        ...document.data,
+        computers: {
+          ...document.data.computers,
+          C2: {
+            name: "New Computer",
+            studentEdited: true,
+            compatibilityData: { D1: { studentEdited: true } },
+          },
+        },
+      },
+      versions: {
+        ...document.versions,
+        computers: { ...document.versions.computers, C2: 1 },
+        cells: { ...document.versions.cells, C2: { D1: 0 } },
+      },
+      approval: {
+        pendingCount: 0,
+        pendingChanges: [],
+        draftCount: 1,
+        draftBundles: [incompleteChange],
+      },
+    };
+    const completedDocument: CompatibilityEditorDocument = {
+      ...incompleteDocument,
+      workspaceRevision: 2,
+      data: {
+        ...incompleteDocument.data,
+        computers: {
+          ...incompleteDocument.data.computers,
+          C2: {
+            name: "New Computer",
+            studentEdited: true,
+            compatibilityData: {
+              D1: { compatibilityStatus: "Compatible", studentEdited: true },
+            },
+          },
+        },
+      },
+      versions: {
+        ...incompleteDocument.versions,
+        cells: { ...incompleteDocument.versions.cells, C2: { D1: 1 } },
+      },
+      approval: {
+        pendingCount: 0,
+        pendingChanges: [],
+        draftCount: 1,
+        draftBundles: [completedChange],
+      },
+    };
+    mockedApi.getData.mockResolvedValueOnce(incompleteDocument);
+    mockedApi.mutate.mockResolvedValue(completedDocument);
+
+    render(<CompatibilityEditor />);
+
+    fireEvent.click(await screen.findByTitle("New Computer / Dock: Draft cell not completed"));
+    fireEvent.click(screen.getByRole("button", { name: "Save Cell to Draft" }));
+    expect(await screen.findByRole("heading", { name: "New computer is complete" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Not now" }));
+    fireEvent.click(await screen.findByTitle("New Computer / Dock: Draft saved · Compatible"));
+    fireEvent.click(screen.getByRole("button", { name: "Save Cell to Draft" }));
+
+    await waitFor(() => expect(mockedApi.mutate).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole("heading", { name: "New computer is complete" })).not.toBeInTheDocument();
+  });
 });

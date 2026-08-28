@@ -86,6 +86,12 @@ const createClientId = () =>
 const sortKeysByName = <T extends { name: string }>(items: Record<string, T>) =>
   Object.keys(items).sort((a, b) => items[a].name.localeCompare(items[b].name));
 
+const isBundleComplete = (change: CompatibilityEditorChange): boolean => Boolean(
+  change.bundle
+  && change.bundle.completedCells >= change.bundle.requiredCells
+  && change.bundle.missingTargets.length === 0
+);
+
 const normalizeRebootNeeded = (value: CompatibilityEditorCell["rebootNeeded"]): boolean => {
   if (typeof value === "boolean") {
     return value;
@@ -228,6 +234,7 @@ export default function CompatibilityEditor() {
   const [publishing, setPublishing] = useState(false);
   const [reviewingId, setReviewingId] = useState<string | null>(null);
   const [submittingBundleId, setSubmittingBundleId] = useState<string | null>(null);
+  const [completionPromptQueue, setCompletionPromptQueue] = useState<CompatibilityEditorChange[]>([]);
   const [activeCell, setActiveCell] = useState<ActiveCell | null>(null);
   const [cellForm, setCellForm] = useState<CellForm | null>(null);
   const [initialCellForm, setInitialCellForm] = useState<CellForm | null>(null);
@@ -255,6 +262,7 @@ export default function CompatibilityEditor() {
     [draftBundles, pendingChanges]
   );
   const reviewQueueCount = pendingChanges.length + draftBundles.length;
+  const completionPrompt = completionPromptQueue[0] ?? null;
   const activeCellBelongsToBundle = Boolean(
     activeCell
     && (
@@ -331,12 +339,13 @@ export default function CompatibilityEditor() {
   const performMutation = async (
     mutation: CompatibilityEditorMutation,
     successMessage: string
-  ): Promise<void> => {
+  ): Promise<CompatibilityEditorDocument> => {
     setSaving(true);
     try {
       const document = await compatibilityEditorApi.mutate(mutation, createClientId());
       applyDocument(document);
       toast.success(successMessage);
+      return document;
     } catch (error: unknown) {
       const message = extractApiErrorMessage(error, "Save failed.");
       const conflictDocument = (
@@ -520,6 +529,15 @@ export default function CompatibilityEditor() {
     if (!activeCell || !cellForm) {
       return;
     }
+    const relatedBundleTargets = new Set([
+      `computer:${activeCell.computerKey}`,
+      `dock:${activeCell.dockKey}`,
+    ]);
+    const completedBundleTargetsBeforeSave = new Set(
+      [...bundleChangesByTarget.values()]
+        .filter((change) => relatedBundleTargets.has(change.target) && isBundleComplete(change))
+        .map((change) => change.target)
+    );
     const currentCell = payload?.computers[activeCell.computerKey]?.compatibilityData?.[activeCell.dockKey];
     const cell: CompatibilityEditorCell = {
         ...(currentCell ?? {}),
@@ -538,7 +556,7 @@ export default function CompatibilityEditor() {
         delete cell.notes;
       }
     try {
-      await performMutation(
+      const document = await performMutation(
         {
           type: "cell.update",
           computerKey: activeCell.computerKey,
@@ -556,6 +574,22 @@ export default function CompatibilityEditor() {
       setCellForm(null);
       setInitialCellForm(null);
       setConflictMessage(null);
+      if (!isAdmin) {
+        const newlyCompletedBundles = document.approval.draftBundles.filter(
+          (change) => relatedBundleTargets.has(change.target)
+            && isBundleComplete(change)
+            && !completedBundleTargetsBeforeSave.has(change.target)
+        );
+        if (newlyCompletedBundles.length) {
+          setCompletionPromptQueue((current) => {
+            const queuedIds = new Set(current.map((change) => change.id));
+            return [
+              ...current,
+              ...newlyCompletedBundles.filter((change) => !queuedIds.has(change.id)),
+            ];
+          });
+        }
+      }
     } catch {
       // Keep the modal open so the user can compare/retry after a conflict.
     }
@@ -606,6 +640,21 @@ export default function CompatibilityEditor() {
     } finally {
       setSubmittingBundleId(null);
     }
+  };
+
+  const dismissCompletionPrompt = () => {
+    if (!completionPrompt) {
+      return;
+    }
+    setCompletionPromptQueue((current) => current.filter((change) => change.id !== completionPrompt.id));
+  };
+
+  const submitCompletedBundle = async () => {
+    if (!completionPrompt) {
+      return;
+    }
+    await submitNewItemBundle(completionPrompt.id);
+    dismissCompletionPrompt();
   };
 
   const publishApprovedData = async () => {
@@ -1074,6 +1123,45 @@ export default function CompatibilityEditor() {
                 : isAdmin
                   ? "Save and Approve"
                   : "Submit for Review"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(completionPrompt)} onOpenChange={(open) => {
+        if (!open && !submittingBundleId) dismissCompletionPrompt();
+      }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              New {completionPrompt?.bundle?.axis ?? "item"} is complete
+            </DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            All {completionPrompt?.bundle?.requiredCells ?? 0} required compatibility cells for{" "}
+            <span className="font-medium text-foreground">
+              {typeof completionPrompt?.proposedData.name === "string"
+                ? completionPrompt.proposedData.name
+                : completionPrompt?.bundle?.itemKey ?? "this item"}
+            </span>{" "}
+            are saved. Would you like to submit the completed item for admin review now?
+          </p>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={dismissCompletionPrompt}
+              disabled={Boolean(submittingBundleId)}
+            >
+              Not now
+            </Button>
+            <Button
+              type="button"
+              onClick={() => void submitCompletedBundle()}
+              disabled={Boolean(submittingBundleId)}
+            >
+              {submittingBundleId ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Check className="mr-2 h-4 w-4" />}
+              Submit for Review
             </Button>
           </DialogFooter>
         </DialogContent>
