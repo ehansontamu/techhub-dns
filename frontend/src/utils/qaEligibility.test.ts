@@ -1,12 +1,31 @@
 import { describe, expect, it } from "vitest";
 
 import type { User } from "../contexts/AuthContext";
+import type { Order } from "../types/order";
 import {
+  getQaStorageLocation,
   getOrderPickerLabel,
   isOrderPickedByUser,
   isSameUserQaBlocked,
   requiresDifferentUserForPickAndQa,
 } from "./qaEligibility";
+
+function buildOrderForQaLocation(
+  city: string,
+  assetTagRequired: boolean,
+): Order {
+  return {
+    id: "order-1",
+    inflow_order_id: "TH123",
+    status: "qa",
+    asset_tag_required: assetTagRequired,
+    inflow_data: {
+      shippingAddress: { city },
+    },
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+  };
+}
 
 const user: User = {
   id: "user-1",
@@ -45,6 +64,16 @@ describe("qaEligibility", () => {
 
   it("falls back when the picker is missing", () => {
     expect(getOrderPickerLabel({ picklist_generated_by: undefined })).toBe("Not recorded");
+  });
+
+  it("routes QA orders to the correct storage location", () => {
+    expect(getQaStorageLocation(buildOrderForQaLocation("College Station", true))).toBe(
+      "Tagging Bench",
+    );
+    expect(getQaStorageLocation(buildOrderForQaLocation("College Station", false))).toBe("Shelf");
+    expect(getQaStorageLocation(buildOrderForQaLocation("Houston", false))).toBe(
+      "Shipping Shelf",
+    );
   });
 
   it("defaults same-user QA protection to enabled when the setting is missing", () => {
