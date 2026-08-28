@@ -357,6 +357,37 @@ def test_new_high_quantity_bigcommerce_orders_notify_once_after_baseline(tmp_pat
     assert notifications[0]["total_quantity"] == 10
 
 
+def test_new_high_quantity_bigcommerce_orders_notify_each_configured_recipient(tmp_path, monkeypatch):
+    service = InventoryReorderService(
+        SimpleNamespace(
+            storage_root=str(tmp_path),
+            inventory_reorder_teams_notifications_enabled=True,
+            inventory_reorder_teams_recipient_email=(
+                "first@example.com, second@example.com, FIRST@example.com"
+            ),
+            inventory_reorder_teams_recipient_name="Inventory Team",
+            inventory_reorder_teams_minimum_order_quantity=10,
+        )
+    )
+    notifications = []
+
+    def fake_send(**kwargs):
+        notifications.append(kwargs)
+        return True
+
+    monkeypatch.setattr(service, "_send_bigcommerce_order_alert", fake_send)
+    existing_order = {"id": "100", "products": [{"name": "Existing", "quantity": 12}]}
+    new_order = {"id": "101", "products": [{"name": "New", "quantity": 10}]}
+
+    service._notify_new_high_quantity_bigcommerce_orders([existing_order])
+    service._notify_new_high_quantity_bigcommerce_orders([existing_order, new_order])
+
+    assert [notification["recipient_email"] for notification in notifications] == [
+        "first@example.com",
+        "second@example.com",
+    ]
+
+
 def test_merge_bigcommerce_orders_deduplicates_status_and_recent_results():
     merged = InventoryReorderService._merge_bigcommerce_orders(
         [{"id": "100", "products": [{"name": "Status 9", "quantity": 10}]}],

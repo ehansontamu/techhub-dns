@@ -59,6 +59,20 @@ def _to_int(value: Any, default: int = 0) -> int:
         return default
 
 
+def _parse_recipient_emails(value: Any) -> list[str]:
+    """Return a normalized, de-duplicated list from a comma-separated setting."""
+    if not isinstance(value, str):
+        return []
+
+    return list(
+        dict.fromkeys(
+            email.strip().lower()
+            for email in value.split(",")
+            if email.strip()
+        )
+    )
+
+
 def _is_fulfilled_order_detail(detail: Any) -> bool:
     if not isinstance(detail, dict):
         return False
@@ -918,12 +932,12 @@ class InventoryReorderService:
     ) -> None:
         if not getattr(self._settings, "inventory_reorder_teams_notifications_enabled", False):
             return
-        recipient_email = str(
-            getattr(self._settings, "inventory_reorder_teams_recipient_email", "") or ""
-        ).strip()
-        if not recipient_email:
+        recipient_emails = _parse_recipient_emails(
+            getattr(self._settings, "inventory_reorder_teams_recipient_email", "")
+        )
+        if not recipient_emails:
             logger.warning(
-                "Inventory reorder Teams alerts are enabled but no recipient email is configured"
+                "Inventory reorder Teams alerts are enabled but no recipient emails are configured"
             )
             return
 
@@ -981,19 +995,26 @@ class InventoryReorderService:
                     "notified_order_ids": sorted(notified_order_ids),
                 }
             )
-            if self._send_bigcommerce_order_alert(
-                recipient_email=recipient_email,
-                recipient_name=recipient_name,
-                bigcommerce_order_id=order_id,
-                order_items=item_lines,
-                total_quantity=total_quantity,
-            ):
-                logger.info("Queued Teams alert for BigCommerce order %s (%s units)", order_id, total_quantity)
-            else:
-                logger.error(
-                    "Failed to queue Teams alert for BigCommerce order %s; it will not be retried to avoid duplicates",
-                    order_id,
-                )
+            for recipient_email in recipient_emails:
+                if self._send_bigcommerce_order_alert(
+                    recipient_email=recipient_email,
+                    recipient_name=recipient_name,
+                    bigcommerce_order_id=order_id,
+                    order_items=item_lines,
+                    total_quantity=total_quantity,
+                ):
+                    logger.info(
+                        "Queued Teams alert for BigCommerce order %s (%s units) to %s",
+                        order_id,
+                        total_quantity,
+                        recipient_email,
+                    )
+                else:
+                    logger.error(
+                        "Failed to queue Teams alert for BigCommerce order %s to %s; it will not be retried to avoid duplicates",
+                        order_id,
+                        recipient_email,
+                    )
         self._write_bigcommerce_notification_state(
             {
                 "initialized": True,

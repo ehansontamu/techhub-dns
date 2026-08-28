@@ -166,13 +166,19 @@ class TeamsRecipientService:
             f"{total_quantity} total units",
             *order_items,
         ]
+        recipient_reference = self._sanitize_reference(recipient_email)
         return self.send_delivery_notification(
             recipient_email=recipient_email,
             recipient_name=recipient_name,
             order_number=reference,
             delivery_runner="Inventory Reorder Alert",
             order_items=payload_items,
-            notification_group_key=f"inventory-reorder-{bigcommerce_order_id}",
+            # Each recipient needs a distinct queue filename. The delivery sender
+            # derives that filename from this group key, and these alerts can be
+            # queued within the same second.
+            notification_group_key=(
+                f"inventory-reorder-{bigcommerce_order_id}-{recipient_reference}"
+            ),
             notification_type="inventory_reorder_notification",
             notification_message=(
                 "Bulk BigCommerce Order Alert\n\n"
