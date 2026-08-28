@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { Order, OrderStatus } from "../types/order";
 import { ordersApi } from "../api/orders";
 import { settingsApi } from "../api/settings";
+import { Badge } from "../components/ui/badge";
 import { useAuth } from "../contexts/AuthContext";
 import {
     getOrderPickerLabel,
@@ -30,6 +31,17 @@ type SavedQAChecklist = {
 };
 
 const storageKey = (orderId: string) => `order-qa-checklist-v3:${orderId}`;
+
+function getQaLocationBadgeClass(location: string): string {
+    switch (location) {
+        case "Tagging Bench":
+            return "border-amber-300 bg-amber-100 text-amber-950";
+        case "Shipping Shelf":
+            return "border-violet-300 bg-violet-100 text-violet-950";
+        default:
+            return "border-sky-300 bg-sky-100 text-sky-950";
+    }
+}
 
 export default function OrderQAChecklist() {
     const navigate = useNavigate();
@@ -177,7 +189,14 @@ export default function OrderQAChecklist() {
                                                 </button>
                                             </td>
                                             <td className="px-3 py-2 text-sm text-foreground">{o.recipient_name || "N/A"}</td>
-                                            <td className="px-3 py-2 text-sm font-medium text-foreground">{qaStorageLocation}</td>
+                                            <td className="px-3 py-2 text-sm">
+                                                <Badge
+                                                    variant="outline"
+                                                    className={getQaLocationBadgeClass(qaStorageLocation)}
+                                                >
+                                                    {qaStorageLocation}
+                                                </Badge>
+                                            </td>
                                             <td className="hidden px-3 py-2 text-sm text-foreground lg:table-cell">{o.delivery_location || "N/A"}</td>
                                             <td className="px-3 py-2 text-sm text-foreground">
                                                 <div className="max-w-[12rem] truncate" title={pickerLabel}>
