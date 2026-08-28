@@ -123,4 +123,16 @@ describe("DeliveryRunDetailPage", () => {
     });
     expect(refetch).toHaveBeenCalled();
   });
+
+  it("does not render the completion readiness section", () => {
+    render(
+      <MemoryRouter initialEntries={[`/delivery/runs/${runId}`]}>
+        <Routes>
+          <Route path="/delivery/runs/:runId" element={<DeliveryRunDetailPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(screen.queryByText("Completion Readiness")).not.toBeInTheDocument();
+  });
 });
