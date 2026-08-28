@@ -327,6 +327,29 @@ def test_new_item_is_submitted_and_reviewed_as_a_complete_bundle(db):
     )
     ready_change = resubmitted["approval"]["pendingChanges"][0]
 
+    admin_corrected, _ = submit_change(
+        db,
+        {
+            "operationId": "admin-correct-pending-computer-metadata",
+            "mutation": {
+                "type": "computer.update",
+                "computerKey": "C2",
+                "expectedVersion": ready_change["version"],
+                "computer": {
+                    "name": "Admin Corrected Computer Two",
+                    "url": "https://example.test/c2",
+                    "hidden": False,
+                },
+            },
+        },
+        actor="admin@example.test",
+        preserve_ready_for_review=True,
+    )
+    assert admin_corrected["approval"]["draftCount"] == 0
+    assert admin_corrected["approval"]["pendingCount"] == 1
+    ready_change = admin_corrected["approval"]["pendingChanges"][0]
+    assert ready_change["bundle"]["ready"] is True
+
     approved = review_change(
         db,
         ready_change["id"],
@@ -336,13 +359,86 @@ def test_new_item_is_submitted_and_reviewed_as_a_complete_bundle(db):
     published_data = build_payload(db)
     assert approved["approval"]["pendingCount"] == 0
     assert published_data["computers"]["C2"]["hidden"] is False
-    assert published_data["computers"]["C2"]["name"] == "Corrected Computer Two"
+    assert published_data["computers"]["C2"]["name"] == "Admin Corrected Computer Two"
     assert published_data["computers"]["C2"]["url"] == "https://example.test/c2"
     assert "studentEdited" not in published_data["computers"]["C2"]
     assert published_data["computers"]["C2"]["compatibilityData"]["D2"] == {
         "compatibilityStatus": "Incompatible",
         "notes": "Tested with D2",
     }
+
+
+def test_contributor_can_correct_pending_dock_metadata(db):
+    import_payload(db, _payload(), actor="seed")
+    workspace, _ = submit_change(
+        db,
+        {
+            "operationId": "proposal-dock",
+            "mutation": {
+                "type": "dock.add",
+                "dockKey": "D3",
+                "dock": {
+                    "name": "Dock Three",
+                    "url": "https://example.test/original-d3",
+                    "hidden": True,
+                },
+            },
+        },
+        actor="contributor@example.test",
+    )
+    bundle_change = workspace["approval"]["draftBundles"][0]
+
+    workspace, _ = submit_change(
+        db,
+        {
+            "operationId": "proposal-dock-cell",
+            "mutation": {
+                "type": "cell.update",
+                "computerKey": "C1",
+                "dockKey": "D3",
+                "expectedVersion": 0,
+                "cell": {"compatibilityStatus": "Compatible"},
+            },
+        },
+        actor="contributor@example.test",
+    )
+    bundle_change = workspace["approval"]["draftBundles"][0]
+    submitted = submit_bundle(
+        db,
+        bundle_change["id"],
+        actor="contributor@example.test",
+    )
+    ready_change = submitted["approval"]["pendingChanges"][0]
+
+    corrected, _ = submit_change(
+        db,
+        {
+            "operationId": "correct-pending-dock-metadata",
+            "mutation": {
+                "type": "dock.update",
+                "dockKey": "D3",
+                "expectedVersion": ready_change["version"],
+                "dock": {
+                    "name": "Corrected Dock Three",
+                    "url": "https://example.test/corrected-d3",
+                    "hidden": True,
+                },
+            },
+        },
+        actor="contributor@example.test",
+    )
+
+    assert corrected["approval"]["pendingCount"] == 0
+    assert corrected["approval"]["draftCount"] == 1
+    corrected_change = corrected["approval"]["draftBundles"][0]
+    assert corrected_change["mutationType"] == "dock.add"
+    assert corrected_change["proposedData"] == {
+        "name": "Corrected Dock Three",
+        "url": "https://example.test/corrected-d3",
+        "hidden": False,
+    }
+    assert corrected_change["bundle"]["ready"] is False
+    assert build_payload(db)["docks"].get("D3") is None
 
 
 def test_publisher_writes_only_explicit_snapshot_and_records_revision(db, monkeypatch):

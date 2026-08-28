@@ -1776,11 +1776,16 @@ def mutate_compatibility_editor_data():
                 mutation = payload.get("mutation") if isinstance(payload, dict) else None
                 if (
                     isinstance(mutation, dict)
-                    and mutation.get("type") == "cell.update"
+                    and mutation.get("type")
+                    in {"cell.update", "computer.update", "dock.update"}
                     and exc.current_version is None
                 ):
                     document, duplicate = submit_compatibility_editor_change(
-                        db, payload, actor=actor
+                        db,
+                        payload,
+                        actor=actor,
+                        preserve_ready_for_review=mutation.get("type")
+                        in {"computer.update", "dock.update"},
                     )
                 else:
                     raise

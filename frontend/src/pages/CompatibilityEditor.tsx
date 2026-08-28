@@ -872,12 +872,12 @@ export default function CompatibilityEditor() {
                     name={computer.name}
                     url={computer.url ?? ""}
                     hidden={Boolean(computer.hidden)}
-                    version={(isAdmin ? approvedVersions : versions)?.computers[computerKey] ?? 0}
+                    version={bundleChange?.version ?? (isAdmin ? approvedVersions : versions)?.computers[computerKey] ?? 0}
                     pending={Boolean(computer.studentEdited)}
                     bundleChange={bundleChange}
                     metadataEditable={!publishing && (
-                      (isAdmin && !computer.studentEdited)
-                      || (!isAdmin && Boolean(bundleChange))
+                      Boolean(bundleChange)
+                      || (isAdmin && !computer.studentEdited)
                     )}
                     visibilityEditable={isAdmin && !computer.studentEdited && !publishing}
                     removable={isAdmin && !computer.studentEdited && !publishing}
@@ -902,6 +902,7 @@ export default function CompatibilityEditor() {
             >
               {dockKeys.map((dockKey) => {
                 const dock = payload.docks[dockKey];
+                const bundleChange = bundleChangesByTarget.get(`dock:${dockKey}`);
                 return (
                   <MatrixItemRow
                     key={dockKey}
@@ -909,19 +910,21 @@ export default function CompatibilityEditor() {
                     name={dock.name}
                     url={dock.url ?? ""}
                     hidden={Boolean(dock.hidden)}
-                    version={(isAdmin ? approvedVersions : versions)?.docks[dockKey] ?? 0}
+                    version={bundleChange?.version ?? (isAdmin ? approvedVersions : versions)?.docks[dockKey] ?? 0}
                     pending={Boolean(dock.studentEdited)}
-                    bundleChange={bundleChangesByTarget.get(`dock:${dockKey}`)}
-                    metadataEditable={isAdmin && !dock.studentEdited && !publishing}
+                    bundleChange={bundleChange}
+                    metadataEditable={!publishing && (
+                      Boolean(bundleChange)
+                      || (isAdmin && !dock.studentEdited)
+                    )}
                     visibilityEditable={isAdmin && !dock.studentEdited && !publishing}
                     removable={isAdmin && !dock.studentEdited && !publishing}
                     onSave={(value, expectedVersion) => saveDock(dockKey, { ...dock, ...value }, expectedVersion)}
                     onRemove={() => void removeDock(dockKey)}
                     onSubmitBundle={!isAdmin ? () => {
-                      const change = bundleChangesByTarget.get(`dock:${dockKey}`);
-                      if (change) void submitNewItemBundle(change.id);
+                      if (bundleChange) void submitNewItemBundle(bundleChange.id);
                     } : undefined}
-                    submittingBundle={submittingBundleId === bundleChangesByTarget.get(`dock:${dockKey}`)?.id}
+                    submittingBundle={submittingBundleId === bundleChange?.id}
                   />
                 );
               })}

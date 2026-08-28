@@ -325,6 +325,7 @@ def submit_change(
     request_body: Any,
     *,
     actor: str,
+    preserve_ready_for_review: bool = False,
 ) -> tuple[dict[str, Any], bool]:
     """Create or revise a pending proposal without touching approved data."""
 
@@ -340,9 +341,15 @@ def submit_change(
     if not isinstance(mutation, dict):
         raise CompatibilityEditorError("'mutation' must be an object.")
     mutation_type = mutation.get("type")
-    if mutation_type not in {"cell.update", "computer.add", "computer.update", "dock.add"}:
+    if mutation_type not in {
+        "cell.update",
+        "computer.add",
+        "computer.update",
+        "dock.add",
+        "dock.update",
+    }:
         raise CompatibilityEditorError(
-            "Contributors may update compatibility cells, edit pending computers, "
+            "Contributors may update compatibility cells, edit pending computers and docks, "
             "or propose new computers and docks."
         )
 
@@ -385,6 +392,8 @@ def submit_change(
         proposed_data = _normalize_dock(mutation.get("dock"))
     elif mutation_type == "computer.update":
         proposed_data = _normalize_computer(mutation.get("computer"))
+    elif mutation_type == "dock.update":
+        proposed_data = _normalize_dock(mutation.get("dock"))
     else:
         assert secondary_key is not None
         bundle_parents = _bundle_parents_for_cell(db, primary_key, secondary_key)
@@ -404,10 +413,12 @@ def submit_change(
         base_version = int(approved.version) if approved is not None else 0
 
     expected_version = mutation.get("expectedVersion")
-    if mutation_type == "computer.update":
-        if existing is None or existing.mutation_type != "computer.add":
+    if mutation_type in {"computer.update", "dock.update"}:
+        expected_addition_type = mutation_type.replace(".update", ".add")
+        item_label = "computer" if mutation_type == "computer.update" else "dock"
+        if existing is None or existing.mutation_type != expected_addition_type:
             raise CompatibilityEditorError(
-                "Contributors may only edit a computer while its new-item proposal is pending."
+                f"Contributors may only edit a {item_label} while its new-item proposal is pending."
             )
         _check_version(
             target,
@@ -417,7 +428,8 @@ def submit_change(
         existing.proposed_data = proposed_data
         existing.proposal_version = int(existing.proposal_version) + 1
         existing.updated_by = actor
-        existing.ready_for_review = False
+        if not preserve_ready_for_review:
+            existing.ready_for_review = False
         change = existing
     elif existing is not None:
         if mutation_type != existing.mutation_type:

@@ -57,8 +57,8 @@ def test_non_admin_can_submit_but_cannot_review_or_publish(monkeypatch):
     )
     submitted = []
 
-    def fake_submit(_db, payload, *, actor):
-        submitted.append((payload, actor))
+    def fake_submit(_db, payload, *, actor, preserve_ready_for_review=False):
+        submitted.append((payload, actor, preserve_ready_for_review))
         return _document(), False
 
     monkeypatch.setattr(
@@ -93,3 +93,58 @@ def test_non_admin_can_submit_but_cannot_review_or_publish(monkeypatch):
         assert client.put(
             "/api/system/compatibility-editor-staging", json={}
         ).status_code == 403
+
+
+def test_admin_pending_item_update_remains_a_proposal(monkeypatch):
+    app = Flask(__name__)
+    app.register_blueprint(system_routes.bp)
+
+    @app.before_request
+    def set_authenticated_user():
+        g.user_id = "admin-1"
+        g.user_email = "admin@example.test"
+
+    monkeypatch.setattr(system_routes, "is_current_user_admin", lambda: True)
+    monkeypatch.setattr(system_routes, "get_db_session", lambda: _FakeDb())
+    monkeypatch.setattr(
+        system_routes, "_emit_compatibility_editor_update", lambda _document: None
+    )
+
+    def fake_apply(_db, _payload, *, actor):
+        assert actor == "admin@example.test"
+        raise system_routes.CompatibilityEditorConflict(
+            "Computer 'C2' no longer exists.",
+            target="computer:C2",
+            current_version=None,
+        )
+
+    submitted = []
+
+    def fake_submit(_db, payload, *, actor, preserve_ready_for_review=False):
+        submitted.append((payload, actor, preserve_ready_for_review))
+        return _document(), False
+
+    monkeypatch.setattr(
+        system_routes, "apply_compatibility_editor_mutation", fake_apply
+    )
+    monkeypatch.setattr(
+        system_routes, "submit_compatibility_editor_change", fake_submit
+    )
+
+    mutation = {
+        "operationId": "admin-correct-pending-computer",
+        "mutation": {
+            "type": "computer.update",
+            "computerKey": "C2",
+            "expectedVersion": 1,
+            "computer": {
+                "name": "Corrected Computer",
+                "url": "https://example.test/c2",
+            },
+        },
+    }
+    with app.test_client() as client:
+        response = client.patch("/api/system/compatibility-editor", json=mutation)
+
+    assert response.status_code == 200
+    assert submitted == [(mutation, "admin@example.test", True)]

@@ -270,23 +270,28 @@ describe("CompatibilityEditor", () => {
     await waitFor(() => expect(mockedApi.submitBundle).toHaveBeenCalledWith("bundle-1"));
   });
 
-  it("lets a contributor correct pending computer name and URL", async () => {
+  it.each([
+    { role: "contributor", isAdmin: false },
+    { role: "admin", isAdmin: true },
+  ])("lets a $role correct pending computer name and URL", async ({ isAdmin }) => {
     mockedUseAuth.mockReturnValue({
       ...mockedUseAuth.mock.results[0]?.value,
       user: null,
       session: null,
       isAuthenticated: true,
-      isAdmin: false,
+      isAdmin,
       isLoading: false,
       login: vi.fn(),
       logout: vi.fn(),
       refreshAuth: vi.fn(),
     });
-    const pendingChange: CompatibilityEditorChange = {
-      ...readyComputerChange,
-      readyForReview: false,
-      bundle: { ...readyComputerChange.bundle!, ready: false },
-    };
+    const pendingChange: CompatibilityEditorChange = isAdmin
+      ? readyComputerChange
+      : {
+          ...readyComputerChange,
+          readyForReview: false,
+          bundle: { ...readyComputerChange.bundle!, ready: false },
+        };
     const pendingComputerDocument: CompatibilityEditorDocument = {
       ...document,
       data: {
@@ -310,10 +315,10 @@ describe("CompatibilityEditor", () => {
         cells: { ...document.versions.cells, C2: { D1: 1 } },
       },
       approval: {
-        pendingCount: 0,
-        pendingChanges: [],
-        draftCount: 1,
-        draftBundles: [pendingChange],
+        pendingCount: isAdmin ? 1 : 0,
+        pendingChanges: isAdmin ? [pendingChange] : [],
+        draftCount: isAdmin ? 0 : 1,
+        draftBundles: isAdmin ? [] : [pendingChange],
       },
     };
     mockedApi.getData.mockResolvedValueOnce(pendingComputerDocument);
@@ -338,6 +343,101 @@ describe("CompatibilityEditor", () => {
         computer: expect.objectContaining({
           name: "Corrected Computer",
           url: "https://example.test/original",
+        }),
+      }),
+      expect.any(String)
+    ));
+  });
+
+  it("lets a contributor correct pending dock name and URL", async () => {
+    mockedUseAuth.mockReturnValue({
+      ...mockedUseAuth.mock.results[0]?.value,
+      user: null,
+      session: null,
+      isAuthenticated: true,
+      isAdmin: false,
+      isLoading: false,
+      login: vi.fn(),
+      logout: vi.fn(),
+      refreshAuth: vi.fn(),
+    });
+    const pendingDockChange: CompatibilityEditorChange = {
+      id: "pending-dock-1",
+      target: "dock:D2",
+      mutationType: "dock.add",
+      baseVersion: 0,
+      version: 2,
+      proposedData: {
+        name: "New Dock",
+        url: "https://example.test/original-dock",
+        hidden: false,
+      },
+      currentData: null,
+      status: "pending",
+      readyForReview: false,
+      bundle: {
+        axis: "dock",
+        itemKey: "D2",
+        completedCells: 0,
+        requiredCells: 1,
+        missingTargets: ["cell:C1:D2"],
+        ready: false,
+      },
+      submittedBy: "student@example.test",
+      updatedBy: "student@example.test",
+      submittedAt: "2026-08-28T12:00:00Z",
+      updatedAt: "2026-08-28T12:01:00Z",
+      reviewedBy: null,
+      reviewedAt: null,
+      reviewNote: null,
+    };
+    const pendingDockDocument: CompatibilityEditorDocument = {
+      ...document,
+      data: {
+        ...document.data,
+        docks: {
+          ...document.data.docks,
+          D2: {
+            name: "New Dock",
+            url: "https://example.test/original-dock",
+            hidden: false,
+            studentEdited: true,
+          },
+        },
+      },
+      versions: {
+        ...document.versions,
+        docks: { ...document.versions.docks, D2: 2 },
+      },
+      approval: {
+        pendingCount: 0,
+        pendingChanges: [],
+        draftCount: 1,
+        draftBundles: [pendingDockChange],
+      },
+    };
+    mockedApi.getData.mockResolvedValueOnce(pendingDockDocument);
+    mockedApi.mutate.mockResolvedValue(pendingDockDocument);
+
+    render(<CompatibilityEditor />);
+
+    fireEvent.click(await screen.findByRole("tab", { name: "Docks" }));
+    const nameInput = screen.getByLabelText("Name for D2");
+    const urlInput = screen.getByLabelText("URL for D2");
+    expect(nameInput).toBeEnabled();
+    expect(urlInput).toBeEnabled();
+
+    fireEvent.change(urlInput, { target: { value: "https://example.test/corrected-dock" } });
+    fireEvent.blur(urlInput);
+
+    await waitFor(() => expect(mockedApi.mutate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "dock.update",
+        dockKey: "D2",
+        expectedVersion: 2,
+        dock: expect.objectContaining({
+          name: "New Dock",
+          url: "https://example.test/corrected-dock",
         }),
       }),
       expect.any(String)
