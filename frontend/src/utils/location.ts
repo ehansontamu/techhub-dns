@@ -8,7 +8,7 @@ interface ShippingAddress {
   postalCode?: string;
 }
 
-function getShippingAddress(order: Order): ShippingAddress | null {
+function getShippingAddress(order: Pick<Order, "inflow_data">): ShippingAddress | null {
   if (!order.inflow_data || typeof order.inflow_data !== "object") return null;
   const addr = (order.inflow_data as Record<string, unknown>).shippingAddress;
   return typeof addr === "object" && addr !== null ? addr as ShippingAddress : null;
@@ -71,7 +71,7 @@ export function isLocalDeliveryCity(city: string): boolean {
  * @param order The order to check
  * @returns true if the order is in Bryan or College Station, false otherwise
  */
-export function isLocalDelivery(order: Order): boolean {
+export function isLocalDelivery(order: Pick<Order, "inflow_data">): boolean {
   if (!order.inflow_data) {
     return true; // Assume local if no inflow data
   }
