@@ -7,6 +7,7 @@ sys.path.append(".")
 
 from app.services.inventory_reorder_service import (
     InventoryReorderService,
+    _parse_recipient_emails,
     compute_inventory_reorder_rows,
 )
 
@@ -336,7 +337,8 @@ def test_new_high_quantity_bigcommerce_orders_notify_once_after_baseline(tmp_pat
             inventory_reorder_teams_recipient_email="inventory@example.com",
             inventory_reorder_teams_recipient_name="Inventory Team",
             inventory_reorder_teams_minimum_order_quantity=10,
-        )
+        ),
+        recipient_email_resolver=_parse_recipient_emails,
     )
     notifications = []
 
@@ -367,7 +369,8 @@ def test_new_high_quantity_bigcommerce_orders_notify_each_configured_recipient(t
             ),
             inventory_reorder_teams_recipient_name="Inventory Team",
             inventory_reorder_teams_minimum_order_quantity=10,
-        )
+        ),
+        recipient_email_resolver=_parse_recipient_emails,
     )
     notifications = []
 

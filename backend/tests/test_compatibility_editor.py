@@ -293,6 +293,40 @@ def test_new_item_is_submitted_and_reviewed_as_a_complete_bundle(db):
     ready_change = submitted["approval"]["pendingChanges"][0]
     assert ready_change["bundle"]["ready"] is True
 
+    corrected, _ = submit_change(
+        db,
+        {
+            "operationId": "correct-pending-computer-metadata",
+            "mutation": {
+                "type": "computer.update",
+                "computerKey": "C2",
+                "expectedVersion": ready_change["version"],
+                "computer": {
+                    "name": "Corrected Computer Two",
+                    "url": "https://example.test/c2",
+                    "hidden": True,
+                },
+            },
+        },
+        actor="contributor@example.test",
+    )
+    assert corrected["approval"]["pendingCount"] == 0
+    assert corrected["approval"]["draftCount"] == 1
+    corrected_change = corrected["approval"]["draftBundles"][0]
+    assert corrected_change["proposedData"] == {
+        "name": "Corrected Computer Two",
+        "url": "https://example.test/c2",
+        "hidden": False,
+    }
+    assert corrected_change["bundle"]["ready"] is False
+
+    resubmitted = submit_bundle(
+        db,
+        corrected_change["id"],
+        actor="contributor@example.test",
+    )
+    ready_change = resubmitted["approval"]["pendingChanges"][0]
+
     approved = review_change(
         db,
         ready_change["id"],
@@ -302,6 +336,8 @@ def test_new_item_is_submitted_and_reviewed_as_a_complete_bundle(db):
     published_data = build_payload(db)
     assert approved["approval"]["pendingCount"] == 0
     assert published_data["computers"]["C2"]["hidden"] is False
+    assert published_data["computers"]["C2"]["name"] == "Corrected Computer Two"
+    assert published_data["computers"]["C2"]["url"] == "https://example.test/c2"
     assert "studentEdited" not in published_data["computers"]["C2"]
     assert published_data["computers"]["C2"]["compatibilityData"]["D2"] == {
         "compatibilityStatus": "Incompatible",

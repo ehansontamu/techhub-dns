@@ -270,6 +270,80 @@ describe("CompatibilityEditor", () => {
     await waitFor(() => expect(mockedApi.submitBundle).toHaveBeenCalledWith("bundle-1"));
   });
 
+  it("lets a contributor correct pending computer name and URL", async () => {
+    mockedUseAuth.mockReturnValue({
+      ...mockedUseAuth.mock.results[0]?.value,
+      user: null,
+      session: null,
+      isAuthenticated: true,
+      isAdmin: false,
+      isLoading: false,
+      login: vi.fn(),
+      logout: vi.fn(),
+      refreshAuth: vi.fn(),
+    });
+    const pendingChange: CompatibilityEditorChange = {
+      ...readyComputerChange,
+      readyForReview: false,
+      bundle: { ...readyComputerChange.bundle!, ready: false },
+    };
+    const pendingComputerDocument: CompatibilityEditorDocument = {
+      ...document,
+      data: {
+        ...document.data,
+        computers: {
+          ...document.data.computers,
+          C2: {
+            name: "New Computer",
+            url: "https://example.test/original",
+            hidden: false,
+            studentEdited: true,
+            compatibilityData: {
+              D1: { compatibilityStatus: "Compatible", studentEdited: true },
+            },
+          },
+        },
+      },
+      versions: {
+        ...document.versions,
+        computers: { ...document.versions.computers, C2: 1 },
+        cells: { ...document.versions.cells, C2: { D1: 1 } },
+      },
+      approval: {
+        pendingCount: 0,
+        pendingChanges: [],
+        draftCount: 1,
+        draftBundles: [pendingChange],
+      },
+    };
+    mockedApi.getData.mockResolvedValueOnce(pendingComputerDocument);
+    mockedApi.mutate.mockResolvedValue(pendingComputerDocument);
+
+    render(<CompatibilityEditor />);
+
+    fireEvent.click(await screen.findByRole("tab", { name: "Computers" }));
+    const nameInput = screen.getByLabelText("Name for C2");
+    const urlInput = screen.getByLabelText("URL for C2");
+    expect(nameInput).toBeEnabled();
+    expect(urlInput).toBeEnabled();
+
+    fireEvent.change(nameInput, { target: { value: "Corrected Computer" } });
+    fireEvent.blur(nameInput);
+
+    await waitFor(() => expect(mockedApi.mutate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "computer.update",
+        computerKey: "C2",
+        expectedVersion: 1,
+        computer: expect.objectContaining({
+          name: "Corrected Computer",
+          url: "https://example.test/original",
+        }),
+      }),
+      expect.any(String)
+    ));
+  });
+
   it("shows readable new-item settings with raw JSON available on demand", async () => {
     mockedApi.getData.mockResolvedValueOnce(reviewDocument);
 

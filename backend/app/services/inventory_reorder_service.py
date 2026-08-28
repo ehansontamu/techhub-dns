@@ -60,15 +60,67 @@ def _to_int(value: Any, default: int = 0) -> int:
 
 
 def _parse_recipient_emails(value: Any) -> list[str]:
-    """Return a normalized, de-duplicated list from a comma-separated setting."""
-    if not isinstance(value, str):
+    """Return a normalized, de-duplicated list from JSON, CSV, or a sequence."""
+    raw_values: list[Any]
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return []
+        if stripped.startswith("["):
+            try:
+                parsed = json.loads(stripped)
+            except json.JSONDecodeError:
+                parsed = None
+            if isinstance(parsed, list):
+                raw_values = parsed
+            else:
+                raw_values = stripped.split(",")
+        else:
+            raw_values = stripped.split(",")
+    elif isinstance(value, (list, tuple, set)):
+        raw_values = list(value)
+    else:
         return []
 
     return list(
         dict.fromkeys(
             email.strip().lower()
-            for email in value.split(",")
-            if email.strip()
+            for email in raw_values
+            if isinstance(email, str) and email.strip()
+        )
+    )
+
+
+def _load_effective_inventory_reorder_recipients(env_value: Any) -> list[str]:
+    """Merge pinned environment recipients with admin-managed database recipients."""
+    env_recipients = _parse_recipient_emails(env_value)
+    try:
+        from app.database import get_db_session
+        from app.services.system_setting_service import (
+            SETTING_INVENTORY_REORDER_TEAMS_RECIPIENT_EMAILS,
+            SystemSettingService,
+        )
+
+        db = get_db_session()
+        try:
+            db_value = SystemSettingService.get_setting(
+                db, SETTING_INVENTORY_REORDER_TEAMS_RECIPIENT_EMAILS
+            )
+        finally:
+            db.close()
+    except Exception as exc:
+        logger.warning(
+            "Could not load admin-managed inventory reorder recipients; using environment recipients: %s",
+            exc,
+        )
+        return env_recipients
+
+    return list(
+        dict.fromkeys(
+            [
+                *env_recipients,
+                *_parse_recipient_emails(db_value),
+            ]
         )
     )
 
@@ -147,8 +199,15 @@ def compute_inventory_reorder_rows(
 
 
 class InventoryReorderService:
-    def __init__(self, settings: Any):
+    def __init__(
+        self,
+        settings: Any,
+        recipient_email_resolver: Optional[Callable[[Any], list[str]]] = None,
+    ):
         self._settings = settings
+        self._recipient_email_resolver = (
+            recipient_email_resolver or _load_effective_inventory_reorder_recipients
+        )
         self._lock = threading.Lock()
         self._jobs: dict[str, JobStatus] = {}
         self._latest_job_id: Optional[str] = None
@@ -932,7 +991,7 @@ class InventoryReorderService:
     ) -> None:
         if not getattr(self._settings, "inventory_reorder_teams_notifications_enabled", False):
             return
-        recipient_emails = _parse_recipient_emails(
+        recipient_emails = self._recipient_email_resolver(
             getattr(self._settings, "inventory_reorder_teams_recipient_email", "")
         )
         if not recipient_emails:

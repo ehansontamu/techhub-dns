@@ -14,6 +14,9 @@ import { extractApiErrorMessage } from "../utils/apiErrors";
 
 const AdminsTab = lazy(() => import("../components/admin/AdminsTab"));
 const AllowedUsersTab = lazy(() => import("../components/admin/AllowedUsersTab"));
+const InventoryReorderRecipientsTab = lazy(
+    () => import("../components/admin/InventoryReorderRecipientsTab")
+);
 
 type RuleKey =
     | "email_notifications_enabled"
@@ -271,6 +274,31 @@ export default function Admin() {
                                 }
                             >
                                 <AdminsTab />
+                            </Suspense>
+                        </SectionErrorBoundary>
+                    </CardContent>
+                </Card>
+
+                <Card className="border-border/70 bg-card/80 shadow-none">
+                    <CardHeader>
+                        <CardTitle className="text-base">Inventory reorder Teams recipients</CardTitle>
+                        <CardDescription>People who receive inventory reorder alerts.</CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                        <SectionErrorBoundary title="Inventory reorder recipients failed" message="Try reloading the panel.">
+                            <Suspense
+                                fallback={
+                                    <Card>
+                                        <CardContent className="p-6">
+                                            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                                                <Loader2 className="h-4 w-4 animate-spin" />
+                                                Loading...
+                                            </div>
+                                        </CardContent>
+                                    </Card>
+                                }
+                            >
+                                <InventoryReorderRecipientsTab />
                             </Suspense>
                         </SectionErrorBoundary>
                     </CardContent>

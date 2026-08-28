@@ -864,6 +864,7 @@ export default function CompatibilityEditor() {
             >
               {computerKeys.map((computerKey) => {
                 const computer = payload.computers[computerKey];
+                const bundleChange = bundleChangesByTarget.get(`computer:${computerKey}`);
                 return (
                   <MatrixItemRow
                     key={computerKey}
@@ -873,15 +874,19 @@ export default function CompatibilityEditor() {
                     hidden={Boolean(computer.hidden)}
                     version={(isAdmin ? approvedVersions : versions)?.computers[computerKey] ?? 0}
                     pending={Boolean(computer.studentEdited)}
-                    bundleChange={bundleChangesByTarget.get(`computer:${computerKey}`)}
-                    editable={isAdmin && !computer.studentEdited && !publishing}
+                    bundleChange={bundleChange}
+                    metadataEditable={!publishing && (
+                      (isAdmin && !computer.studentEdited)
+                      || (!isAdmin && Boolean(bundleChange))
+                    )}
+                    visibilityEditable={isAdmin && !computer.studentEdited && !publishing}
+                    removable={isAdmin && !computer.studentEdited && !publishing}
                     onSave={(value, expectedVersion) => saveComputer(computerKey, { ...computer, ...value }, expectedVersion)}
                     onRemove={() => void removeComputer(computerKey)}
                     onSubmitBundle={!isAdmin ? () => {
-                      const change = bundleChangesByTarget.get(`computer:${computerKey}`);
-                      if (change) void submitNewItemBundle(change.id);
+                      if (bundleChange) void submitNewItemBundle(bundleChange.id);
                     } : undefined}
-                    submittingBundle={submittingBundleId === bundleChangesByTarget.get(`computer:${computerKey}`)?.id}
+                    submittingBundle={submittingBundleId === bundleChange?.id}
                   />
                 );
               })}
@@ -907,7 +912,9 @@ export default function CompatibilityEditor() {
                     version={(isAdmin ? approvedVersions : versions)?.docks[dockKey] ?? 0}
                     pending={Boolean(dock.studentEdited)}
                     bundleChange={bundleChangesByTarget.get(`dock:${dockKey}`)}
-                    editable={isAdmin && !dock.studentEdited && !publishing}
+                    metadataEditable={isAdmin && !dock.studentEdited && !publishing}
+                    visibilityEditable={isAdmin && !dock.studentEdited && !publishing}
+                    removable={isAdmin && !dock.studentEdited && !publishing}
                     onSave={(value, expectedVersion) => saveDock(dockKey, { ...dock, ...value }, expectedVersion)}
                     onRemove={() => void removeDock(dockKey)}
                     onSubmitBundle={!isAdmin ? () => {
@@ -1424,7 +1431,9 @@ type MatrixItemRowProps = {
   version: number;
   pending: boolean;
   bundleChange?: CompatibilityEditorChange;
-  editable: boolean;
+  metadataEditable: boolean;
+  visibilityEditable: boolean;
+  removable: boolean;
   onSave: (
     value: { name: string; url: string; hidden: boolean },
     expectedVersion: number
@@ -1442,7 +1451,9 @@ function MatrixItemRow({
   version,
   pending,
   bundleChange,
-  editable,
+  metadataEditable,
+  visibilityEditable,
+  removable,
   onSave,
   onRemove,
   onSubmitBundle,
@@ -1496,7 +1507,7 @@ function MatrixItemRow({
         onFocus={beginEditing}
         onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))}
         onBlur={() => void saveDraft()}
-        disabled={rowSaving || !editable}
+        disabled={rowSaving || !metadataEditable}
         aria-label={`Name for ${sku}`}
       />
       <Input
@@ -1507,12 +1518,12 @@ function MatrixItemRow({
         onFocus={beginEditing}
         onChange={(event) => setDraft((current) => ({ ...current, url: event.target.value }))}
         onBlur={() => void saveDraft()}
-        disabled={rowSaving || !editable}
+        disabled={rowSaving || !metadataEditable}
         aria-label={`URL for ${sku}`}
       />
       <Checkbox
         checked={draft.hidden}
-        disabled={rowSaving || !editable}
+        disabled={rowSaving || !visibilityEditable}
         onChange={(event) => {
           const nextDraft = { ...draft, hidden: event.target.checked };
           beginEditing();
@@ -1521,7 +1532,7 @@ function MatrixItemRow({
         }}
         label="Hidden"
       />
-      <Button type="button" variant="destructive" size="icon" onClick={onRemove} disabled={rowSaving || !editable} aria-label={`Remove ${name || sku}`}>
+      <Button type="button" variant="destructive" size="icon" onClick={onRemove} disabled={rowSaving || !removable} aria-label={`Remove ${name || sku}`}>
         {rowSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
       </Button>
       {bundleChange?.bundle ? (

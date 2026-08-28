@@ -340,9 +340,10 @@ def submit_change(
     if not isinstance(mutation, dict):
         raise CompatibilityEditorError("'mutation' must be an object.")
     mutation_type = mutation.get("type")
-    if mutation_type not in {"cell.update", "computer.add", "dock.add"}:
+    if mutation_type not in {"cell.update", "computer.add", "computer.update", "dock.add"}:
         raise CompatibilityEditorError(
-            "Contributors may update compatibility cells or propose new computers and docks."
+            "Contributors may update compatibility cells, edit pending computers, "
+            "or propose new computers and docks."
         )
 
     state = (
@@ -382,6 +383,8 @@ def submit_change(
                 current_version=int(current.version),
             )
         proposed_data = _normalize_dock(mutation.get("dock"))
+    elif mutation_type == "computer.update":
+        proposed_data = _normalize_computer(mutation.get("computer"))
     else:
         assert secondary_key is not None
         bundle_parents = _bundle_parents_for_cell(db, primary_key, secondary_key)
@@ -401,7 +404,22 @@ def submit_change(
         base_version = int(approved.version) if approved is not None else 0
 
     expected_version = mutation.get("expectedVersion")
-    if existing is not None:
+    if mutation_type == "computer.update":
+        if existing is None or existing.mutation_type != "computer.add":
+            raise CompatibilityEditorError(
+                "Contributors may only edit a computer while its new-item proposal is pending."
+            )
+        _check_version(
+            target,
+            int(existing.proposal_version),
+            _require_expected_version(mutation),
+        )
+        existing.proposed_data = proposed_data
+        existing.proposal_version = int(existing.proposal_version) + 1
+        existing.updated_by = actor
+        existing.ready_for_review = False
+        change = existing
+    elif existing is not None:
         if mutation_type != existing.mutation_type:
             raise CompatibilityEditorConflict(
                 f"'{target}' already has a pending change.",
