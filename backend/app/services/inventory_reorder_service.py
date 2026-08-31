@@ -1033,7 +1033,11 @@ class InventoryReorderService:
                 continue
             products = order.get("products") or []
             total_quantity = sum(_to_int(product.get("quantity"), 0) for product in products)
-            if total_quantity < minimum_quantity or order_id in notified_order_ids:
+            highest_item_quantity = max(
+                (_to_int(product.get("quantity"), 0) for product in products),
+                default=0,
+            )
+            if highest_item_quantity < minimum_quantity or order_id in notified_order_ids:
                 continue
             item_lines = [
                 f"{_to_int(product.get('quantity'), 0)} x {str(product.get('name') or 'Item').strip()}"

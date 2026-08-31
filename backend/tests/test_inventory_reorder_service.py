@@ -359,6 +359,42 @@ def test_new_high_quantity_bigcommerce_orders_notify_once_after_baseline(tmp_pat
     assert notifications[0]["total_quantity"] == 10
 
 
+def test_new_bigcommerce_order_with_ten_total_units_across_items_does_not_notify(
+    tmp_path, monkeypatch
+):
+    service = InventoryReorderService(
+        SimpleNamespace(
+            storage_root=str(tmp_path),
+            inventory_reorder_teams_notifications_enabled=True,
+            inventory_reorder_teams_recipient_email="inventory@example.com",
+            inventory_reorder_teams_recipient_name="Inventory Team",
+            inventory_reorder_teams_minimum_order_quantity=10,
+        )
+    )
+    notifications = []
+
+    def fake_send(**kwargs):
+        notifications.append(kwargs)
+        return True
+
+    monkeypatch.setattr(service, "_send_bigcommerce_order_alert", fake_send)
+    existing_order = {"id": "100", "products": [{"name": "Existing", "quantity": 12}]}
+    mixed_quantity_order = {
+        "id": "101",
+        "products": [
+            {"name": "Product A", "quantity": 6},
+            {"name": "Product B", "quantity": 4},
+        ],
+    }
+
+    service._notify_new_high_quantity_bigcommerce_orders([existing_order])
+    service._notify_new_high_quantity_bigcommerce_orders(
+        [existing_order, mixed_quantity_order]
+    )
+
+    assert notifications == []
+
+
 def test_new_high_quantity_bigcommerce_orders_notify_each_configured_recipient(tmp_path, monkeypatch):
     service = InventoryReorderService(
         SimpleNamespace(
