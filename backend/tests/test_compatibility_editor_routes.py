@@ -148,3 +148,49 @@ def test_admin_pending_item_update_remains_a_proposal(monkeypatch):
 
     assert response.status_code == 200
     assert submitted == [(mutation, "admin@example.test", True)]
+
+
+def test_admin_add_starts_as_a_draft_proposal(monkeypatch):
+    app = Flask(__name__)
+    app.register_blueprint(system_routes.bp)
+
+    @app.before_request
+    def set_authenticated_user():
+        g.user_id = "admin-1"
+        g.user_email = "admin@example.test"
+
+    monkeypatch.setattr(system_routes, "is_current_user_admin", lambda: True)
+    monkeypatch.setattr(system_routes, "get_db_session", lambda: _FakeDb())
+    monkeypatch.setattr(
+        system_routes, "_emit_compatibility_editor_update", lambda _document: None
+    )
+
+    def fail_if_applied(*_args, **_kwargs):
+        raise AssertionError("Admin additions must not bypass the draft workflow.")
+
+    monkeypatch.setattr(
+        system_routes, "apply_compatibility_editor_mutation", fail_if_applied
+    )
+    submitted = []
+
+    def fake_submit(_db, payload, *, actor, preserve_ready_for_review=False):
+        submitted.append((payload, actor, preserve_ready_for_review))
+        return _document(), False
+
+    monkeypatch.setattr(
+        system_routes, "submit_compatibility_editor_change", fake_submit
+    )
+
+    mutation = {
+        "operationId": "admin-add-computer",
+        "mutation": {
+            "type": "computer.add",
+            "computerKey": "C2",
+            "computer": {"name": "Computer Two", "url": ""},
+        },
+    }
+    with app.test_client() as client:
+        response = client.patch("/api/system/compatibility-editor", json=mutation)
+
+    assert response.status_code == 200
+    assert submitted == [(mutation, "admin@example.test", False)]

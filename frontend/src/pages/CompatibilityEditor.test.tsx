@@ -590,4 +590,55 @@ describe("CompatibilityEditor", () => {
     await waitFor(() => expect(mockedApi.mutate).toHaveBeenCalledTimes(2));
     expect(screen.queryByRole("heading", { name: "New computer is complete" })).not.toBeInTheDocument();
   });
+
+  it("lets an admin approve a complete new-item draft without submitting it", async () => {
+    const completedDraft: CompatibilityEditorChange = {
+      ...readyComputerChange,
+      id: "admin-completed-draft",
+      readyForReview: false,
+      bundle: {
+        ...readyComputerChange.bundle!,
+        ready: false,
+      },
+    };
+    const completedDraftDocument: CompatibilityEditorDocument = {
+      ...document,
+      data: {
+        ...document.data,
+        computers: {
+          ...document.data.computers,
+          C2: {
+            name: "Admin Computer",
+            hidden: false,
+            studentEdited: true,
+            compatibilityData: {
+              D1: { compatibilityStatus: "Compatible", studentEdited: true },
+            },
+          },
+        },
+      },
+      versions: {
+        ...document.versions,
+        computers: { ...document.versions.computers, C2: 1 },
+        cells: { ...document.versions.cells, C2: { D1: 1 } },
+      },
+      approval: {
+        pendingCount: 0,
+        pendingChanges: [],
+        draftCount: 1,
+        draftBundles: [completedDraft],
+      },
+    };
+    mockedApi.getData.mockResolvedValueOnce(completedDraftDocument);
+
+    render(<CompatibilityEditor />);
+
+    fireEvent.click(await screen.findByRole("tab", { name: "Computers" }));
+    fireEvent.click(screen.getByRole("button", { name: "Approve item" }));
+
+    await waitFor(() => expect(mockedApi.review).toHaveBeenCalledWith(
+      "admin-completed-draft",
+      "approve"
+    ));
+  });
 });

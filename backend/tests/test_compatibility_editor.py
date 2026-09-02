@@ -350,6 +350,29 @@ def test_new_item_is_submitted_and_reviewed_as_a_complete_bundle(db):
     ready_change = admin_corrected["approval"]["pendingChanges"][0]
     assert ready_change["bundle"]["ready"] is True
 
+    admin_cell_corrected, _ = submit_change(
+        db,
+        {
+            "operationId": "admin-correct-pending-computer-cell",
+            "mutation": {
+                "type": "cell.update",
+                "computerKey": "C2",
+                "dockKey": "D1",
+                "expectedVersion": admin_corrected["versions"]["cells"]["C2"]["D1"],
+                "cell": {
+                    "compatibilityStatus": "Compatible",
+                    "notes": "Corrected by admin",
+                },
+            },
+        },
+        actor="admin@example.test",
+        preserve_ready_for_review=True,
+    )
+    assert admin_cell_corrected["approval"]["draftCount"] == 0
+    assert admin_cell_corrected["approval"]["pendingCount"] == 1
+    ready_change = admin_cell_corrected["approval"]["pendingChanges"][0]
+    assert ready_change["bundle"]["ready"] is True
+
     approved = review_change(
         db,
         ready_change["id"],
@@ -362,6 +385,10 @@ def test_new_item_is_submitted_and_reviewed_as_a_complete_bundle(db):
     assert published_data["computers"]["C2"]["name"] == "Admin Corrected Computer Two"
     assert published_data["computers"]["C2"]["url"] == "https://example.test/c2"
     assert "studentEdited" not in published_data["computers"]["C2"]
+    assert published_data["computers"]["C2"]["compatibilityData"]["D1"] == {
+        "compatibilityStatus": "Compatible",
+        "notes": "Corrected by admin",
+    }
     assert published_data["computers"]["C2"]["compatibilityData"]["D2"] == {
         "compatibilityStatus": "Incompatible",
         "notes": "Tested with D2",
@@ -439,6 +466,51 @@ def test_contributor_can_correct_pending_dock_metadata(db):
     }
     assert corrected_change["bundle"]["ready"] is False
     assert build_payload(db)["docks"].get("D3") is None
+
+
+def test_admin_can_approve_a_complete_new_item_draft_without_submission(db):
+    import_payload(db, _payload(), actor="seed")
+    submit_change(
+        db,
+        {
+            "operationId": "admin-draft-dock",
+            "mutation": {
+                "type": "dock.add",
+                "dockKey": "D3",
+                "dock": {"name": "Dock Three", "url": "https://example.test/d3"},
+            },
+        },
+        actor="admin@example.test",
+    )
+
+    completed, _ = submit_change(
+        db,
+        {
+            "operationId": "admin-draft-dock-cell",
+            "mutation": {
+                "type": "cell.update",
+                "computerKey": "C1",
+                "dockKey": "D3",
+                "expectedVersion": 0,
+                "cell": {"compatibilityStatus": "Compatible"},
+            },
+        },
+        actor="admin@example.test",
+    )
+    draft_change = completed["approval"]["draftBundles"][0]
+    assert draft_change["bundle"]["missingTargets"] == []
+    assert draft_change["bundle"]["ready"] is False
+
+    approved = review_change(
+        db,
+        draft_change["id"],
+        action="approve",
+        actor="admin@example.test",
+    )
+
+    assert approved["approval"]["draftCount"] == 0
+    assert approved["approval"]["pendingCount"] == 0
+    assert build_payload(db)["docks"]["D3"]["name"] == "Dock Three"
 
 
 def test_publisher_writes_only_explicit_snapshot_and_records_revision(db, monkeypatch):

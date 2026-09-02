@@ -263,6 +263,12 @@ export default function CompatibilityEditor() {
   );
   const reviewQueueCount = pendingChanges.length + draftBundles.length;
   const completionPrompt = completionPromptQueue[0] ?? null;
+  const completionActionPending = Boolean(
+    completionPrompt
+    && (isAdmin
+      ? reviewingId === completionPrompt.id
+      : submittingBundleId === completionPrompt.id)
+  );
   const activeCellBelongsToBundle = Boolean(
     activeCell
     && (
@@ -451,13 +457,13 @@ export default function CompatibilityEditor() {
           hidden: false,
           studentEdited: true,
           },
-        }, isAdmin ? "Computer added to approved data" : "Computer submitted for review");
+        }, "Computer draft created");
       } else {
         await performMutation({
           type: "dock.add",
           dockKey: sku,
           dock: { name, url, hidden: false, studentEdited: true },
-        }, isAdmin ? "Dock added to approved data" : "Dock submitted for review");
+        }, "Dock draft created");
       }
       setAddItemKind(null);
     } catch {
@@ -574,21 +580,19 @@ export default function CompatibilityEditor() {
       setCellForm(null);
       setInitialCellForm(null);
       setConflictMessage(null);
-      if (!isAdmin) {
-        const newlyCompletedBundles = document.approval.draftBundles.filter(
-          (change) => relatedBundleTargets.has(change.target)
-            && isBundleComplete(change)
-            && !completedBundleTargetsBeforeSave.has(change.target)
-        );
-        if (newlyCompletedBundles.length) {
-          setCompletionPromptQueue((current) => {
-            const queuedIds = new Set(current.map((change) => change.id));
-            return [
-              ...current,
-              ...newlyCompletedBundles.filter((change) => !queuedIds.has(change.id)),
-            ];
-          });
-        }
+      const newlyCompletedBundles = document.approval.draftBundles.filter(
+        (change) => relatedBundleTargets.has(change.target)
+          && isBundleComplete(change)
+          && !completedBundleTargetsBeforeSave.has(change.target)
+      );
+      if (newlyCompletedBundles.length) {
+        setCompletionPromptQueue((current) => {
+          const queuedIds = new Set(current.map((change) => change.id));
+          return [
+            ...current,
+            ...newlyCompletedBundles.filter((change) => !queuedIds.has(change.id)),
+          ];
+        });
       }
     } catch {
       // Keep the modal open so the user can compare/retry after a conflict.
@@ -649,11 +653,15 @@ export default function CompatibilityEditor() {
     setCompletionPromptQueue((current) => current.filter((change) => change.id !== completionPrompt.id));
   };
 
-  const submitCompletedBundle = async () => {
+  const completeBundleFromPrompt = async () => {
     if (!completionPrompt) {
       return;
     }
-    await submitNewItemBundle(completionPrompt.id);
+    if (isAdmin) {
+      await reviewPendingChange(completionPrompt, "approve");
+    } else {
+      await submitNewItemBundle(completionPrompt.id);
+    }
     dismissCompletionPrompt();
   };
 
@@ -883,10 +891,17 @@ export default function CompatibilityEditor() {
                     removable={isAdmin && !computer.studentEdited && !publishing}
                     onSave={(value, expectedVersion) => saveComputer(computerKey, { ...computer, ...value }, expectedVersion)}
                     onRemove={() => void removeComputer(computerKey)}
-                    onSubmitBundle={!isAdmin ? () => {
-                      if (bundleChange) void submitNewItemBundle(bundleChange.id);
+                    onCompleteBundle={bundleChange ? () => {
+                      if (isAdmin) {
+                        void reviewPendingChange(bundleChange, "approve");
+                      } else {
+                        void submitNewItemBundle(bundleChange.id);
+                      }
                     } : undefined}
-                    submittingBundle={submittingBundleId === bundleChange?.id}
+                    completeBundleLabel={isAdmin ? "Approve item" : "Submit item for review"}
+                    completingBundle={isAdmin
+                      ? reviewingId === bundleChange?.id
+                      : submittingBundleId === bundleChange?.id}
                   />
                 );
               })}
@@ -921,10 +936,17 @@ export default function CompatibilityEditor() {
                     removable={isAdmin && !dock.studentEdited && !publishing}
                     onSave={(value, expectedVersion) => saveDock(dockKey, { ...dock, ...value }, expectedVersion)}
                     onRemove={() => void removeDock(dockKey)}
-                    onSubmitBundle={!isAdmin ? () => {
-                      if (bundleChange) void submitNewItemBundle(bundleChange.id);
+                    onCompleteBundle={bundleChange ? () => {
+                      if (isAdmin) {
+                        void reviewPendingChange(bundleChange, "approve");
+                      } else {
+                        void submitNewItemBundle(bundleChange.id);
+                      }
                     } : undefined}
-                    submittingBundle={submittingBundleId === bundleChange?.id}
+                    completeBundleLabel={isAdmin ? "Approve item" : "Submit item for review"}
+                    completingBundle={isAdmin
+                      ? reviewingId === bundleChange?.id
+                      : submittingBundleId === bundleChange?.id}
                   />
                 );
               })}
@@ -953,18 +975,32 @@ export default function CompatibilityEditor() {
                               <span className="font-mono text-sm font-medium">{change.bundle?.itemKey}</span>
                             </div>
                             <p className="mt-1 text-xs text-muted-foreground">
-                              {change.bundle?.completedCells ?? 0} of {change.bundle?.requiredCells ?? 0} required cells completed. Waiting for the contributor to submit the bundle.
+                              {isBundleComplete(change)
+                                ? "All required cells are complete. You can approve this item directly."
+                                : `${change.bundle?.completedCells ?? 0} of ${change.bundle?.requiredCells ?? 0} required cells completed.`}
                             </p>
                           </div>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            onClick={() => void reviewPendingChange(change, "reject")}
-                            disabled={Boolean(reviewingId) || publishing}
-                          >
-                            {reviewingId === change.id ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <X className="mr-2 h-4 w-4" />}
-                            Reject draft
-                          </Button>
+                          <div className="flex gap-2">
+                            <Button
+                              type="button"
+                              variant="outline"
+                              onClick={() => void reviewPendingChange(change, "reject")}
+                              disabled={Boolean(reviewingId) || publishing}
+                            >
+                              {reviewingId === change.id ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <X className="mr-2 h-4 w-4" />}
+                              Reject draft
+                            </Button>
+                            {isBundleComplete(change) ? (
+                              <Button
+                                type="button"
+                                onClick={() => void reviewPendingChange(change, "approve")}
+                                disabled={Boolean(reviewingId) || publishing}
+                              >
+                                {reviewingId === change.id ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Check className="mr-2 h-4 w-4" />}
+                                Approve item
+                              </Button>
+                            ) : null}
+                          </div>
                         </div>
                         <ReviewChangeDetails change={change} />
                       </div>
@@ -1139,7 +1175,7 @@ export default function CompatibilityEditor() {
       </Dialog>
 
       <Dialog open={Boolean(completionPrompt)} onOpenChange={(open) => {
-        if (!open && !submittingBundleId) dismissCompletionPrompt();
+        if (!open && !completionActionPending) dismissCompletionPrompt();
       }}>
         <DialogContent>
           <DialogHeader>
@@ -1154,24 +1190,26 @@ export default function CompatibilityEditor() {
                 ? completionPrompt.proposedData.name
                 : completionPrompt?.bundle?.itemKey ?? "this item"}
             </span>{" "}
-            are saved. Would you like to submit the completed item for admin review now?
+            are saved. {isAdmin
+              ? "Would you like to approve this completed item now? This will update the approved database but will not publish to WebDAV."
+              : "Would you like to submit the completed item for admin review now?"}
           </p>
           <DialogFooter>
             <Button
               type="button"
               variant="outline"
               onClick={dismissCompletionPrompt}
-              disabled={Boolean(submittingBundleId)}
+              disabled={completionActionPending}
             >
               Not now
             </Button>
             <Button
               type="button"
-              onClick={() => void submitCompletedBundle()}
-              disabled={Boolean(submittingBundleId)}
+              onClick={() => void completeBundleFromPrompt()}
+              disabled={completionActionPending}
             >
-              {submittingBundleId ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Check className="mr-2 h-4 w-4" />}
-              Submit for Review
+              {completionActionPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Check className="mr-2 h-4 w-4" />}
+              {isAdmin ? "Approve Item" : "Submit for Review"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1442,8 +1480,9 @@ type MatrixItemRowProps = {
     expectedVersion: number
   ) => Promise<void>;
   onRemove: () => void;
-  onSubmitBundle?: () => void;
-  submittingBundle: boolean;
+  onCompleteBundle?: () => void;
+  completeBundleLabel: string;
+  completingBundle: boolean;
 };
 
 function MatrixItemRow({
@@ -1459,8 +1498,9 @@ function MatrixItemRow({
   removable,
   onSave,
   onRemove,
-  onSubmitBundle,
-  submittingBundle,
+  onCompleteBundle,
+  completeBundleLabel,
+  completingBundle,
 }: MatrixItemRowProps) {
   const [draft, setDraft] = useState({ name, url, hidden });
   const [rowSaving, setRowSaving] = useState(false);
@@ -1547,25 +1587,27 @@ function MatrixItemRow({
             <span className="ml-2 text-muted-foreground">
               {bundleChange.bundle.ready
                 ? "Submitted as one bundle for admin review."
-                : "Finish every cell before submitting this new item."}
+                : bundleChange.bundle.missingTargets.length === 0
+                  ? "All cells are complete and the item is ready for the next step."
+                  : "Finish every cell before completing this new item."}
             </span>
           </div>
           {bundleChange.bundle.ready ? (
             <Badge variant="success">Ready for review</Badge>
-          ) : onSubmitBundle ? (
+          ) : onCompleteBundle ? (
             <Button
               type="button"
               size="sm"
-              onClick={onSubmitBundle}
-              disabled={submittingBundle || bundleChange.bundle.missingTargets.length > 0}
+              onClick={onCompleteBundle}
+              disabled={completingBundle || bundleChange.bundle.missingTargets.length > 0}
             >
-              {submittingBundle ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Check className="mr-2 h-4 w-4" />}
+              {completingBundle ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Check className="mr-2 h-4 w-4" />}
               {bundleChange.bundle.missingTargets.length > 0
                 ? `Complete ${bundleChange.bundle.missingTargets.length} more`
-                : "Submit item for review"}
+                : completeBundleLabel}
             </Button>
           ) : (
-            <Badge variant="secondary">Student draft</Badge>
+            <Badge variant="secondary">Draft</Badge>
           )}
         </div>
       ) : null}

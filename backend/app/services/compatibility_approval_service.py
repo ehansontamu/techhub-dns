@@ -476,7 +476,8 @@ def submit_change(
         db.add(change)
 
     for parent in bundle_parents:
-        parent.ready_for_review = False
+        if not preserve_ready_for_review:
+            parent.ready_for_review = False
         parent.updated_by = actor
 
     state.review_revision = int(state.review_revision or 0) + 1
@@ -676,13 +677,12 @@ def review_change(
     if action == "approve" and bundle is not None:
         if bundle["missingTargets"]:
             raise CompatibilityEditorError(
-                "This new-item bundle is incomplete. The contributor must finish all "
-                "required cells and submit it again."
+                "This new-item bundle is incomplete. Finish all required cells before "
+                "approving it."
             )
-        if not change.ready_for_review:
-            raise CompatibilityEditorError(
-                "This new-item bundle has not been submitted for review yet."
-            )
+        # The admin-only review endpoint may finalize a complete draft directly.
+        # Contributor submissions still control when an item enters the normal
+        # review queue, but an admin does not need to submit work to themselves.
 
     try:
         if action == "reject":

@@ -1764,8 +1764,16 @@ def mutate_compatibility_editor_data():
     db = get_db_session()
     actor = get_current_user_email()
     is_admin = is_current_user_admin()
+    mutation = payload.get("mutation") if isinstance(payload, dict) else None
+    mutation_type = mutation.get("type") if isinstance(mutation, dict) else None
     try:
-        if is_admin:
+        if is_admin and mutation_type in {"computer.add", "dock.add"}:
+            document, duplicate = submit_compatibility_editor_change(
+                db,
+                payload,
+                actor=actor,
+            )
+        elif is_admin:
             try:
                 _approved_document, duplicate = apply_compatibility_editor_mutation(
                     db,
@@ -1773,7 +1781,6 @@ def mutate_compatibility_editor_data():
                     actor=actor,
                 )
             except CompatibilityEditorConflict as exc:
-                mutation = payload.get("mutation") if isinstance(payload, dict) else None
                 if (
                     isinstance(mutation, dict)
                     and mutation.get("type")
@@ -1784,8 +1791,7 @@ def mutate_compatibility_editor_data():
                         db,
                         payload,
                         actor=actor,
-                        preserve_ready_for_review=mutation.get("type")
-                        in {"computer.update", "dock.update"},
+                        preserve_ready_for_review=True,
                     )
                 else:
                     raise
