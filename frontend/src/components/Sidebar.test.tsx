@@ -57,9 +57,20 @@ describe("Sidebar", () => {
         expect(screen.queryByLabelText("Open sidebar")).not.toBeInTheDocument();
         expect(screen.getByLabelText("Collapse sidebar")).toBeInTheDocument();
         expect(screen.queryByLabelText("Close sidebar overlay")).not.toBeInTheDocument();
+        expect(screen.queryByRole("link", { name: "Compatibility Editor" })).not.toBeInTheDocument();
         await waitFor(() => {
             expect(container.querySelector("aside")).toHaveStyle({ transform: "none", width: "256px" });
         });
+    });
+
+    it("supports offsetting the mobile launcher below a fixed banner", () => {
+        render(
+            <MemoryRouter>
+                <Sidebar mobileLauncherClassName="top-9" />
+            </MemoryRouter>
+        );
+
+        expect(screen.getAllByLabelText("Open sidebar")[0]).toHaveClass("top-9");
     });
 
     it.each([

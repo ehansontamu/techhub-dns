@@ -29,13 +29,37 @@ from app.database import get_db_session
 from app.models.system_setting import SystemSetting
 from app.models.order import Order
 from app.models.inflow_webhook import InflowWebhook, WebhookStatus
-from app.api.auth_middleware import get_current_user_email, require_admin, require_auth
+from app.api.auth_middleware import (
+    get_current_user_email,
+    is_current_user_admin,
+    require_admin,
+    require_auth,
+)
 from app.utils.timezone import to_utc_iso_z
 from app.services.audit_service import AuditService
 from app.services.print_job_service import (
     PrintJobService,
     emit_orders_update,
     emit_print_job_available,
+)
+from app.services.compatibility_editor_service import (
+    CompatibilityEditorConflict,
+    CompatibilityEditorError,
+    CompatibilityEditorNotInitialized,
+    import_bundled_seed_if_empty,
+)
+from app.services.compatibility_approval_service import (
+    apply_admin_mutation as apply_compatibility_admin_mutation,
+    get_workspace_document as get_compatibility_editor_workspace,
+    review_change as review_compatibility_change_request,
+    submit_bundle as submit_compatibility_editor_bundle,
+    submit_change as submit_compatibility_editor_change,
+)
+from app.services.compatibility_publisher_service import (
+    COMPATIBILITY_SUPERAPP_FILENAME,
+    is_publish_configured as is_compatibility_publish_configured,
+    publish_requested as publish_requested_compatibility_document,
+    request_publication as request_compatibility_publication,
 )
 import logging
 
@@ -51,6 +75,7 @@ from app.services.system_setting_service import (
     SETTING_TEAMS_RECIPIENT_ENABLED,
     SETTING_ADMIN_EMAILS,
     SETTING_ALLOWED_USER_EMAILS,
+    SETTING_INVENTORY_REORDER_TEAMS_RECIPIENT_EMAILS,
     SETTING_REQUIRE_DIFFERENT_USER_FOR_PICK_AND_QA,
     SETTING_PICKLIST_PRINT_CLAIM_TIMEOUT_SECONDS,
 )
@@ -909,6 +934,17 @@ def _get_db_allowed_user_allowlist() -> list[str]:
         db.close()
 
 
+def _get_db_inventory_reorder_recipients() -> list[str]:
+    db = get_db_session()
+    try:
+        raw = SystemSettingService.get_setting(
+            db, SETTING_INVENTORY_REORDER_TEAMS_RECIPIENT_EMAILS
+        )
+        return _parse_allowlist_string(raw)
+    finally:
+        db.close()
+
+
 def _is_env_admin_override_active() -> bool:
     return bool(settings.get_admin_emails())
 
@@ -990,6 +1026,15 @@ def update_system_setting(key: str):
     if key == SETTING_ALLOWED_USER_EMAILS:
         return jsonify(
             {"error": "Allowed-user list must be updated via /api/system/allowed-users"}
+        ), 400
+    if key == SETTING_INVENTORY_REORDER_TEAMS_RECIPIENT_EMAILS:
+        return jsonify(
+            {
+                "error": (
+                    "Inventory reorder recipients must be updated via "
+                    "/api/system/inventory-reorder-recipients"
+                )
+            }
         ), 400
 
     data = request.get_json()
@@ -1292,6 +1337,148 @@ def update_allowed_users():
         db.close()
 
 
+# ============ Inventory Reorder Recipient Endpoints ============
+
+
+@bp.route("/inventory-reorder-recipients", methods=["GET"])
+@require_admin
+def get_inventory_reorder_recipients():
+    """Get effective inventory reorder recipients and their configuration sources."""
+    env_recipients = _parse_allowlist_string(
+        settings.inventory_reorder_teams_recipient_email
+    )
+    db_recipients = [
+        email
+        for email in _get_db_inventory_reorder_recipients()
+        if email not in env_recipients
+    ]
+    merged = sorted(set(env_recipients) | set(db_recipients))
+
+    if env_recipients and db_recipients:
+        source = "mixed"
+    elif env_recipients:
+        source = "env"
+    elif db_recipients:
+        source = "db"
+    else:
+        source = "default"
+
+    return jsonify(
+        {
+            "recipients": merged,
+            "source": source,
+            "env_recipients": env_recipients,
+            "db_recipients": db_recipients,
+        }
+    )
+
+
+@bp.route("/inventory-reorder-recipients", methods=["PUT"])
+@require_admin
+def update_inventory_reorder_recipients():
+    """Update DB recipients while preserving recipients configured in the environment."""
+    data = request.get_json(silent=True) or {}
+    recipients_payload = data.get("recipients")
+    if not isinstance(recipients_payload, list):
+        return jsonify({"error": "Missing 'recipients' list in request body"}), 400
+
+    raw_emails: list[str] = []
+    for item in recipients_payload:
+        if not isinstance(item, str):
+            return jsonify({"error": "Each recipient email must be a string"}), 400
+        raw_emails.append(item)
+
+    normalized = _normalize_admin_emails(raw_emails)
+    invalid = [email for email in normalized if not EMAIL_RE.match(email)]
+    if invalid:
+        return (
+            jsonify(
+                {
+                    "error": "One or more recipient emails are invalid.",
+                    "invalid": invalid,
+                }
+            ),
+            400,
+        )
+
+    env_recipients = _parse_allowlist_string(
+        settings.inventory_reorder_teams_recipient_email
+    )
+    normalized = [email for email in normalized if email not in env_recipients]
+
+    caller_email = _get_request_user_email_normalized()
+    updated_by = caller_email or get_current_user_email()
+
+    db = get_db_session()
+    try:
+        setting = (
+            db.query(SystemSetting)
+            .filter(
+                SystemSetting.key
+                == SETTING_INVENTORY_REORDER_TEAMS_RECIPIENT_EMAILS
+            )
+            .first()
+        )
+        old_raw = setting.value if setting else None
+        old_list = _parse_allowlist_string(old_raw)
+        new_raw = json.dumps(normalized)
+
+        if not setting:
+            setting = SystemSetting(
+                key=SETTING_INVENTORY_REORDER_TEAMS_RECIPIENT_EMAILS,
+                value=new_raw,
+                description=DEFAULT_SETTINGS[
+                    SETTING_INVENTORY_REORDER_TEAMS_RECIPIENT_EMAILS
+                ]["description"],
+                updated_by=updated_by,
+            )
+            db.add(setting)
+        else:
+            setting.value = new_raw
+            setting.updated_by = updated_by
+
+        AuditService(db).log_system_action(
+            action="inventory_reorder_recipients.update",
+            entity_id="inventory_reorder_recipients",
+            user_id=updated_by,
+            old_value={"recipients": old_list},
+            new_value={"recipients": normalized},
+            description=(
+                "Updated inventory reorder Teams recipients "
+                f"({len(old_list)} -> {len(normalized)})"
+            ),
+            ip_address=request.remote_addr,
+            user_agent=request.headers.get("User-Agent"),
+        )
+
+        db.commit()
+
+        merged = sorted(set(env_recipients) | set(normalized))
+        if env_recipients and normalized:
+            source = "mixed"
+        elif env_recipients:
+            source = "env"
+        elif normalized:
+            source = "db"
+        else:
+            source = "default"
+
+        return jsonify(
+            {
+                "recipients": merged,
+                "db_recipients": normalized,
+                "env_recipients": env_recipients,
+                "source": source,
+                "updated_by": updated_by,
+            }
+        )
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
 @bp.route("/print-jobs", methods=["GET"])
 @require_admin
 def list_print_jobs():
@@ -1527,90 +1714,245 @@ def save_vetting_editor_data():
     return jsonify({"success": True})
 
 
-@bp.route("/compatibility-editor-staging", methods=["GET"])
-@require_auth
-def get_compatibility_editor_staging_data():
-    download_url = (settings.compatibility_editor_staging_download_url or "").strip()
-    upload_url = (settings.compatibility_editor_staging_upload_url or "").strip()
-    if not download_url and not upload_url:
-        return jsonify(
-            {
-                "error": (
-                    "Compatibility editor staging is not configured "
-                    "(missing COMPATIBILITY_EDITOR_STAGING_DOWNLOAD_URL)."
-                )
-            }
-        ), 500
-
+def _emit_compatibility_editor_update(document: dict[str, Any]) -> None:
     try:
-        username, password = _get_compatibility_editor_staging_auth()
-    except RuntimeError as exc:
-        return jsonify({"error": str(exc)}), 500
+        from app.main import socketio
 
-    candidate_urls: list[str] = []
-    for candidate in (download_url, upload_url):
-        if candidate and candidate not in candidate_urls:
-            candidate_urls.append(candidate)
-
-    payload: Optional[dict[str, Any]] = None
-    for url in candidate_urls:
-        payload = _try_download_compatibility_editor_staging_json(
-            url, username, password
+        socketio.emit(
+            "compatibility_editor_updated",
+            {
+                "revision": document["revision"],
+                "workspaceRevision": document.get("workspaceRevision", 0),
+            },
+            room="compatibility-editor",
         )
-        if payload is not None:
-            break
-
-    if payload is None:
-        return jsonify(
-            {"error": "Failed to fetch compatibility editor staging JSON from WebDAV."}
-        ), 502
-
-    try:
-        normalized = _validate_compatibility_editor_staging_payload(payload)
-    except ValueError as exc:
-        return jsonify(
-            {"error": f"Remote compatibility editor staging JSON is invalid: {exc}"}
-        ), 502
-
-    return jsonify(normalized)
+    except Exception:
+        logger.exception("Failed to broadcast compatibility editor update")
 
 
-@bp.route("/compatibility-editor-staging", methods=["PUT"])
+@bp.route("/compatibility-editor", methods=["GET"])
 @require_auth
-def save_compatibility_editor_staging_data():
-    upload_url = (settings.compatibility_editor_staging_upload_url or "").strip()
-    if not upload_url:
-        return jsonify(
-            {
-                "error": (
-                    "Compatibility editor staging is not configured "
-                    "(missing COMPATIBILITY_EDITOR_STAGING_UPLOAD_URL)."
-                )
-            }
-        ), 500
+def get_compatibility_editor_data():
+    db = get_db_session()
+    try:
+        document = get_compatibility_editor_workspace(db)
+    except CompatibilityEditorNotInitialized as exc:
+        try:
+            import_bundled_seed_if_empty(db, actor=get_current_user_email())
+            document = get_compatibility_editor_workspace(db)
+        except (OSError, ValueError) as seed_exc:
+            logger.exception("Failed to initialize compatibility editor seed")
+            return jsonify(
+                {"error": f"Failed to initialize compatibility editor: {seed_exc}"}
+            ), 503
+    finally:
+        db.close()
 
+    document["publication"]["filename"] = COMPATIBILITY_SUPERAPP_FILENAME
+    document["publication"]["configured"] = is_compatibility_publish_configured()
+    return jsonify(document)
+
+
+@bp.route("/compatibility-editor", methods=["PATCH"])
+@require_auth
+def mutate_compatibility_editor_data():
     payload = request.get_json(silent=True)
     if payload is None:
         return jsonify({"error": "Missing JSON request body."}), 400
 
+    db = get_db_session()
+    actor = get_current_user_email()
+    is_admin = is_current_user_admin()
+    mutation = payload.get("mutation") if isinstance(payload, dict) else None
+    mutation_type = mutation.get("type") if isinstance(mutation, dict) else None
     try:
-        normalized = _validate_compatibility_editor_staging_payload(payload)
-    except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
-
-    try:
-        username, password = _get_compatibility_editor_staging_auth()
-    except RuntimeError as exc:
-        return jsonify({"error": str(exc)}), 500
-
-    if not _upload_compatibility_editor_staging_json(
-        upload_url, normalized, username, password
-    ):
+        if is_admin and mutation_type in {"computer.add", "dock.add"}:
+            document, duplicate = submit_compatibility_editor_change(
+                db,
+                payload,
+                actor=actor,
+            )
+        elif is_admin:
+            try:
+                document, duplicate = apply_compatibility_admin_mutation(
+                    db,
+                    payload,
+                    actor=actor,
+                )
+            except CompatibilityEditorConflict as exc:
+                if (
+                    isinstance(mutation, dict)
+                    and mutation.get("type")
+                    in {"cell.update", "computer.update", "dock.update"}
+                    and exc.current_version is None
+                ):
+                    document, duplicate = submit_compatibility_editor_change(
+                        db,
+                        payload,
+                        actor=actor,
+                        preserve_ready_for_review=True,
+                    )
+                else:
+                    raise
+        else:
+            document, duplicate = submit_compatibility_editor_change(
+                db,
+                payload,
+                actor=actor,
+            )
+    except CompatibilityEditorConflict as exc:
+        try:
+            current_document = get_compatibility_editor_workspace(db)
+            current_document["publication"]["filename"] = (
+                COMPATIBILITY_SUPERAPP_FILENAME
+            )
+            current_document["publication"]["configured"] = (
+                is_compatibility_publish_configured()
+            )
+        except CompatibilityEditorNotInitialized:
+            current_document = None
         return jsonify(
-            {"error": "Failed to upload compatibility editor staging JSON to WebDAV."}
-        ), 502
+            {
+                "error": str(exc),
+                "conflict": {
+                    "target": exc.target,
+                    "currentVersion": exc.current_version,
+                },
+                "document": current_document,
+            }
+        ), 409
+    except CompatibilityEditorNotInitialized as exc:
+        return jsonify({"error": str(exc)}), 503
+    except CompatibilityEditorError as exc:
+        return jsonify({"error": str(exc)}), 400
+    finally:
+        db.close()
 
-    return jsonify({"success": True})
+    if not duplicate:
+        _emit_compatibility_editor_update(document)
+    document["duplicate"] = duplicate
+    document["publication"]["filename"] = COMPATIBILITY_SUPERAPP_FILENAME
+    document["publication"]["configured"] = is_compatibility_publish_configured()
+    return jsonify(document)
+
+
+@bp.route("/compatibility-editor/changes/<change_id>/review", methods=["POST"])
+@require_admin
+def review_compatibility_editor_change(change_id: str):
+    payload = request.get_json(silent=True) or {}
+    action = payload.get("action")
+    note = payload.get("note")
+    if note is not None and not isinstance(note, str):
+        return jsonify({"error": "'note' must be a string."}), 400
+
+    db = get_db_session()
+    try:
+        document = review_compatibility_change_request(
+            db,
+            change_id,
+            action=action,
+            actor=get_current_user_email(),
+            note=note,
+        )
+    except CompatibilityEditorConflict as exc:
+        return jsonify(
+            {
+                "error": str(exc),
+                "conflict": {
+                    "target": exc.target,
+                    "currentVersion": exc.current_version,
+                },
+            }
+        ), 409
+    except CompatibilityEditorNotInitialized as exc:
+        return jsonify({"error": str(exc)}), 503
+    except CompatibilityEditorError as exc:
+        return jsonify({"error": str(exc)}), 400
+    finally:
+        db.close()
+
+    _emit_compatibility_editor_update(document)
+    document["publication"]["filename"] = COMPATIBILITY_SUPERAPP_FILENAME
+    document["publication"]["configured"] = is_compatibility_publish_configured()
+    return jsonify(document)
+
+
+@bp.route("/compatibility-editor/changes/<change_id>/submit", methods=["POST"])
+@require_auth
+def submit_compatibility_editor_bundle_for_review(change_id: str):
+    db = get_db_session()
+    try:
+        document = submit_compatibility_editor_bundle(
+            db,
+            change_id,
+            actor=get_current_user_email(),
+        )
+    except CompatibilityEditorConflict as exc:
+        return jsonify(
+            {
+                "error": str(exc),
+                "conflict": {
+                    "target": exc.target,
+                    "currentVersion": exc.current_version,
+                },
+            }
+        ), 409
+    except CompatibilityEditorNotInitialized as exc:
+        return jsonify({"error": str(exc)}), 503
+    except CompatibilityEditorError as exc:
+        return jsonify({"error": str(exc)}), 400
+    finally:
+        db.close()
+
+    _emit_compatibility_editor_update(document)
+    document["publication"]["filename"] = COMPATIBILITY_SUPERAPP_FILENAME
+    document["publication"]["configured"] = (
+        is_compatibility_publish_configured()
+    )
+    return jsonify(document)
+
+
+@bp.route("/compatibility-editor/publish", methods=["POST"])
+@require_admin
+def publish_compatibility_editor_data():
+    db = get_db_session()
+    try:
+        snapshot = request_compatibility_publication(
+            db, actor=get_current_user_email()
+        )
+        snapshot_id = snapshot.id
+    except Exception as exc:
+        logger.exception("Failed to prepare compatibility publication snapshot")
+        return jsonify({"error": str(exc)}), 500
+    finally:
+        db.close()
+
+    result = publish_requested_compatibility_document(snapshot_id=snapshot_id)
+    status = 200 if result.success else 502
+    return jsonify(
+        {
+            "attempted": result.attempted,
+            "success": result.success,
+            "revision": result.revision,
+            "pending": result.pending,
+            "error": result.error,
+            "filename": COMPATIBILITY_SUPERAPP_FILENAME,
+            "snapshotId": result.snapshot_id,
+        }
+    ), status
+
+
+@bp.route("/compatibility-editor-staging", methods=["GET", "PUT"])
+@require_admin
+def compatibility_editor_staging_retired():
+    return jsonify(
+        {
+            "error": (
+                "The legacy compatibility staging endpoint is retired. "
+                "Use /api/system/compatibility-editor."
+            )
+        }
+    ), 410
 
 
 # ============ Inventory Reorder Tool Endpoints ============
@@ -1784,6 +2126,42 @@ def test_teams_recipient():
 
     except Exception as e:
         logger.error(f"Teams recipient test failed: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@bp.route("/test/teams-inventory-reorder", methods=["POST"])
+@require_admin
+def test_inventory_reorder_teams_notification():
+    """Queue the same Teams alert sent for a new 10+ BC order."""
+    from app.services.teams_recipient_service import teams_recipient_service
+
+    data = request.get_json() or {}
+    recipient_email = data.get("recipient_email")
+    recipient_name = data.get("recipient_name", "Test User")
+
+    if not recipient_email:
+        return jsonify({"error": "Missing 'recipient_email' in request body"}), 400
+
+    try:
+        success = teams_recipient_service.send_inventory_reorder_notification(
+            recipient_email=recipient_email,
+            recipient_name=recipient_name,
+            bigcommerce_order_id="TEST-10PLUS",
+            order_items=["6 x Test Product A", "4 x Test Product B"],
+            total_quantity=10,
+        )
+        if success:
+            return jsonify(
+                {
+                    "success": True,
+                    "message": f"10+ BC order test alert queued for {recipient_email}",
+                }
+            )
+        return jsonify(
+            {"success": False, "error": "Failed to queue 10+ BC order test alert. Check server logs."}
+        ), 500
+    except Exception as e:
+        logger.error("Inventory reorder Teams test failed: %s", e)
         return jsonify({"success": False, "error": str(e)}), 500
 
 

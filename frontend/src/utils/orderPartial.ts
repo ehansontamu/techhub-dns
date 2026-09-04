@@ -9,6 +9,7 @@ type PartialOrderSource = Pick<
   | "remainder_inflow_order_id"
   | "parent_order_id"
   | "parent_inflow_order_id"
+  | "inflow_order_id"
   | "tagged_at"
   | "picklist_generated_at"
 > & {
@@ -257,6 +258,23 @@ export const getPartialOrderInfo = (order: PartialOrderSource): PartialOrderInfo
   };
 };
 
+/**
+ * Returns the operator-facing name for a partial-order record. The persisted
+ * order number remains unchanged; its -P suffix only determines the part
+ * number shown in the UI.
+ */
+export const getPartialLegLabel = (order: PartialOrderSource): string | null => {
+  const partialInfo = getPartialOrderInfo(order);
+
+  if (partialInfo.isPartialLeg) {
+    const match = String(order.inflow_order_id ?? "").trim().match(/-P(\d+)?$/i);
+    const partNumber = match?.[1] ? Number(match[1]) : 1;
+    return `Part ${Number.isFinite(partNumber) && partNumber > 0 ? partNumber : 1} leg`;
+  }
+
+  return partialInfo.hasRemainder ? "Final leg" : null;
+};
+
 export const getOrderProductTableView = (order: PartialOrderSource): OrderProductTableView => {
   const partialInfo = getPartialOrderInfo(order);
   const inflowData = order.inflow_data && typeof order.inflow_data === "object" ? (order.inflow_data as Record<string, unknown>) : {};
@@ -265,21 +283,22 @@ export const getOrderProductTableView = (order: PartialOrderSource): OrderProduc
   if (partialInfo.isPartialLeg) {
     const pickLines = Array.isArray(inflowData.pickLines) ? inflowData.pickLines : [];
     const childRows = pickLines.length > 0 ? buildOrderProductRows(pickLines) : buildOrderProductRows(lines);
+    const legLabel = getPartialLegLabel(order) ?? "Part 1 leg";
 
     return {
-      title: "Picked leg items",
-      description: "Items included in this picked leg only.",
+      title: `${legLabel} items`,
+      description: "Items included in this part only.",
       rows: childRows,
-      emptyState: "No items found on this picked leg.",
+      emptyState: "No items found on this part.",
     };
   }
 
   if (partialInfo.hasRemainder) {
     return {
-      title: "Remainder leg items",
-      description: "Items still left on the remainder leg after the split.",
+      title: "Final leg items",
+      description: "Items still left on the final leg after the split.",
       rows: buildOrderProductRows(lines),
-      emptyState: "No items remain on the remainder leg.",
+      emptyState: "No items remain on the final leg.",
     };
   }
 

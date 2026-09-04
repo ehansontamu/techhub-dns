@@ -18,6 +18,9 @@ SETTING_DOCUMENT_SIGNING_ENABLED = "document_signing_enabled"
 # Admin allowlist
 SETTING_ADMIN_EMAILS = "admin_emails"
 SETTING_ALLOWED_USER_EMAILS = "allowed_user_emails"
+SETTING_INVENTORY_REORDER_TEAMS_RECIPIENT_EMAILS = (
+    "inventory_reorder_teams_recipient_emails"
+)
 
 # Picklist / tagging workflow controls
 SETTING_PICKLIST_AUTO_PRINT_ENABLED = "picklist_auto_print_enabled"
@@ -38,7 +41,10 @@ DEFAULT_SETTINGS = {
     SETTING_TEAMS_RECIPIENT_ENABLED: {
         "value": "false",
         "type": SETTING_TYPE_BOOLEAN,
-        "description": "Enable sending delivery notifications to recipients via Teams",
+        "description": (
+            "Enable automatic Teams notifications to delivery recipients when orders move "
+            "to In Delivery."
+        ),
     },
     SETTING_DOCUMENT_SIGNING_ENABLED: {
         "value": "true",
@@ -54,6 +60,13 @@ DEFAULT_SETTINGS = {
         "value": "[]",
         "type": SETTING_TYPE_JSON,
         "description": "Operator app-access email allowlist (JSON array string preferred; CSV accepted)",
+    },
+    SETTING_INVENTORY_REORDER_TEAMS_RECIPIENT_EMAILS: {
+        "value": "[]",
+        "type": SETTING_TYPE_JSON,
+        "description": (
+            "Additional inventory reorder Teams recipient emails managed in the admin UI"
+        ),
     },
     SETTING_PICKLIST_AUTO_PRINT_ENABLED: {
         "value": "false",

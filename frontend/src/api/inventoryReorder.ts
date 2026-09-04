@@ -47,13 +47,25 @@ export interface InventoryReorderRow {
   reorderQty: number;
   needsReorder: boolean;
   critical: boolean;
+  orders?: {
+    bigCommerce: InventoryReorderOrderDetail[];
+    inflow: InventoryReorderOrderDetail[];
+  };
   [key: string]: unknown;
+}
+
+export interface InventoryReorderOrderDetail {
+  orderId: string;
+  orderNumber: string;
+  quantity: number;
+  status: string;
 }
 
 export interface InventoryReorderSummary {
   total: number;
   needs_reorder: number;
   critical: number;
+  ten_plus_bc_order_items: number;
 }
 
 export interface InventoryReorderResponse {

@@ -58,6 +58,8 @@ class TeamsRecipientService:
         order_items: List[str] = None,
         order_numbers: List[str] = None,
         notification_group_key: str = None,
+        notification_type: str = "delivery_notification",
+        notification_message: Optional[str] = None,
         force: bool = False,
     ) -> bool:
         """
@@ -103,7 +105,7 @@ class TeamsRecipientService:
         # Extra fields are ignored by the flow today but preserve aggregation context.
         payload = {
             "id": f"notif_{safe_reference}_{int(datetime.now().timestamp())}",
-            "type": "delivery_notification",
+            "type": notification_type,
             "recipientEmail": recipient_email,
             "recipientName": recipient_name,
             "orderNumber": display_order_number,
@@ -113,6 +115,8 @@ class TeamsRecipientService:
             "deliveryRunner": delivery_runner,
             "createdAt": to_utc_iso_z(datetime.utcnow()),
         }
+        if notification_message:
+            payload["message"] = notification_message
         if notification_group_key:
             payload["notificationGroupKey"] = notification_group_key
 
@@ -143,6 +147,45 @@ class TeamsRecipientService:
                 f"Error queuing Teams notification for {display_order_number or primary_order_number}: {e}"
             )
             return False
+
+    def send_inventory_reorder_notification(
+        self,
+        recipient_email: str,
+        recipient_name: str,
+        bigcommerce_order_id: str,
+        order_items: List[str],
+        total_quantity: int,
+    ) -> bool:
+        """Queue a Teams alert for a newly detected high-quantity BC order.
+
+        The payload is explicitly labeled for Power Automate so it can use a
+        bulk-order message template instead of the delivery template.
+        """
+        reference = f"BC-{bigcommerce_order_id}"
+        payload_items = [
+            f"{total_quantity} total units",
+            *order_items,
+        ]
+        recipient_reference = self._sanitize_reference(recipient_email)
+        return self.send_delivery_notification(
+            recipient_email=recipient_email,
+            recipient_name=recipient_name,
+            order_number=reference,
+            delivery_runner="Inventory Reorder Alert",
+            order_items=payload_items,
+            # Each recipient needs a distinct queue filename. The delivery sender
+            # derives that filename from this group key, and these alerts can be
+            # queued within the same second.
+            notification_group_key=(
+                f"inventory-reorder-{bigcommerce_order_id}-{recipient_reference}"
+            ),
+            notification_type="inventory_reorder_notification",
+            notification_message=(
+                "Bulk BigCommerce Order Alert\n\n"
+                f"BigCommerce order {reference} is a bulk order with {total_quantity} items."
+            ),
+            force=True,
+        )
 
     @staticmethod
     def _sort_orders_for_notification(orders: List) -> List:

@@ -14,6 +14,9 @@ import { extractApiErrorMessage } from "../utils/apiErrors";
 
 const AdminsTab = lazy(() => import("../components/admin/AdminsTab"));
 const AllowedUsersTab = lazy(() => import("../components/admin/AllowedUsersTab"));
+const InventoryReorderRecipientsTab = lazy(
+    () => import("../components/admin/InventoryReorderRecipientsTab")
+);
 
 type RuleKey =
     | "email_notifications_enabled"
@@ -43,7 +46,7 @@ const adminQueryKeys = {
 const RULES: RuleMeta[] = [
     { key: "document_signing_enabled", title: "Document signing", description: "Require signing to complete delivery.", kind: "boolean" },
     { key: "email_notifications_enabled", title: "Email notifications", description: "Send email on workflow events.", kind: "boolean" },
-    { key: "teams_recipient_notifications_enabled", title: "Teams notifications", description: "Send Teams messages to recipients.", kind: "boolean" },
+    { key: "teams_recipient_notifications_enabled", title: "Delivery recipient Teams notifications", description: "Controls automatic Teams messages to delivery recipients when orders move to In Delivery.", kind: "boolean" },
     { key: "picklist_auto_print_enabled", title: "Picklist auto-print", description: "Push generated picklists to the print queue.", kind: "boolean" },
     { key: "require_asset_tags_before_picklist", title: "Asset tags before picklist", description: "Gate picklist generation on completed tagging.", kind: "boolean" },
     { key: "require_same_user_for_tagging_and_picklist", title: "Same user tag + picklist", description: "Require the same operator for both steps.", kind: "boolean" },
@@ -271,6 +274,31 @@ export default function Admin() {
                                 }
                             >
                                 <AdminsTab />
+                            </Suspense>
+                        </SectionErrorBoundary>
+                    </CardContent>
+                </Card>
+
+                <Card className="border-border/70 bg-card/80 shadow-none">
+                    <CardHeader>
+                        <CardTitle className="text-base">Inventory reorder Teams recipients</CardTitle>
+                        <CardDescription>People who receive inventory reorder alerts.</CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                        <SectionErrorBoundary title="Inventory reorder recipients failed" message="Try reloading the panel.">
+                            <Suspense
+                                fallback={
+                                    <Card>
+                                        <CardContent className="p-6">
+                                            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                                                <Loader2 className="h-4 w-4 animate-spin" />
+                                                Loading...
+                                            </div>
+                                        </CardContent>
+                                    </Card>
+                                }
+                            >
+                                <InventoryReorderRecipientsTab />
                             </Suspense>
                         </SectionErrorBoundary>
                     </CardContent>

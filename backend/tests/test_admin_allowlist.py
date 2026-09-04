@@ -94,6 +94,14 @@ def _set_db_allowed_user_emails(value: str) -> None:
     _set_db_setting_value(SETTING_ALLOWED_USER_EMAILS, value)
 
 
+def _set_db_inventory_reorder_recipient_emails(value: str) -> None:
+    from app.services.system_setting_service import (
+        SETTING_INVENTORY_REORDER_TEAMS_RECIPIENT_EMAILS,
+    )
+
+    _set_db_setting_value(SETTING_INVENTORY_REORDER_TEAMS_RECIPIENT_EMAILS, value)
+
+
 def _with_temp_settings(admin_emails: Optional[str], flask_env: str, fn: Callable[[], None]) -> None:
     from app.config import settings
 
@@ -284,6 +292,112 @@ def test_put_allowed_users_rejects_empty_in_non_dev():
         settings.allowed_user_emails = prev_allowed_user_emails
 
 
+def test_inventory_reorder_recipients_merge_env_and_db_entries():
+    _setup_in_memory_db()
+    caller = "env.admin@example.com"
+    app = _make_test_app(caller)
+
+    def run():
+        from app.config import settings
+        from app.services.inventory_reorder_service import (
+            _load_effective_inventory_reorder_recipients,
+        )
+
+        previous_recipients = settings.inventory_reorder_teams_recipient_email
+        try:
+            settings.inventory_reorder_teams_recipient_email = (
+                "pinned@example.com, DUPLICATE@example.com"
+            )
+            _set_db_inventory_reorder_recipient_emails(
+                '["added@example.com", "duplicate@example.com"]'
+            )
+
+            client = app.test_client()
+            response = client.get("/api/system/inventory-reorder-recipients")
+            assert response.status_code == 200
+            body = response.get_json() or {}
+            assert body.get("source") == "mixed"
+            assert body.get("env_recipients") == [
+                "duplicate@example.com",
+                "pinned@example.com",
+            ]
+            assert body.get("db_recipients") == ["added@example.com"]
+            assert body.get("recipients") == [
+                "added@example.com",
+                "duplicate@example.com",
+                "pinned@example.com",
+            ]
+            assert _load_effective_inventory_reorder_recipients(
+                settings.inventory_reorder_teams_recipient_email
+            ) == [
+                "pinned@example.com",
+                "duplicate@example.com",
+                "added@example.com",
+            ]
+        finally:
+            settings.inventory_reorder_teams_recipient_email = previous_recipients
+
+    _with_temp_settings(admin_emails=caller, flask_env="production", fn=run)
+
+
+def test_inventory_reorder_recipients_can_add_and_remove_db_entries():
+    _setup_in_memory_db()
+    caller = "env.admin@example.com"
+    app = _make_test_app(caller)
+
+    def run():
+        from app.config import settings
+
+        previous_recipients = settings.inventory_reorder_teams_recipient_email
+        try:
+            settings.inventory_reorder_teams_recipient_email = "pinned@example.com"
+            _set_db_inventory_reorder_recipient_emails('["remove@example.com"]')
+            client = app.test_client()
+
+            response = client.put(
+                "/api/system/inventory-reorder-recipients",
+                json={"recipients": ["Added@Example.com", "pinned@example.com"]},
+            )
+            assert response.status_code == 200
+            body = response.get_json() or {}
+            assert body.get("db_recipients") == ["added@example.com"]
+            assert body.get("recipients") == [
+                "added@example.com",
+                "pinned@example.com",
+            ]
+
+            response = client.put(
+                "/api/system/inventory-reorder-recipients",
+                json={"recipients": []},
+            )
+            assert response.status_code == 200
+            body = response.get_json() or {}
+            assert body.get("source") == "env"
+            assert body.get("db_recipients") == []
+            assert body.get("recipients") == ["pinned@example.com"]
+        finally:
+            settings.inventory_reorder_teams_recipient_email = previous_recipients
+
+    _with_temp_settings(admin_emails=caller, flask_env="production", fn=run)
+
+
+def test_inventory_reorder_recipients_reject_invalid_email():
+    _setup_in_memory_db()
+    caller = "env.admin@example.com"
+    app = _make_test_app(caller)
+
+    def run():
+        client = app.test_client()
+        response = client.put(
+            "/api/system/inventory-reorder-recipients",
+            json={"recipients": ["not-an-email"]},
+        )
+        assert response.status_code == 400
+        assert (response.get_json() or {}).get("invalid") == ["not-an-email"]
+
+    _with_temp_settings(admin_emails=caller, flask_env="production", fn=run)
+
+
 if __name__ == "__main__":
     # Allow running as a script.
     test_env_override_precedence_and_put_allowed()
@@ -300,4 +414,10 @@ if __name__ == "__main__":
     print("[PASS] allowed users restrict access")
     test_put_allowed_users_rejects_empty_in_non_dev()
     print("[PASS] allowed users empty-list guard")
+    test_inventory_reorder_recipients_merge_env_and_db_entries()
+    print("[PASS] inventory reorder recipient merge")
+    test_inventory_reorder_recipients_can_add_and_remove_db_entries()
+    print("[PASS] inventory reorder recipient updates")
+    test_inventory_reorder_recipients_reject_invalid_email()
+    print("[PASS] inventory reorder recipient validation")
     print("[SUCCESS] All admin allowlist tests passed")

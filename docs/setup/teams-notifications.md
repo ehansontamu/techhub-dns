@@ -75,6 +75,7 @@ Configure the trigger:
         "recipientName": { "type": "string" },
         "orderNumber": { "type": "string" },
         "deliveryRunner": { "type": "string" },
+        "message": { "type": "string" },
         "estimatedTime": { "type": "string" },
         "createdAt": { "type": "string" }
     },
@@ -82,7 +83,18 @@ Configure the trigger:
 }
 ```
 
-## Step 6: Add Teams Message Action
+## Step 6: Add a Notification-Type Condition
+
+Before the Teams message action, add a **Condition**:
+
+```text
+@equals(body('Parse_JSON')?['type'], 'inventory_reorder_notification')
+```
+
+- **If yes:** use the bulk-order message below.
+- **If no:** retain the existing delivery message action.
+
+## Step 7: Add Teams Message Actions
 
 1. Click + New step
 2. Search for Microsoft Teams
@@ -91,7 +103,7 @@ Configure the trigger:
    - Post as: Flow bot
    - Post in: Chat with Flow bot
    - Recipient: `recipientEmail` (from dynamic content)
-   - Message: Use the template below
+   - Message for the **No** (delivery) branch: Use the template below
 
 ### Message Template
 
@@ -112,7 +124,21 @@ TechHub Technology Services
 Texas A&M University
 ```
 
-## Step 7: Add "Delete file" Action
+For the **Yes** (bulk-order) branch, use this message instead:
+
+```
+@{body('Parse_JSON')?['message']}
+```
+
+This displays, for example:
+
+```
+Bulk BigCommerce Order Alert
+
+BigCommerce order BC-12345 is a bulk order with 10 items.
+```
+
+## Step 8: Add "Delete file" Action
 
 After sending the Teams message, delete the processed file:
 
@@ -123,7 +149,7 @@ After sending the Teams message, delete the processed file:
    - Site Address: Same as trigger
    - File Identifier: Select Identifier from trigger dynamic content
 
-## Step 8: Save and Test
+## Step 9: Save and Test
 
 1. Click Save
 2. Test by uploading a sample JSON file to the SharePoint queue folder:
@@ -147,7 +173,7 @@ After sending the Teams message, delete the processed file:
 4. Check flow run history
 5. Verify Teams message received
 
-## Step 9: Configure TechHub Backend
+## Step 10: Configure TechHub Backend
 
 Add to your `.env` file:
 
@@ -165,7 +191,9 @@ TEAMS_NOTIFICATION_QUEUE_FOLDER=notifications-queue
 When a file is created (SharePoint)
   -> Get file content (SharePoint)
   -> Parse JSON
-  -> Post message in chat (Teams)
+  -> Condition: is inventory_reorder_notification?
+      -> Yes: post bulk-order message in chat (Teams)
+      -> No: post delivery message in chat (Teams)
   -> Delete file (SharePoint)
 ```
 

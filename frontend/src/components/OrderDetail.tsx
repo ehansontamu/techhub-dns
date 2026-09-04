@@ -26,6 +26,7 @@ import {
 import { formatToCentralTime } from "../utils/timezone";
 import {
   canGeneratePicklist as canGeneratePicklistForOrder,
+  getPartialLegLabel,
   getOrderProductTableView,
   getPartialOrderInfo,
   isActiveRemainderLegWaitingOnPickup,
@@ -106,6 +107,7 @@ export default function OrderDetail({
   const partialOrderInfo = getPartialOrderInfo(order);
   const productTableView = getOrderProductTableView(order);
   const isPartialLeg = partialOrderInfo.isPartialLeg;
+  const partialLegLabel = getPartialLegLabel(order);
   const remainderLegWaitingOnPickup = isActiveRemainderLegWaitingOnPickup(order);
   const recursiveSplitEligible =
     partialOrderInfo.hasRemainder &&
@@ -543,20 +545,20 @@ export default function OrderDetail({
                   <div className="min-w-0 space-y-2">
                     <div className="flex flex-wrap items-center gap-2">
                       <p className="font-medium text-foreground">
-                        {isPartialLeg ? "Picked leg" : partialOrderInfo.hasRemainder ? "Remainder leg" : "Partial order"}
+                        {partialLegLabel || "Partial order"}
                       </p>
                       <Badge variant="warning">
                         {partialOrderInfo.totalPicked}/{partialOrderInfo.totalOrdered} picked
                       </Badge>
-                      {isPartialLeg ? <Badge variant="secondary">Picked leg</Badge> : null}
+                      {isPartialLeg ? <Badge variant="secondary">{partialLegLabel}</Badge> : null}
                       {partialOrderInfo.hasRemainder ? (
-                        <Badge variant="secondary">Remainder leg</Badge>
+                        <Badge variant="secondary">Final leg</Badge>
                       ) : null}
                     </div>
                     <p className="text-sm text-muted-foreground">
                       {isPartialLeg
-                        ? "This is the picked leg. It only contains the items already selected for this split."
-                        : "This order is the remainder leg. Generating the picklist will keep the original order as the remainder and create the picked leg if needed."}
+                        ? `This is ${partialLegLabel?.toLowerCase() ?? "a part"}. It only contains the items selected for this split.`
+                        : "This order is the final leg. Generating the picklist keeps the original order as the final leg and creates a separate part when needed."}
                     </p>
                     <div className="grid gap-2 text-sm sm:grid-cols-2">
                       {partialOrderInfo.parentOrderId ? (
@@ -572,7 +574,7 @@ export default function OrderDetail({
                       ) : null}
                       {partialOrderInfo.remainderOrderId ? (
                         <div>
-                          <span className="font-medium text-foreground">Remainder order:</span>{" "}
+                          <span className="font-medium text-foreground">Final order:</span>{" "}
                           <Link
                             to={`/orders/${partialOrderInfo.remainderOrderId}`}
                             className="text-primary underline-offset-4 hover:underline"
@@ -585,8 +587,8 @@ export default function OrderDetail({
                     {remainderLegWaitingOnPickup ? (
                       <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
                         {recursiveSplitEligible
-                          ? "This remainder leg still has picked items. Asset tagging and order details stay blocked until the remainder is fully picked, but you can generate another picklist to split off the picked subset."
-                          : "This remainder leg is waiting on the remaining items to be picked. Asset tagging, picklist generation, and order details are blocked until that happens."}
+                          ? "This final leg still has selected items. Asset tagging and order details stay blocked until the final leg is fully picked, but you can generate another picklist to split off the selected part."
+                          : "This final leg is waiting on the remaining items to be picked. Asset tagging, picklist generation, and order details are blocked until that happens."}
                       </div>
                     ) : null}
                     {partialOrderInfo.missingItems.length > 0 ? (
@@ -988,12 +990,12 @@ export default function OrderDetail({
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <AlertTriangle className="h-5 w-5 text-amber-500" />
-              Create picked leg?
+              Create new part?
             </DialogTitle>
             <DialogDescription>
               {recursiveSplitEligible
-                ? `This remainder leg already has picked items (${partialOrderInfo.totalPicked}/${partialOrderInfo.totalOrdered}). Generating the picklist will create another picked leg and keep the original as the remainder leg.`
-                : `This order is partially picked (${partialOrderInfo.totalPicked}/${partialOrderInfo.totalOrdered} items). Generating the picklist will create the picked leg and keep the original as the remainder leg.`}
+                ? `This final leg already has picked items (${partialOrderInfo.totalPicked}/${partialOrderInfo.totalOrdered}). Generating the picklist will create another part and keep the original as the final leg.`
+                : `This order is partially picked (${partialOrderInfo.totalPicked}/${partialOrderInfo.totalOrdered} items). Generating the picklist will create a part and keep the original as the final leg.`}
             </DialogDescription>
           </DialogHeader>
 
@@ -1015,7 +1017,7 @@ export default function OrderDetail({
               Cancel
             </Button>
             <Button onClick={() => void handleGeneratePicklist({ createPartialLeg: true })} disabled={partialConfirmSubmitting} className="bg-amber-500 hover:bg-amber-600">
-              {partialConfirmSubmitting ? "Creating..." : "Create Partial Leg"}
+              {partialConfirmSubmitting ? "Creating..." : "Create Part"}
             </Button>
           </DialogFooter>
         </DialogContent>

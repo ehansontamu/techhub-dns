@@ -35,7 +35,6 @@ const navItems: LeafNavItem[] = [
   { path: "/order-qa", label: "QA Checklist", icon: ClipboardCheck },
   { path: "/delivery", to: "/delivery/dispatch", label: "Delivery", icon: Truck },
   { path: "/shipping", label: "Shipping", icon: Send },
-  { path: "/compatibility-editor", label: "Compatibility Editor", icon: Cable },
 ];
 
 const adminItems = [
@@ -46,7 +45,13 @@ const adminItems = [
 
 const activeNavItemClassName = "bg-accent text-accent-foreground shadow-lg shadow-accent/25";
 
-export function Sidebar({ className }: { className?: string }) {
+export function Sidebar({
+  className,
+  mobileLauncherClassName,
+}: {
+  className?: string;
+  mobileLauncherClassName?: string;
+}) {
   const [collapsed, setCollapsed] = useState(() => {
     if (typeof window === "undefined") return false;
     return window.matchMedia("(max-width: 1023px)").matches;
@@ -164,7 +169,10 @@ export function Sidebar({ className }: { className?: string }) {
           type="button"
           aria-label="Open sidebar"
           onClick={() => setIsMobileOpen(true)}
-          className="fixed left-3 top-1 z-40 flex h-10 w-10 items-center justify-center rounded-full border border-border bg-card text-muted-foreground shadow-lg touch-manipulation"
+          className={cn(
+            "fixed left-3 z-40 flex h-10 w-10 items-center justify-center rounded-full border border-border bg-card text-muted-foreground shadow-lg touch-manipulation",
+            mobileLauncherClassName ?? "top-1"
+          )}
         >
           <ChevronRight className="h-5 w-5" />
         </button>
@@ -250,6 +258,25 @@ export function Sidebar({ className }: { className?: string }) {
           })}
 
           <div className={cn("my-4 border-t border-border", showExpandedContent ? "" : "mx-2")} />
+
+          <NavLink
+            key="/compatibility-editor"
+            to="/compatibility-editor"
+            aria-label="Compatibility Editor"
+            title="Compatibility Editor"
+            className={({ isActive: isCurrentCompatibilityEditor }) =>
+              cn(
+                "flex min-h-[44px] items-center rounded-lg py-2.5 text-sm font-medium transition-colors",
+                showExpandedContent ? "gap-3 px-3" : "justify-center px-0",
+                isCurrentCompatibilityEditor
+                  ? activeNavItemClassName
+                  : "text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+              )
+            }
+          >
+            <Cable className="h-5 w-5 flex-shrink-0" />
+            {showExpandedContent && <span className="overflow-hidden whitespace-nowrap">Compatibility Editor</span>}
+          </NavLink>
 
           {isAdmin && (
             <>

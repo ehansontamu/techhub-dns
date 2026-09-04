@@ -4,6 +4,8 @@ backend/*.py[cod]
 backend/.env
 backend/venv/
 backend/.venv/
+.venv/
+.tmp-vitest/
 backend/env/
 backend/storage/
 backend/certs/

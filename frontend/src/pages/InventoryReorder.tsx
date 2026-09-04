@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { AlertTriangle, ArrowUpDown, Download, Loader2, PackageSearch, RefreshCw, Search } from "lucide-react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { AlertTriangle, ArrowUpDown, ChevronRight, Download, Loader2, PackageSearch, RefreshCw, Search } from "lucide-react";
 import { toast } from "sonner";
 import {
   inventoryReorderApi,
   type InventoryReorderJob,
+  type InventoryReorderOrderDetail,
   type InventoryReorderResponse,
   type InventoryReorderRow,
 } from "../api/inventoryReorder";
@@ -20,17 +21,20 @@ import { getUserDisplayName } from "../utils/userDisplay";
 type SortKey = "name" | "sku" | "available" | "status9" | "finalQty" | "onOrder" | "combined" | "reorderPoint" | "reorderQty" | "status";
 type SortDirection = "asc" | "desc";
 
-const sortableColumns: Array<{ key: SortKey; label: string; align?: "right" }> = [
-  { key: "name", label: "Product Name" },
-  { key: "sku", label: "SKU" },
-  { key: "available", label: "InFlow Available", align: "right" },
-  { key: "status9", label: "BC Status 9", align: "right" },
-  { key: "finalQty", label: "Final Qty", align: "right" },
-  { key: "onOrder", label: "On Order", align: "right" },
-  { key: "combined", label: "Final + On Order", align: "right" },
-  { key: "reorderPoint", label: "Reorder Point", align: "right" },
-  { key: "reorderQty", label: "Reorder Qty", align: "right" },
-  { key: "status", label: "Status" },
+const BIGCOMMERCE_ORDER_ADMIN_BASE = "https://store-jsj7fos9p1.mybigcommerce.com/manage/orders";
+const INFLOW_SALES_ORDER_BASE = "https://app.inflowinventory.com/sales-orders";
+
+const sortableColumns: Array<{ key: SortKey; label: string; align?: "right"; width: string }> = [
+  { key: "name", label: "Product Name", width: "w-[18%]" },
+  { key: "sku", label: "SKU", width: "w-[7%]" },
+  { key: "available", label: "InFlow Available", align: "right", width: "w-[8%]" },
+  { key: "status9", label: "BC Aggiebuy Approval (Status 9)", align: "right", width: "w-[12%]" },
+  { key: "finalQty", label: "Final Qty", align: "right", width: "w-[7%]" },
+  { key: "onOrder", label: "On Order", align: "right", width: "w-[7%]" },
+  { key: "combined", label: "Final + On Order", align: "right", width: "w-[9%]" },
+  { key: "reorderPoint", label: "Reorder Point", align: "right", width: "w-[8%]" },
+  { key: "reorderQty", label: "Reorder Qty", align: "right", width: "w-[8%]" },
+  { key: "status", label: "Status", width: "w-[13%]" },
 ];
 
 const isRunningJob = (job: InventoryReorderJob | null): boolean =>
@@ -79,6 +83,9 @@ const formatScheduleTimes = (times: string): string => {
   return labels.length > 0 ? labels.join(", ") : "7:30 AM, 12 PM, 3 PM";
 };
 
+const hasTenPlusBigCommerceOrder = (row: InventoryReorderRow): boolean =>
+  Boolean(row.orders?.bigCommerce.some((order) => order.quantity >= 10));
+
 const compareRows = (left: InventoryReorderRow, right: InventoryReorderRow, sortKey: SortKey) => {
   if (sortKey === "name" || sortKey === "sku") {
     return String(left[sortKey] ?? "").localeCompare(String(right[sortKey] ?? ""));
@@ -88,7 +95,8 @@ const compareRows = (left: InventoryReorderRow, right: InventoryReorderRow, sort
     const getRank = (row: InventoryReorderRow) => {
       if (row.critical) return 0;
       if (row.needsReorder) return 1;
-      return 2;
+      if (hasTenPlusBigCommerceOrder(row)) return 2;
+      return 3;
     };
 
     return getRank(left) - getRank(right);
@@ -103,6 +111,7 @@ export default function InventoryReorder() {
   const [data, setData] = useState<InventoryReorderResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [showAll, setShowAll] = useState(false);
+  const [showTenPlusOnly, setShowTenPlusOnly] = useState(false);
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("status");
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
@@ -110,6 +119,7 @@ export default function InventoryReorder() {
   const [refreshing, setRefreshing] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [nowMs, setNowMs] = useState(() => Date.now());
+  const [expandedRows, setExpandedRows] = useState<Set<string>>(() => new Set());
 
   const loadData = useCallback(async (options?: { silent?: boolean }) => {
     if (!isAdmin) {
@@ -121,7 +131,7 @@ export default function InventoryReorder() {
       setLoading(true);
     }
     try {
-      const payload = await inventoryReorderApi.getData(showAll);
+      const payload = await inventoryReorderApi.getData(showAll || showTenPlusOnly);
       setData(payload);
       if (isRunningJob(payload.latest_job)) {
         setActiveJob(payload.latest_job);
@@ -137,7 +147,7 @@ export default function InventoryReorder() {
         setLoading(false);
       }
     }
-  }, [isAdmin, showAll]);
+  }, [isAdmin, showAll, showTenPlusOnly]);
 
   useEffect(() => {
     void loadData();
@@ -226,17 +236,22 @@ export default function InventoryReorder() {
   const rows = data?.rows ?? [];
   const filteredRows = useMemo(() => {
     const query = search.trim().toLowerCase();
+    const scopedRows = showTenPlusOnly
+      ? rows.filter(hasTenPlusBigCommerceOrder)
+      : rows;
     const searched = query
-      ? rows.filter((row) =>
+      ? scopedRows.filter((row) =>
           `${row.name} ${row.sku}`.toLowerCase().includes(query)
         )
-      : rows;
+      : scopedRows;
 
     return [...searched].sort((left, right) => {
       const comparison = compareRows(left, right, sortKey);
       return sortDirection === "asc" ? comparison : -comparison;
     });
-  }, [rows, search, sortDirection, sortKey]);
+  }, [rows, search, showTenPlusOnly, sortDirection, sortKey]);
+
+  const tenPlusBcOrderCount = data?.summary.ten_plus_bc_order_items ?? 0;
 
   const toggleSort = (key: SortKey) => {
     if (sortKey === key) {
@@ -245,6 +260,18 @@ export default function InventoryReorder() {
     }
     setSortKey(key);
     setSortDirection(key === "name" || key === "sku" || key === "status" ? "asc" : "desc");
+  };
+
+  const toggleExpanded = (rowKey: string) => {
+    setExpandedRows((current) => {
+      const next = new Set(current);
+      if (next.has(rowKey)) {
+        next.delete(rowKey);
+      } else {
+        next.add(rowKey);
+      }
+      return next;
+    });
   };
 
   const job = activeJob ?? data?.latest_job ?? null;
@@ -386,6 +413,26 @@ export default function InventoryReorder() {
                 className="pl-9"
               />
             </div>
+            <Button
+              type="button"
+              variant={showTenPlusOnly ? "default" : "outline"}
+              aria-pressed={showTenPlusOnly}
+              onClick={() => setShowTenPlusOnly((current) => !current)}
+              className="whitespace-nowrap"
+            >
+              10+ BC orders
+              <Badge
+                variant="outline"
+                className={cn(
+                  "ml-2 min-w-6 justify-center px-1.5 tabular-nums",
+                  tenPlusBcOrderCount > 0
+                    ? "border-transparent bg-[#d97706] text-white"
+                    : "border-current bg-transparent text-current"
+                )}
+              >
+                {tenPlusBcOrderCount}
+              </Badge>
+            </Button>
             <div className="space-y-1">
               <Checkbox checked={showAll} onChange={(event) => setShowAll(event.target.checked)} label="Show all items" />
               <p className="text-xs text-muted-foreground">Includes products with reorder qty 0.</p>
@@ -399,61 +446,202 @@ export default function InventoryReorder() {
               {data?.has_data ? "No matching inventory rows." : "No inventory summary has been refreshed yet."}
             </div>
           ) : (
-            <Table>
+            <Table className="table-fixed text-xs">
               <TableHeader>
                 <TableRow>
+                  <TableHead className="w-9 px-1 py-2 md:px-1">
+                    <span className="sr-only">Order details</span>
+                  </TableHead>
                   {sortableColumns.map((column) => (
-                    <TableHead key={column.key} className={cn(column.align === "right" && "text-right")}>
+                    <TableHead
+                      key={column.key}
+                      className={cn(
+                        "h-auto whitespace-normal px-1.5 py-2 align-bottom leading-tight md:px-2",
+                        column.width,
+                        column.align === "right" && "text-right"
+                      )}
+                    >
                       <button
                         type="button"
                         onClick={() => toggleSort(column.key)}
                         className={cn(
-                          "inline-flex items-center gap-1 text-left transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+                          "inline-flex items-end gap-0.5 text-left leading-tight transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
                           column.align === "right" && "justify-end text-right"
                         )}
                       >
                         {column.label}
-                        <ArrowUpDown className="h-3.5 w-3.5" />
+                        <ArrowUpDown className="h-3 w-3 shrink-0" />
                       </button>
                     </TableHead>
                   ))}
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {filteredRows.map((row) => (
-                  <TableRow
-                    key={`${row.sku}-${row.name}`}
-                    className={cn(
-                      row.critical && "bg-red-50 hover:bg-red-100/80",
-                      row.needsReorder && !row.critical && "bg-amber-50 hover:bg-amber-100/80"
-                    )}
-                  >
-                    <TableCell className="min-w-[18rem] font-medium">{row.name}</TableCell>
-                    <TableCell className="min-w-[7rem] text-muted-foreground">{row.sku || "-"}</TableCell>
-                    <NumberCell value={row.available} />
-                    <NumberCell value={row.status9} />
-                    <NumberCell value={row.finalQty} />
-                    <NumberCell value={row.onOrder} />
-                    <NumberCell value={row.combined} />
-                    <NumberCell value={row.reorderPoint} />
-                    <NumberCell value={row.reorderQty} />
-                    <TableCell>
-                      {row.critical ? (
-                        <Badge variant="destructive">Critical</Badge>
-                      ) : row.needsReorder ? (
-                        <Badge variant="warning">Reorder</Badge>
-                      ) : (
-                        <Badge variant="secondary">Stocked</Badge>
-                      )}
-                    </TableCell>
-                  </TableRow>
-                ))}
+                {filteredRows.map((row) => {
+                  const rowKey = `${row.sku}-${row.name}`;
+                  const isExpanded = expandedRows.has(rowKey);
+                  const hasBulkBigCommerceOrder = hasTenPlusBigCommerceOrder(row);
+                  return (
+                    <Fragment key={rowKey}>
+                      <TableRow
+                        className={cn(
+                          row.critical && "bg-red-50 hover:bg-red-100/80",
+                          row.needsReorder && !row.critical && "bg-amber-50 hover:bg-amber-100/80"
+                        )}
+                      >
+                        <TableCell className="w-9 px-0.5 py-1.5">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7"
+                            aria-label={`${isExpanded ? "Hide" : "Show"} orders for ${row.name}`}
+                            aria-expanded={isExpanded}
+                            onClick={() => toggleExpanded(rowKey)}
+                          >
+                            <ChevronRight className={cn("h-4 w-4 transition-transform", isExpanded && "rotate-90")} />
+                          </Button>
+                        </TableCell>
+                        <TableCell className="break-words px-1.5 py-2 font-medium leading-tight md:px-2">{row.name}</TableCell>
+                        <TableCell className="break-words px-1.5 py-2 text-muted-foreground md:px-2">{row.sku || "-"}</TableCell>
+                        <NumberCell value={row.available} />
+                        <NumberCell value={row.status9} />
+                        <NumberCell value={row.finalQty} />
+                        <NumberCell value={row.onOrder} />
+                        <NumberCell value={row.combined} />
+                        <NumberCell value={row.reorderPoint} />
+                        <NumberCell value={row.reorderQty} />
+                        <TableCell className="px-1.5 py-2 md:px-2">
+                          <div className="flex flex-col items-start gap-1">
+                          {row.critical ? (
+                            <Badge variant="destructive" className="px-2 py-0 text-[11px]">Critical</Badge>
+                          ) : row.needsReorder ? (
+                            <Badge variant="warning" className="px-2 py-0 text-[11px]">Reorder</Badge>
+                          ) : (
+                            <Badge variant="secondary" className="px-2 py-0 text-[11px]">Stocked</Badge>
+                          )}
+                          {hasBulkBigCommerceOrder ? (
+                            <Badge variant="warning" className="px-2 py-0 text-[10px]">10+ order</Badge>
+                          ) : null}
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                      {isExpanded ? (
+                        <TableRow className="bg-muted/20 hover:bg-muted/20">
+                          <TableCell colSpan={sortableColumns.length + 1} className="p-4 md:p-5">
+                            <OrderDetails orders={row.orders} />
+                          </TableCell>
+                        </TableRow>
+                      ) : null}
+                    </Fragment>
+                  );
+                })}
               </TableBody>
             </Table>
           )}
         </div>
       </section>
     </div>
+  );
+}
+
+type OrderDetailsProps = {
+  orders: InventoryReorderRow["orders"];
+};
+
+function OrderDetails({ orders }: OrderDetailsProps) {
+  if (!orders) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        Order-level details will be available after the next inventory refresh.
+      </p>
+    );
+  }
+
+  const activeInflowOrders = orders.inflow.filter(
+    (order) => !order.status.trim().toLowerCase().startsWith("fulfilled")
+  );
+
+  return (
+    <div className="grid gap-4 lg:grid-cols-2">
+      <OrderSourceList
+        title="BigCommerce Aggiebuy Approval (Status 9)"
+        orders={orders.bigCommerce}
+        emptyMessage="This product is not on any Status 9 BigCommerce orders."
+        getOrderHref={(order) => `${BIGCOMMERCE_ORDER_ADMIN_BASE}/${encodeURIComponent(order.orderNumber)}`}
+        showBulkQuantityBadge
+      />
+      <OrderSourceList
+        title="InFlow active sales orders"
+        orders={activeInflowOrders}
+        emptyMessage="This product is not on any active InFlow sales orders."
+        getOrderHref={(order) => `${INFLOW_SALES_ORDER_BASE}/${encodeURIComponent(order.orderId)}`}
+      />
+    </div>
+  );
+}
+
+type OrderSourceListProps = {
+  title: string;
+  orders: InventoryReorderOrderDetail[];
+  emptyMessage: string;
+  getOrderHref?: (order: InventoryReorderOrderDetail) => string;
+  showBulkQuantityBadge?: boolean;
+};
+
+function OrderSourceList({
+  title,
+  orders,
+  emptyMessage,
+  getOrderHref,
+  showBulkQuantityBadge = false,
+}: OrderSourceListProps) {
+  const totalQuantity = orders.reduce((total, order) => total + order.quantity, 0);
+
+  return (
+    <section className="rounded-lg border bg-background/80 p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 className="text-sm font-semibold">{title}</h3>
+        <span className="text-xs tabular-nums text-muted-foreground">
+          {orders.length} {orders.length === 1 ? "order" : "orders"} · {totalQuantity.toLocaleString()} units
+        </span>
+      </div>
+      {orders.length === 0 ? (
+        <p className="mt-3 text-sm text-muted-foreground">{emptyMessage}</p>
+      ) : (
+        <div className="mt-3 divide-y rounded-md border">
+          {orders.map((order, index) => (
+            <div
+              key={`${order.orderId}-${index}`}
+              className={cn(
+                "flex flex-wrap items-center justify-between gap-3 px-3 py-2.5",
+                showBulkQuantityBadge && order.quantity >= 10 && "bg-amber-50"
+              )}
+            >
+              <div className="min-w-0">
+                {getOrderHref ? (
+                  <a
+                    href={getOrderHref(order)}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="font-medium text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                  >
+                    Order {order.orderNumber}
+                  </a>
+                ) : (
+                  <p className="font-medium">Order {order.orderNumber}</p>
+                )}
+                <p className="text-xs capitalize text-muted-foreground">{order.status}</p>
+              </div>
+              <div className="flex items-center gap-2">
+                {showBulkQuantityBadge && order.quantity >= 10 ? <Badge variant="warning">10+ units</Badge> : null}
+                <span className="font-semibold tabular-nums">{order.quantity.toLocaleString()}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -483,5 +671,5 @@ function InventoryMetric({ label, value, tone, compact = false }: InventoryMetri
 }
 
 function NumberCell({ value }: { value: number }) {
-  return <TableCell className="text-right tabular-nums">{value.toLocaleString()}</TableCell>;
+  return <TableCell className="px-1.5 py-2 text-right tabular-nums md:px-2">{value.toLocaleString()}</TableCell>;
 }

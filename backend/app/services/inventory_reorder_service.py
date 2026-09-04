@@ -59,6 +59,92 @@ def _to_int(value: Any, default: int = 0) -> int:
         return default
 
 
+def _parse_recipient_emails(value: Any) -> list[str]:
+    """Return a normalized, de-duplicated list from JSON, CSV, or a sequence."""
+    raw_values: list[Any]
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return []
+        if stripped.startswith("["):
+            try:
+                parsed = json.loads(stripped)
+            except json.JSONDecodeError:
+                parsed = None
+            if isinstance(parsed, list):
+                raw_values = parsed
+            else:
+                raw_values = stripped.split(",")
+        else:
+            raw_values = stripped.split(",")
+    elif isinstance(value, (list, tuple, set)):
+        raw_values = list(value)
+    else:
+        return []
+
+    return list(
+        dict.fromkeys(
+            email.strip().lower()
+            for email in raw_values
+            if isinstance(email, str) and email.strip()
+        )
+    )
+
+
+def _load_effective_inventory_reorder_recipients(env_value: Any) -> list[str]:
+    """Merge pinned environment recipients with admin-managed database recipients."""
+    env_recipients = _parse_recipient_emails(env_value)
+    try:
+        from app.database import get_db_session
+        from app.services.system_setting_service import (
+            SETTING_INVENTORY_REORDER_TEAMS_RECIPIENT_EMAILS,
+            SystemSettingService,
+        )
+
+        db = get_db_session()
+        try:
+            db_value = SystemSettingService.get_setting(
+                db, SETTING_INVENTORY_REORDER_TEAMS_RECIPIENT_EMAILS
+            )
+        finally:
+            db.close()
+    except Exception as exc:
+        logger.warning(
+            "Could not load admin-managed inventory reorder recipients; using environment recipients: %s",
+            exc,
+        )
+        return env_recipients
+
+    return list(
+        dict.fromkeys(
+            [
+                *env_recipients,
+                *_parse_recipient_emails(db_value),
+            ]
+        )
+    )
+
+
+def _is_fulfilled_order_detail(detail: Any) -> bool:
+    if not isinstance(detail, dict):
+        return False
+    status = str(detail.get("status") or "").strip().lower()
+    return status == "fulfilled" or status.startswith("fulfilled ")
+
+
+def _has_ten_plus_bigcommerce_order(row: Any) -> bool:
+    if not isinstance(row, dict):
+        return False
+    orders = row.get("orders")
+    if not isinstance(orders, dict):
+        return False
+    bigcommerce_orders = orders.get("bigCommerce", [])
+    return isinstance(bigcommerce_orders, list) and any(
+        isinstance(order, dict) and _to_int(order.get("quantity"), 0) >= 10
+        for order in bigcommerce_orders
+    )
+
+
 def compute_inventory_reorder_rows(
     summary: list[dict[str, Any]], *, show_all: bool = False
 ) -> list[dict[str, Any]]:
@@ -79,8 +165,22 @@ def compute_inventory_reorder_rows(
         reorder_qty = _to_int(item.get("reorderQty"), 0)
         needs_reorder = combined <= reorder_point
 
+        orders = item.get("orders")
+        normalized_orders = orders
+        if isinstance(orders, dict):
+            inflow_orders = orders.get("inflow", [])
+            normalized_orders = {
+                **orders,
+                "inflow": [
+                    detail
+                    for detail in inflow_orders
+                    if not _is_fulfilled_order_detail(detail)
+                ] if isinstance(inflow_orders, list) else [],
+            }
+
         row = {
             **item,
+            "orders": normalized_orders,
             "available": available,
             "status9": status9,
             "finalQty": final_qty,
@@ -99,8 +199,15 @@ def compute_inventory_reorder_rows(
 
 
 class InventoryReorderService:
-    def __init__(self, settings: Any):
+    def __init__(
+        self,
+        settings: Any,
+        recipient_email_resolver: Optional[Callable[[Any], list[str]]] = None,
+    ):
         self._settings = settings
+        self._recipient_email_resolver = (
+            recipient_email_resolver or _load_effective_inventory_reorder_recipients
+        )
         self._lock = threading.Lock()
         self._jobs: dict[str, JobStatus] = {}
         self._latest_job_id: Optional[str] = None
@@ -301,9 +408,14 @@ class InventoryReorderService:
             raise ValueError("Stored inventory summary must be a JSON array.")
 
         rows = compute_inventory_reorder_rows(payload, show_all=show_all)
+        all_rows = rows if show_all else compute_inventory_reorder_rows(payload, show_all=True)
+        row_summary = self._build_row_summary(rows)
+        row_summary["ten_plus_bc_order_items"] = sum(
+            1 for row in all_rows if _has_ten_plus_bigcommerce_order(row)
+        )
         return {
             "rows": rows,
-            "summary": self._build_row_summary(rows),
+            "summary": row_summary,
             "latest_job": self.latest_job(),
             "has_data": True,
             "config": self.get_config_status(),
@@ -403,9 +515,24 @@ class InventoryReorderService:
             if summary.get("productId")
         }
 
-        progress("Fetching BigCommerce status 9 counts...", 0.78)
-        bigcommerce_counts = self._fetch_bigcommerce_status9_counts(
+        progress("Fetching BigCommerce status 9 order details...", 0.72)
+        (
+            bigcommerce_counts,
+            bigcommerce_order_details,
+            status9_alert_orders,
+        ) = self._fetch_bigcommerce_status9_demand(
             bigcommerce_headers, progress=progress
+        )
+
+        progress("Fetching recently created BigCommerce orders...", 0.79)
+        alert_orders = self._merge_bigcommerce_orders(
+            status9_alert_orders,
+            self._fetch_recent_bigcommerce_orders(bigcommerce_headers, progress=progress),
+        )
+
+        progress("Fetching active InFlow sales order details...", 0.82)
+        inflow_order_details = self._fetch_inflow_active_order_details(
+            inflow_headers, progress=progress
         )
 
         progress("Building reorder summary...", 0.92)
@@ -413,7 +540,12 @@ class InventoryReorderService:
             {**product, "summary": summary_by_product_id.get(product.get("productId"), {})}
             for product in products
         ]
-        simple_summary = self._build_simple_summary(merged, bigcommerce_counts)
+        simple_summary = self._build_simple_summary(
+            merged,
+            bigcommerce_counts,
+            bigcommerce_order_details=bigcommerce_order_details,
+            inflow_order_details=inflow_order_details,
+        )
 
         data_dir = self._data_dir()
         data_dir.mkdir(parents=True, exist_ok=True)
@@ -421,6 +553,7 @@ class InventoryReorderService:
         result_path = data_dir / f"inventory_summary_simple_{timestamp}.json"
         self._write_json(result_path, simple_summary)
         self._write_json(self._stable_summary_path(), simple_summary)
+        self._notify_new_high_quantity_bigcommerce_orders(alert_orders)
         progress(f"Wrote {result_path.name}", 0.99)
         return result_path
 
@@ -488,9 +621,24 @@ class InventoryReorderService:
     def _fetch_bigcommerce_status9_counts(
         self, headers: dict[str, str], *, progress: ProgressCallback
     ) -> dict[str, int]:
+        counts, _details, _orders = self._fetch_bigcommerce_status9_demand(
+            headers,
+            progress=progress,
+        )
+        return counts
+
+    def _fetch_bigcommerce_status9_demand(
+        self, headers: dict[str, str], *, progress: ProgressCallback
+    ) -> tuple[
+        dict[str, int],
+        dict[str, list[dict[str, Any]]],
+        list[dict[str, Any]],
+    ]:
         import requests
 
         counts: defaultdict[str, int] = defaultdict(int)
+        details_by_order: defaultdict[str, dict[str, dict[str, Any]]] = defaultdict(dict)
+        orders_by_id: dict[str, dict[str, Any]] = {}
         page = 1
         while True:
             progress(f"BigCommerce: fetching status 9 orders (page {page})...", None)
@@ -518,14 +666,119 @@ class InventoryReorderService:
                 order_id = order.get("id") if isinstance(order, dict) else None
                 if not order_id:
                     continue
-                for product in self._fetch_bigcommerce_order_products(order_id, headers):
+                order_key = str(order_id)
+                order_products = self._fetch_bigcommerce_order_products(order_id, headers)
+                orders_by_id[order_key] = {"id": order_key, "products": order_products}
+                for product in order_products:
                     name = str(product.get("name") or "").upper()
-                    counts[name] += _to_int(product.get("quantity"), 0)
+                    if not name:
+                        continue
+                    quantity = _to_int(product.get("quantity"), 0)
+                    counts[name] += quantity
+                    detail = details_by_order[name].setdefault(
+                        order_key,
+                        {
+                            "orderId": order_key,
+                            "orderNumber": str(order.get("id") or order_id),
+                            "quantity": 0,
+                            "status": "Aggiebuy Approval (Status 9)",
+                        },
+                    )
+                    detail["quantity"] += quantity
 
             page += 1
             time.sleep(self._request_delay())
 
-        return dict(counts)
+        details = {
+            product_name: list(order_map.values())
+            for product_name, order_map in details_by_order.items()
+        }
+        for order_details in details.values():
+            order_details.sort(
+                key=lambda detail: (-_to_int(detail.get("quantity"), 0), detail["orderNumber"])
+            )
+
+        return dict(counts), details, list(orders_by_id.values())
+
+    def _fetch_inflow_active_order_details(
+        self, headers: dict[str, str], *, progress: ProgressCallback
+    ) -> dict[str, list[dict[str, Any]]]:
+        import requests
+
+        details_by_order: defaultdict[str, dict[str, dict[str, Any]]] = defaultdict(dict)
+        skip = 0
+        count = 100
+        while True:
+            progress(f"InFlow: fetching active sales orders (skip={skip})...", None)
+            response = requests.get(
+                f"{self._inflow_base_url()}/{self._settings.inflow_company_id}/sales-orders",
+                headers=headers,
+                params={
+                    "include": "lines.product,lines",
+                    "filter[isActive]": "true",
+                    "filter[inventoryStatus][]": ["unfulfilled", "started"],
+                    "count": count,
+                    "skip": skip,
+                    "sort": "orderDate",
+                    "sortDesc": "true",
+                },
+                timeout=90,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            orders = payload.get("items", []) if isinstance(payload, dict) else payload
+            if not isinstance(orders, list):
+                raise ValueError("InFlow sales orders response must be an array.")
+            if not orders:
+                break
+
+            for order in orders:
+                if not isinstance(order, dict):
+                    continue
+                inventory_status = str(order.get("inventoryStatus") or "").strip()
+                if inventory_status.lower() == "fulfilled" or inventory_status.lower().startswith("fulfilled "):
+                    continue
+                order_id = str(order.get("salesOrderId") or order.get("id") or "")
+                order_number = str(order.get("orderNumber") or order_id or "Unknown")
+                status = inventory_status or "Active"
+                for line in order.get("lines", []) or []:
+                    if not isinstance(line, dict):
+                        continue
+                    product = line.get("product") if isinstance(line.get("product"), dict) else {}
+                    product_id = str(line.get("productId") or product.get("productId") or "")
+                    if not product_id:
+                        continue
+                    quantity_data = line.get("quantity")
+                    quantity = _to_int(
+                        quantity_data.get("standardQuantity")
+                        if isinstance(quantity_data, dict)
+                        else quantity_data,
+                        0,
+                    )
+                    order_key = order_id or order_number
+                    detail = details_by_order[product_id].setdefault(
+                        order_key,
+                        {
+                            "orderId": order_id,
+                            "orderNumber": order_number,
+                            "quantity": 0,
+                            "status": status,
+                        },
+                    )
+                    detail["quantity"] += quantity
+
+            skip += count
+            time.sleep(self._request_delay())
+
+        details = {
+            product_id: list(order_map.values())
+            for product_id, order_map in details_by_order.items()
+        }
+        for order_details in details.values():
+            order_details.sort(
+                key=lambda detail: (-_to_int(detail.get("quantity"), 0), detail["orderNumber"])
+            )
+        return details
 
     def _fetch_bigcommerce_order_products(
         self, order_id: Any, headers: dict[str, str]
@@ -549,14 +802,83 @@ class InventoryReorderService:
             return []
         return [product for product in payload if isinstance(product, dict)]
 
+    def _fetch_recent_bigcommerce_orders(
+        self, headers: dict[str, str], *, progress: ProgressCallback
+    ) -> list[dict[str, Any]]:
+        """Fetch new orders even after they have advanced past status 9."""
+        import requests
+
+        lookback_days = max(
+            _to_int(
+                getattr(self._settings, "inventory_reorder_bigcommerce_order_lookback_days", 7),
+                7,
+            ),
+            1,
+        )
+        min_date_created = (
+            datetime.now(timezone.utc) - timedelta(days=lookback_days)
+        ).isoformat().replace("+00:00", "Z")
+        recent_orders: list[dict[str, Any]] = []
+        page = 1
+        while True:
+            progress(f"BigCommerce: fetching recent orders (page {page})...", None)
+            response = requests.get(
+                f"{self._bigcommerce_base_url()}/{self._settings.inventory_reorder_bigcommerce_store_id}/v2/orders",
+                headers=headers,
+                params={"min_date_created": min_date_created, "limit": 50, "page": page},
+                timeout=60,
+            )
+            if response.status_code != 200:
+                logger.warning(
+                    "BigCommerce recent orders fetch returned %s: %s",
+                    response.status_code,
+                    response.text[:300],
+                )
+                break
+            orders = response.json()
+            if not isinstance(orders, list):
+                raise ValueError("BigCommerce recent orders response must be an array.")
+            if not orders:
+                break
+            for order in orders:
+                order_id = order.get("id") if isinstance(order, dict) else None
+                if order_id:
+                    recent_orders.append(
+                        {
+                            "id": str(order_id),
+                            "products": self._fetch_bigcommerce_order_products(order_id, headers),
+                        }
+                    )
+            page += 1
+            time.sleep(self._request_delay())
+        return recent_orders
+
+    @staticmethod
+    def _merge_bigcommerce_orders(*order_lists: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        orders_by_id: dict[str, dict[str, Any]] = {}
+        for orders in order_lists:
+            for order in orders:
+                order_id = str(order.get("id") or "").strip()
+                if order_id and order_id not in orders_by_id:
+                    orders_by_id[order_id] = order
+        return list(orders_by_id.values())
+
     def _build_simple_summary(
-        self, merged_products: list[dict[str, Any]], bigcommerce_counts: dict[str, int]
-    ) -> list[dict[str, str]]:
-        summary: list[dict[str, str]] = []
+        self,
+        merged_products: list[dict[str, Any]],
+        bigcommerce_counts: dict[str, int],
+        *,
+        bigcommerce_order_details: Optional[dict[str, list[dict[str, Any]]]] = None,
+        inflow_order_details: Optional[dict[str, list[dict[str, Any]]]] = None,
+    ) -> list[dict[str, Any]]:
+        summary: list[dict[str, Any]] = []
+        bigcommerce_order_details = bigcommerce_order_details or {}
+        inflow_order_details = inflow_order_details or {}
         for product in merged_products:
             product_summary = product.get("summary", {}) or {}
             name = str(product.get("name") or "")
-            entry: dict[str, str] = {
+            product_id = str(product.get("productId") or "")
+            entry: dict[str, Any] = {
                 "name": name,
                 "sku": str(product.get("sku") or ""),
             }
@@ -568,6 +890,10 @@ class InventoryReorderService:
             entry["bigCommerceStatus9"] = str(int(bigcommerce_counts.get(name.upper(), 0)))
             entry["reorderPoint"] = "0"
             entry["reorderQty"] = "0"
+            entry["orders"] = {
+                "bigCommerce": bigcommerce_order_details.get(name.upper(), []),
+                "inflow": inflow_order_details.get(product_id, []),
+            }
 
             reorder_settings = product.get("reorderSettings", []) or []
             for reorder_setting in reorder_settings:
@@ -604,6 +930,9 @@ class InventoryReorderService:
             "total": len(rows),
             "needs_reorder": sum(1 for row in rows if row.get("needsReorder")),
             "critical": sum(1 for row in rows if row.get("critical")),
+            "ten_plus_bc_order_items": sum(
+                1 for row in rows if _has_ten_plus_bigcommerce_order(row)
+            ),
         }
 
     def _ensure_configured(self) -> None:
@@ -631,6 +960,165 @@ class InventoryReorderService:
 
     def _metadata_path(self) -> Path:
         return self._data_dir() / "inventory_summary_metadata.json"
+
+    def _bigcommerce_notification_state_path(self) -> Path:
+        return self._data_dir() / "bigcommerce_order_notification_state.json"
+
+    def _bigcommerce_order_alert_marker_path(self, order_id: str) -> Path:
+        safe_order_id = "".join(
+            character if character.isalnum() or character in {"-", "_"} else "_"
+            for character in order_id
+        )
+        return self._data_dir() / "bigcommerce-order-alerts" / f"{safe_order_id}.json"
+
+    def _claim_bigcommerce_order_alert(self, order_id: str) -> bool:
+        """Atomically reserve an order alert across scheduler/web processes."""
+        marker_path = self._bigcommerce_order_alert_marker_path(order_id)
+        marker_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with marker_path.open("x", encoding="utf-8") as handle:
+                json.dump({"order_id": order_id, "claimed_at": _utc_now_iso()}, handle)
+                handle.write("\n")
+            return True
+        except FileExistsError:
+            return False
+        except OSError as exc:
+            logger.error("Failed to claim BigCommerce order %s alert: %s", order_id, exc)
+            return False
+
+    def _notify_new_high_quantity_bigcommerce_orders(
+        self, orders: list[dict[str, Any]]
+    ) -> None:
+        if not getattr(self._settings, "inventory_reorder_teams_notifications_enabled", False):
+            return
+        recipient_emails = self._recipient_email_resolver(
+            getattr(self._settings, "inventory_reorder_teams_recipient_email", "")
+        )
+        if not recipient_emails:
+            logger.warning(
+                "Inventory reorder Teams alerts are enabled but no recipient emails are configured"
+            )
+            return
+
+        current_order_ids = {
+            str(order.get("id") or "").strip() for order in orders if order.get("id")
+        }
+        if not current_order_ids:
+            return
+        state = self._read_bigcommerce_notification_state()
+        if not state.get("initialized"):
+            self._write_bigcommerce_notification_state(
+                {"initialized": True, "seen_order_ids": sorted(current_order_ids), "notified_order_ids": []}
+            )
+            logger.info("Initialized BigCommerce order alert baseline with %s order(s)", len(current_order_ids))
+            return
+
+        seen_order_ids = set(state.get("seen_order_ids", []))
+        notified_order_ids = set(state.get("notified_order_ids", []))
+        minimum_quantity = max(
+            _to_int(
+                getattr(self._settings, "inventory_reorder_teams_minimum_order_quantity", 10),
+                10,
+            ),
+            1,
+        )
+        recipient_name = str(
+            getattr(self._settings, "inventory_reorder_teams_recipient_name", "Inventory Team")
+            or "Inventory Team"
+        ).strip()
+
+        for order in orders:
+            order_id = str(order.get("id") or "").strip()
+            if not order_id or order_id in seen_order_ids:
+                continue
+            products = order.get("products") or []
+            total_quantity = sum(_to_int(product.get("quantity"), 0) for product in products)
+            highest_item_quantity = max(
+                (_to_int(product.get("quantity"), 0) for product in products),
+                default=0,
+            )
+            if highest_item_quantity < minimum_quantity or order_id in notified_order_ids:
+                continue
+            item_lines = [
+                f"{_to_int(product.get('quantity'), 0)} x {str(product.get('name') or 'Item').strip()}"
+                for product in products
+                if _to_int(product.get("quantity"), 0) > 0
+            ]
+            if not self._claim_bigcommerce_order_alert(order_id):
+                logger.info(
+                    "Skipping BigCommerce order %s alert because another refresh already claimed it",
+                    order_id,
+                )
+                continue
+            notified_order_ids.add(order_id)
+            self._write_bigcommerce_notification_state(
+                {
+                    "initialized": True,
+                    "seen_order_ids": sorted(seen_order_ids | current_order_ids),
+                    "notified_order_ids": sorted(notified_order_ids),
+                }
+            )
+            for recipient_email in recipient_emails:
+                if self._send_bigcommerce_order_alert(
+                    recipient_email=recipient_email,
+                    recipient_name=recipient_name,
+                    bigcommerce_order_id=order_id,
+                    order_items=item_lines,
+                    total_quantity=total_quantity,
+                ):
+                    logger.info(
+                        "Queued Teams alert for BigCommerce order %s (%s units) to %s",
+                        order_id,
+                        total_quantity,
+                        recipient_email,
+                    )
+                else:
+                    logger.error(
+                        "Failed to queue Teams alert for BigCommerce order %s to %s; it will not be retried to avoid duplicates",
+                        order_id,
+                        recipient_email,
+                    )
+        self._write_bigcommerce_notification_state(
+            {
+                "initialized": True,
+                "seen_order_ids": sorted(seen_order_ids | current_order_ids),
+                "notified_order_ids": sorted(notified_order_ids),
+            }
+        )
+
+    @staticmethod
+    def _send_bigcommerce_order_alert(**kwargs: Any) -> bool:
+        from app.services.teams_recipient_service import teams_recipient_service
+
+        return teams_recipient_service.send_inventory_reorder_notification(**kwargs)
+
+    def _read_bigcommerce_notification_state(self) -> dict[str, Any]:
+        path = self._bigcommerce_notification_state_path()
+        if not path.exists():
+            return {"initialized": False, "seen_order_ids": [], "notified_order_ids": []}
+        try:
+            with path.open("r", encoding="utf-8") as handle:
+                state = json.load(handle)
+            if not isinstance(state, dict):
+                raise ValueError("state must be an object")
+            return {
+                "initialized": bool(state.get("initialized")),
+                "seen_order_ids": [str(value) for value in state.get("seen_order_ids", [])],
+                "notified_order_ids": [str(value) for value in state.get("notified_order_ids", [])],
+            }
+        except (OSError, ValueError, TypeError) as exc:
+            logger.warning("Failed to read BigCommerce order alert state: %s", exc)
+            return {"initialized": False, "seen_order_ids": [], "notified_order_ids": []}
+
+    def _write_bigcommerce_notification_state(self, state: dict[str, Any]) -> None:
+        path = self._bigcommerce_notification_state_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary_path = path.with_suffix(".tmp")
+        try:
+            self._write_json(temporary_path, state)
+            temporary_path.replace(path)
+        except OSError as exc:
+            logger.error("Failed to persist BigCommerce order alert state: %s", exc)
 
     def _write_json(self, path: Path, payload: Any) -> None:
         with path.open("w", encoding="utf-8") as handle:
