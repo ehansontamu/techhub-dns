@@ -46,12 +46,11 @@ from app.services.compatibility_editor_service import (
     CompatibilityEditorConflict,
     CompatibilityEditorError,
     CompatibilityEditorNotInitialized,
-    apply_mutation as apply_compatibility_editor_mutation,
     import_bundled_seed_if_empty,
 )
 from app.services.compatibility_approval_service import (
+    apply_admin_mutation as apply_compatibility_admin_mutation,
     get_workspace_document as get_compatibility_editor_workspace,
-    resolve_pending_after_admin_mutation,
     review_change as review_compatibility_change_request,
     submit_bundle as submit_compatibility_editor_bundle,
     submit_change as submit_compatibility_editor_change,
@@ -1775,7 +1774,7 @@ def mutate_compatibility_editor_data():
             )
         elif is_admin:
             try:
-                _approved_document, duplicate = apply_compatibility_editor_mutation(
+                document, duplicate = apply_compatibility_admin_mutation(
                     db,
                     payload,
                     actor=actor,
@@ -1795,10 +1794,6 @@ def mutate_compatibility_editor_data():
                     )
                 else:
                     raise
-            else:
-                document = resolve_pending_after_admin_mutation(
-                    db, payload, actor=actor
-                )
         else:
             document, duplicate = submit_compatibility_editor_change(
                 db,

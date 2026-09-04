@@ -10,8 +10,15 @@ os.environ.setdefault("DATABASE_URL", "sqlite+pysqlite:///:memory:")
 
 from app.config import settings
 from app.database import Base
+from app.models.compatibility_editor import (
+    CompatibilityChangeRequest,
+    CompatibilityEditorOperation,
+    CompatibilityPublicationSnapshot,
+)
 from app.services import compatibility_publisher_service
 from app.services.compatibility_approval_service import (
+    apply_admin_mutation,
+    get_workspace_document,
     review_change,
     submit_bundle,
     submit_change,
@@ -186,6 +193,54 @@ def test_operation_id_is_idempotent(db):
     assert first["revision"] == second["revision"] == 2
 
 
+def test_duplicate_admin_retry_does_not_resolve_a_newer_contributor_proposal(db):
+    import_payload(db, _payload(), actor="seed")
+    request = {
+        "operationId": "admin-save",
+        "mutation": {
+            "type": "cell.update",
+            "computerKey": "C1",
+            "dockKey": "D1",
+            "expectedVersion": 1,
+            "cell": {"compatibilityStatus": "Compatible", "notes": "Admin value"},
+        },
+    }
+
+    _document, duplicate = apply_admin_mutation(
+        db, request, actor="admin@example.test"
+    )
+    assert duplicate is False
+
+    workspace, _ = submit_change(
+        db,
+        {
+            "operationId": "student-change-after-admin-save",
+            "mutation": {
+                "type": "cell.update",
+                "computerKey": "C1",
+                "dockKey": "D1",
+                "expectedVersion": 2,
+                "cell": {
+                    "compatibilityStatus": "Incompatible",
+                    "notes": "Newer student proposal",
+                },
+            },
+        },
+        actor="student@example.test",
+    )
+    pending_id = workspace["approval"]["pendingChanges"][0]["id"]
+
+    retried, duplicate = apply_admin_mutation(
+        db, request, actor="admin@example.test"
+    )
+
+    assert duplicate is True
+    assert retried["approval"]["pendingCount"] == 1
+    pending = db.get(CompatibilityChangeRequest, pending_id)
+    assert pending.status == "pending"
+    assert pending.proposed_data["notes"] == "Newer student proposal"
+
+
 def test_contributor_change_stays_pending_until_admin_approval(db):
     initial = import_payload(db, _payload(), actor="seed")
     workspace, duplicate = submit_change(
@@ -282,6 +337,21 @@ def test_new_item_is_submitted_and_reviewed_as_a_complete_bundle(db):
     assert workspace["approval"]["pendingCount"] == 0
     bundle_change = workspace["approval"]["draftBundles"][0]
     assert bundle_change["bundle"]["completedCells"] == 2
+    assert [cell["dockKey"] for cell in bundle_change["bundle"]["cells"]] == [
+        "D1",
+        "D2",
+    ]
+    assert bundle_change["bundle"]["cells"][1]["proposedData"][
+        "compatibilityStatus"
+    ] == "Incompatible"
+
+    with pytest.raises(CompatibilityEditorError, match="must submit"):
+        review_change(
+            db,
+            bundle_change["id"],
+            action="approve",
+            actor="admin@example.test",
+        )
 
     submitted = submit_bundle(
         db,
@@ -511,6 +581,94 @@ def test_admin_can_approve_a_complete_new_item_draft_without_submission(db):
     assert approved["approval"]["draftCount"] == 0
     assert approved["approval"]["pendingCount"] == 0
     assert build_payload(db)["docks"]["D3"]["name"] == "Dock Three"
+
+
+def test_deleting_an_axis_rejects_its_pending_cell_changes(db):
+    initial = import_payload(db, _payload(), actor="seed")
+    workspace, _ = submit_change(
+        db,
+        {
+            "operationId": "pending-cell-before-delete",
+            "mutation": {
+                "type": "cell.update",
+                "computerKey": "C1",
+                "dockKey": "D1",
+                "expectedVersion": 1,
+                "cell": {"compatibilityStatus": "Incompatible"},
+            },
+        },
+        actor="student@example.test",
+    )
+    pending_id = workspace["approval"]["pendingChanges"][0]["id"]
+
+    apply_mutation(
+        db,
+        {
+            "operationId": "delete-computer-with-pending-cell",
+            "mutation": {
+                "type": "computer.delete",
+                "computerKey": "C1",
+                "expectedVersion": 1,
+                "expectedRevision": initial["revision"],
+            },
+        },
+        actor="admin@example.test",
+    )
+
+    assert "C1" not in build_payload(db)["computers"]
+    assert get_workspace_document(db)["approval"]["pendingCount"] == 0
+    rejected = db.get(CompatibilityChangeRequest, pending_id)
+    assert rejected.status == "rejected"
+    assert "deleted computer 'C1'" in rejected.review_note
+
+
+def test_replace_import_clears_drafts_and_supersedes_retryable_snapshots(db):
+    import_payload(db, _payload(), actor="seed")
+    snapshot = compatibility_publisher_service.request_publication(
+        db, actor="admin@example.test"
+    )
+    draft_request = {
+        "operationId": "draft-before-replace",
+        "mutation": {
+            "type": "computer.add",
+            "computerKey": "C2",
+            "computer": {"name": "Stale draft"},
+        },
+    }
+    draft_workspace, _ = submit_change(
+        db,
+        draft_request,
+        actor="student@example.test",
+    )
+    draft_id = draft_workspace["approval"]["draftBundles"][0]["id"]
+    replacement = _payload()
+    replacement["computers"]["C1"]["name"] = "Replacement Computer"
+
+    import_payload(db, replacement, actor="admin@example.test", replace=True)
+
+    replaced_draft = db.get(CompatibilityChangeRequest, draft_id)
+    assert replaced_draft.status == "rejected"
+    assert replaced_draft.review_note == "Discarded by authoritative dataset replacement."
+    assert db.get(CompatibilityPublicationSnapshot, snapshot.id).status == "superseded"
+    assert db.get(CompatibilityEditorOperation, "draft-before-replace") is not None
+    workspace = get_workspace_document(db)
+    assert workspace["approval"]["pendingCount"] == 0
+    assert workspace["approval"]["draftCount"] == 0
+    assert workspace["data"]["computers"]["C1"]["name"] == "Replacement Computer"
+
+    replayed, duplicate = submit_change(
+        db, draft_request, actor="student@example.test"
+    )
+    assert duplicate is True
+    assert replayed["approval"]["draftCount"] == 0
+
+
+def test_skus_cannot_contain_target_delimiter():
+    payload = _payload()
+    payload["docks"]["D:3"] = {"name": "Invalid dock"}
+
+    with pytest.raises(CompatibilityEditorError, match="cannot contain ':'"):
+        validate_payload(payload)
 
 
 def test_publisher_writes_only_explicit_snapshot_and_records_revision(db, monkeypatch):

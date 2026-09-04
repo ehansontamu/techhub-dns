@@ -13,10 +13,12 @@ from sqlalchemy.orm import Session
 
 from app.models.compatibility_editor import (
     CompatibilityCell,
+    CompatibilityChangeRequest,
     CompatibilityComputer,
     CompatibilityDock,
     CompatibilityEditorOperation,
     CompatibilityEditorState,
+    CompatibilityPublicationSnapshot,
 )
 from app.services.audit_service import AuditService
 
@@ -92,6 +94,8 @@ def _clean_key(value: Any, field_name: str = "key") -> str:
     key = value.strip()
     if len(key) > 100:
         raise CompatibilityEditorError(f"'{field_name}' cannot exceed 100 characters.")
+    if ":" in key:
+        raise CompatibilityEditorError(f"'{field_name}' cannot contain ':'.")
     return key
 
 
@@ -489,7 +493,20 @@ def import_payload(
         )
 
     try:
-        db.query(CompatibilityEditorOperation).delete(synchronize_session=False)
+        db.query(CompatibilityChangeRequest).filter(
+            CompatibilityChangeRequest.status == "pending"
+        ).update(
+            {
+                "status": "rejected",
+                "reviewed_by": actor,
+                "reviewed_at": datetime.utcnow(),
+                "review_note": "Discarded by authoritative dataset replacement.",
+            },
+            synchronize_session=False,
+        )
+        db.query(CompatibilityPublicationSnapshot).filter(
+            CompatibilityPublicationSnapshot.status.in_(("queued", "failed", "publishing"))
+        ).update({"status": "superseded"}, synchronize_session=False)
         db.query(CompatibilityCell).delete(synchronize_session=False)
         db.query(CompatibilityComputer).delete(synchronize_session=False)
         db.query(CompatibilityDock).delete(synchronize_session=False)
@@ -530,7 +547,10 @@ def import_payload(
         state.review_revision = int(state.review_revision or 0) + 1
         state.published_revision = 0
         state.pending_since = datetime.utcnow()
+        state.last_published_at = None
+        state.last_publish_attempt_at = None
         state.last_publish_error = None
+        state.published_sha256 = None
         state.source_sha256 = source_sha256 or payload_sha256(normalized)
         AuditService(db).log_action(
             "compatibility_editor",
@@ -607,11 +627,57 @@ def _check_document_revision(
         )
 
 
+def _reject_pending_changes_for_deleted_item(
+    db: Session,
+    *,
+    actor: str,
+    computer_key: Optional[str] = None,
+    dock_key: Optional[str] = None,
+) -> None:
+    """Reject pending proposals that cannot survive an approved axis deletion."""
+
+    now = datetime.utcnow()
+    pending_changes = db.query(CompatibilityChangeRequest).filter(
+        CompatibilityChangeRequest.status == "pending"
+    )
+    for change in pending_changes:
+        parts = change.target.split(":")
+        affects_computer = computer_key is not None and (
+            change.target == f"computer:{computer_key}"
+            or (
+                change.mutation_type == "cell.update"
+                and len(parts) == 3
+                and parts[1] == computer_key
+            )
+        )
+        affects_dock = dock_key is not None and (
+            change.target == f"dock:{dock_key}"
+            or (
+                change.mutation_type == "cell.update"
+                and len(parts) == 3
+                and parts[2] == dock_key
+            )
+        )
+        if not affects_computer and not affects_dock:
+            continue
+
+        deleted_label = (
+            f"computer '{computer_key}'"
+            if affects_computer
+            else f"dock '{dock_key}'"
+        )
+        change.status = "rejected"
+        change.reviewed_by = actor
+        change.reviewed_at = now
+        change.review_note = f"Discarded because an admin deleted {deleted_label}."
+
+
 def apply_mutation(
     db: Session,
     request_body: Any,
     *,
     actor: str,
+    commit: bool = True,
 ) -> tuple[dict[str, Any], bool]:
     if not isinstance(request_body, dict):
         raise CompatibilityEditorError("Mutation request must be an object.")
@@ -719,6 +785,9 @@ def apply_mutation(
             db.query(CompatibilityCell).filter(
                 CompatibilityCell.computer_sku == key
             ).delete(synchronize_session=False)
+            _reject_pending_changes_for_deleted_item(
+                db, computer_key=key, actor=actor
+            )
             db.delete(row)
 
         elif mutation_type == "dock.add":
@@ -776,6 +845,7 @@ def apply_mutation(
             db.query(CompatibilityCell).filter(CompatibilityCell.dock_sku == key).delete(
                 synchronize_session=False
             )
+            _reject_pending_changes_for_deleted_item(db, dock_key=key, actor=actor)
             db.delete(row)
 
         else:
@@ -810,7 +880,10 @@ def apply_mutation(
                 "operation_id": operation_id,
             },
         )
-        db.commit()
+        if commit:
+            db.commit()
+        else:
+            db.flush()
     except Exception:
         db.rollback()
         raise

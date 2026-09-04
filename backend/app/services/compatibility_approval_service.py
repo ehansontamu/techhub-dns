@@ -34,6 +34,7 @@ from app.services.compatibility_editor_service import (
     _set_cell_values,
     _set_computer_values,
     _set_dock_values,
+    apply_mutation,
     get_document,
 )
 
@@ -146,6 +147,7 @@ def _bundle_summary(
         return None
 
     completed_keys: set[str] = set()
+    included_cells: list[dict[str, Any]] = []
     child_changes = (
         db.query(CompatibilityChangeRequest)
         .filter(
@@ -164,7 +166,19 @@ def _bundle_summary(
             continue
         if child.proposed_data.get("compatibilityStatus") not in COMPATIBILITY_STATUS_VALUES:
             continue
-        completed_keys.add(child_parts[child_index])
+        required_key = child_parts[child_index]
+        if required_key not in required_keys:
+            continue
+        completed_keys.add(required_key)
+        included_cells.append(
+            {
+                "computerKey": child_parts[1],
+                "dockKey": child_parts[2],
+                "proposedData": copy.deepcopy(child.proposed_data),
+                "updatedBy": child.updated_by,
+                "updatedAt": _iso(child.updated_at),
+            }
+        )
 
     missing_keys = sorted(required_keys - completed_keys)
     return {
@@ -174,6 +188,10 @@ def _bundle_summary(
         "requiredCells": len(required_keys),
         "missingTargets": missing_keys,
         "ready": bool(change.ready_for_review) and not missing_keys,
+        "cells": sorted(
+            included_cells,
+            key=lambda cell: (cell["computerKey"], cell["dockKey"]),
+        ),
     }
 
 
@@ -680,9 +698,16 @@ def review_change(
                 "This new-item bundle is incomplete. Finish all required cells before "
                 "approving it."
             )
+        if (
+            not change.ready_for_review
+            and change.submitted_by.strip().lower() != actor.strip().lower()
+        ):
+            raise CompatibilityEditorError(
+                "The contributor must submit this completed draft before another admin "
+                "can approve it."
+            )
         # The admin-only review endpoint may finalize a complete draft directly.
-        # Contributor submissions still control when an item enters the normal
-        # review queue, but an admin does not need to submit work to themselves.
+        # An admin does not need to submit a draft that they created themselves.
 
     try:
         if action == "reject":
@@ -819,19 +844,49 @@ def review_change(
 def resolve_pending_after_admin_mutation(
     db: Session, request_body: Any, *, actor: str
 ) -> dict[str, Any]:
-    mutation = request_body.get("mutation") if isinstance(request_body, dict) else None
-    if not isinstance(mutation, dict):
-        return get_workspace_document(db)
-    target, _primary, _secondary = _target_for_mutation(mutation)
-    change = _pending_change(db, target)
-    if change is None:
-        return get_workspace_document(db)
-    change.status = APPROVED_STATUS
-    change.proposed_data = copy.deepcopy(
-        mutation.get("cell") or mutation.get("computer") or mutation.get("dock") or {}
-    )
-    change.reviewed_by = actor
-    change.reviewed_at = datetime.utcnow()
-    change.review_note = "Applied through an admin edit."
-    db.commit()
+    try:
+        mutation = request_body.get("mutation") if isinstance(request_body, dict) else None
+        if isinstance(mutation, dict):
+            target, _primary, _secondary = _target_for_mutation(mutation)
+            change = _pending_change(db, target)
+            if change is not None:
+                change.status = APPROVED_STATUS
+                change.proposed_data = copy.deepcopy(
+                    mutation.get("cell")
+                    or mutation.get("computer")
+                    or mutation.get("dock")
+                    or {}
+                )
+                change.reviewed_by = actor
+                change.reviewed_at = datetime.utcnow()
+                change.review_note = "Applied through an admin edit."
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     return get_workspace_document(db)
+
+
+def apply_admin_mutation(
+    db: Session,
+    request_body: Any,
+    *,
+    actor: str,
+) -> tuple[dict[str, Any], bool]:
+    """Atomically apply an admin edit and resolve only the proposal it observed."""
+
+    try:
+        _approved_document, duplicate = apply_mutation(
+            db,
+            request_body,
+            actor=actor,
+            commit=False,
+        )
+        if duplicate:
+            return get_workspace_document(db), True
+        return resolve_pending_after_admin_mutation(
+            db, request_body, actor=actor
+        ), False
+    except Exception:
+        db.rollback()
+        raise

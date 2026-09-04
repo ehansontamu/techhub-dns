@@ -220,7 +220,7 @@ const createCellForm = (
 };
 
 export default function CompatibilityEditor() {
-  const { isAdmin, isLoading: authLoading } = useAuth();
+  const { user, isAdmin, isLoading: authLoading } = useAuth();
   const [payload, setPayload] = useState<CompatibilityEditorPayload | null>(null);
   const [versions, setVersions] = useState<CompatibilityEditorVersions | null>(null);
   const [approvedVersions, setApprovedVersions] = useState<CompatibilityEditorVersions | null>(null);
@@ -280,6 +280,10 @@ export default function CompatibilityEditor() {
     cellForm
     && initialCellForm
     && JSON.stringify(cellForm) !== JSON.stringify(initialCellForm)
+  );
+  const isOwnDraft = (change: CompatibilityEditorChange): boolean => Boolean(
+    user?.email
+    && change.submittedBy.trim().toLowerCase() === user.email.trim().toLowerCase()
   );
 
   const applyDocument = useCallback((document: CompatibilityEditorDocument) => {
@@ -435,6 +439,10 @@ export default function CompatibilityEditor() {
       toast.error("SKU and name are required");
       return;
     }
+    if (sku.includes(":")) {
+      toast.error("SKU cannot contain a colon (:)");
+      return;
+    }
 
     if (addItemKind === "computer" && payload.computers[sku]) {
       toast.error("A computer with that SKU already exists");
@@ -583,6 +591,7 @@ export default function CompatibilityEditor() {
       const newlyCompletedBundles = document.approval.draftBundles.filter(
         (change) => relatedBundleTargets.has(change.target)
           && isBundleComplete(change)
+          && (!isAdmin || isOwnDraft(change))
           && !completedBundleTargetsBeforeSave.has(change.target)
       );
       if (newlyCompletedBundles.length) {
@@ -873,6 +882,9 @@ export default function CompatibilityEditor() {
               {computerKeys.map((computerKey) => {
                 const computer = payload.computers[computerKey];
                 const bundleChange = bundleChangesByTarget.get(`computer:${computerKey}`);
+                const canCompleteBundle = Boolean(
+                  bundleChange && (!isAdmin || isOwnDraft(bundleChange))
+                );
                 return (
                   <MatrixItemRow
                     key={computerKey}
@@ -891,7 +903,7 @@ export default function CompatibilityEditor() {
                     removable={isAdmin && !computer.studentEdited && !publishing}
                     onSave={(value, expectedVersion) => saveComputer(computerKey, { ...computer, ...value }, expectedVersion)}
                     onRemove={() => void removeComputer(computerKey)}
-                    onCompleteBundle={bundleChange ? () => {
+                    onCompleteBundle={canCompleteBundle && bundleChange ? () => {
                       if (isAdmin) {
                         void reviewPendingChange(bundleChange, "approve");
                       } else {
@@ -918,6 +930,9 @@ export default function CompatibilityEditor() {
               {dockKeys.map((dockKey) => {
                 const dock = payload.docks[dockKey];
                 const bundleChange = bundleChangesByTarget.get(`dock:${dockKey}`);
+                const canCompleteBundle = Boolean(
+                  bundleChange && (!isAdmin || isOwnDraft(bundleChange))
+                );
                 return (
                   <MatrixItemRow
                     key={dockKey}
@@ -936,7 +951,7 @@ export default function CompatibilityEditor() {
                     removable={isAdmin && !dock.studentEdited && !publishing}
                     onSave={(value, expectedVersion) => saveDock(dockKey, { ...dock, ...value }, expectedVersion)}
                     onRemove={() => void removeDock(dockKey)}
-                    onCompleteBundle={bundleChange ? () => {
+                    onCompleteBundle={canCompleteBundle && bundleChange ? () => {
                       if (isAdmin) {
                         void reviewPendingChange(bundleChange, "approve");
                       } else {
@@ -976,8 +991,13 @@ export default function CompatibilityEditor() {
                             </div>
                             <p className="mt-1 text-xs text-muted-foreground">
                               {isBundleComplete(change)
-                                ? "All required cells are complete. You can approve this item directly."
+                                ? isOwnDraft(change)
+                                  ? "All required cells are complete. You can approve your draft directly."
+                                  : "All required cells are complete. Waiting for the contributor to submit this item."
                                 : `${change.bundle?.completedCells ?? 0} of ${change.bundle?.requiredCells ?? 0} required cells completed.`}
+                            </p>
+                            <p className="mt-1 text-xs text-muted-foreground">
+                              Created by {change.submittedBy}
                             </p>
                           </div>
                           <div className="flex gap-2">
@@ -990,7 +1010,7 @@ export default function CompatibilityEditor() {
                               {reviewingId === change.id ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <X className="mr-2 h-4 w-4" />}
                               Reject draft
                             </Button>
-                            {isBundleComplete(change) ? (
+                            {isBundleComplete(change) && isOwnDraft(change) ? (
                               <Button
                                 type="button"
                                 onClick={() => void reviewPendingChange(change, "approve")}
@@ -1261,7 +1281,7 @@ export default function CompatibilityEditor() {
             </Button>
             <Button type="button" onClick={() => void addItem()} disabled={saving || publishing}>
               {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Plus className="mr-2 h-4 w-4" />}
-              {isAdmin ? "Add" : "Submit for Review"}
+              Create Draft
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1285,6 +1305,16 @@ const formatReviewValue = (value: unknown): string => {
   }
   return String(value);
 };
+
+const REVIEW_CELL_FIELDS = [
+  { key: "compatibilityStatus", label: "Overall compatibility" },
+  ...COMPATIBILITY_EDITOR_DETAIL_FIELDS.map((field) => ({
+    key: field,
+    label: COMPATIBILITY_EDITOR_DETAIL_LABELS[field],
+  })),
+  { key: "rebootNeeded", label: "Reboot needed" },
+  { key: "notes", label: "Notes" },
+];
 
 function ReviewSetting({ label, value }: { label: string; value: unknown }) {
   return (
@@ -1387,6 +1417,42 @@ function ReviewChangeDetails({ change }: { change: CompatibilityEditorChange }) 
             ) : null}
           </dl>
         </section>
+        {change.bundle?.cells?.length ? (
+          <section className="rounded-lg border bg-background p-4">
+            <h3 className="font-semibold text-foreground">Included compatibility results</h3>
+            <p className="mt-1 text-sm text-muted-foreground">
+              These cell values will all be approved with this {axis}.
+            </p>
+            <div className="mt-3 space-y-3">
+              {change.bundle.cells.map((cell) => (
+                <div key={`${cell.computerKey}:${cell.dockKey}`} className="rounded-md border p-3">
+                  <div className="mb-3 text-sm font-medium text-foreground">
+                    Computer <span className="font-mono">{cell.computerKey}</span>
+                    {" · "}
+                    Dock <span className="font-mono">{cell.dockKey}</span>
+                  </div>
+                  <dl className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                    {REVIEW_CELL_FIELDS.map((field) => (
+                      <ReviewSetting
+                        key={field.key}
+                        label={field.label}
+                        value={cell.proposedData[field.key]}
+                      />
+                    ))}
+                  </dl>
+                </div>
+              ))}
+            </div>
+            <details className="mt-3 rounded-md border bg-muted/20">
+              <summary className="cursor-pointer px-3 py-2 text-sm font-medium text-muted-foreground hover:text-foreground">
+                View included cell JSON
+              </summary>
+              <pre className="max-h-64 overflow-auto border-t p-3 text-xs">
+                {JSON.stringify(change.bundle.cells, null, 2)}
+              </pre>
+            </details>
+          </section>
+        ) : null}
         <RawJsonDetails change={change} />
       </div>
     );
@@ -1394,15 +1460,6 @@ function ReviewChangeDetails({ change }: { change: CompatibilityEditorChange }) 
 
   if (change.mutationType === "cell.update") {
     const parts = change.target.split(":");
-    const fields = [
-      { key: "compatibilityStatus", label: "Overall compatibility" },
-      ...COMPATIBILITY_EDITOR_DETAIL_FIELDS.map((field) => ({
-        key: field,
-        label: COMPATIBILITY_EDITOR_DETAIL_LABELS[field],
-      })),
-      { key: "rebootNeeded", label: "Reboot needed" },
-      { key: "notes", label: "Notes" },
-    ];
 
     return (
       <div className="mt-4 space-y-3">
@@ -1414,7 +1471,7 @@ function ReviewChangeDetails({ change }: { change: CompatibilityEditorChange }) 
             Dock <span className="font-mono text-foreground">{parts[2] ?? "Unknown"}</span>
           </p>
         </div>
-        <ReviewComparison fields={fields} currentData={change.currentData} proposedData={change.proposedData} />
+        <ReviewComparison fields={REVIEW_CELL_FIELDS} currentData={change.currentData} proposedData={change.proposedData} />
         <RawJsonDetails change={change} />
       </div>
     );

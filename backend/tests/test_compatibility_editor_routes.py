@@ -125,7 +125,7 @@ def test_admin_pending_item_update_remains_a_proposal(monkeypatch):
         return _document(), False
 
     monkeypatch.setattr(
-        system_routes, "apply_compatibility_editor_mutation", fake_apply
+        system_routes, "apply_compatibility_admin_mutation", fake_apply
     )
     monkeypatch.setattr(
         system_routes, "submit_compatibility_editor_change", fake_submit
@@ -169,7 +169,7 @@ def test_admin_add_starts_as_a_draft_proposal(monkeypatch):
         raise AssertionError("Admin additions must not bypass the draft workflow.")
 
     monkeypatch.setattr(
-        system_routes, "apply_compatibility_editor_mutation", fail_if_applied
+        system_routes, "apply_compatibility_admin_mutation", fail_if_applied
     )
     submitted = []
 

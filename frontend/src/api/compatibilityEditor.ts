@@ -120,6 +120,13 @@ export interface CompatibilityEditorBundle {
   requiredCells: number;
   missingTargets: string[];
   ready: boolean;
+  cells?: Array<{
+    computerKey: string;
+    dockKey: string;
+    proposedData: Record<string, unknown>;
+    updatedBy: string;
+    updatedAt: string | null;
+  }>;
 }
 
 export interface CompatibilityEditorApproval {

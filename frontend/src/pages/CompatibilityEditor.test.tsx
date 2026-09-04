@@ -98,6 +98,17 @@ const readyComputerChange: CompatibilityEditorChange = {
     requiredCells: 1,
     missingTargets: [],
     ready: true,
+    cells: [{
+      computerKey: "C2",
+      dockKey: "D1",
+      proposedData: {
+        compatibilityStatus: "Partially Compatible",
+        display: "Functional",
+        notes: "One display only",
+      },
+      updatedBy: "student@example.test",
+      updatedAt: "2026-08-28T12:01:00Z",
+    }],
   },
   submittedBy: "student@example.test",
   updatedBy: "student@example.test",
@@ -199,6 +210,10 @@ describe("CompatibilityEditor", () => {
     expect(await screen.findByText(/cannot update the website JSON directly/i)).toBeInTheDocument();
     expect(mockedApi.getData).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("button", { name: "Save to WebDAV" })).not.toBeInTheDocument();
+
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Computers" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    expect(screen.getByRole("button", { name: "Create Draft" })).toBeInTheDocument();
   });
 
   it("lets a contributor submit a completed new-item bundle", async () => {
@@ -264,7 +279,7 @@ describe("CompatibilityEditor", () => {
     render(<CompatibilityEditor />);
 
     expect(await screen.findByTitle("New Computer / Dock: Draft saved · Compatible")).toHaveTextContent("✓ Yes");
-    fireEvent.click(await screen.findByRole("tab", { name: "Computers" }));
+    fireEvent.mouseDown(await screen.findByRole("tab", { name: "Computers" }));
     fireEvent.click(screen.getByRole("button", { name: "Submit item for review" }));
 
     await waitFor(() => expect(mockedApi.submitBundle).toHaveBeenCalledWith("bundle-1"));
@@ -326,7 +341,7 @@ describe("CompatibilityEditor", () => {
 
     render(<CompatibilityEditor />);
 
-    fireEvent.click(await screen.findByRole("tab", { name: "Computers" }));
+    fireEvent.mouseDown(await screen.findByRole("tab", { name: "Computers" }));
     const nameInput = screen.getByLabelText("Name for C2");
     const urlInput = screen.getByLabelText("URL for C2");
     expect(nameInput).toBeEnabled();
@@ -421,7 +436,7 @@ describe("CompatibilityEditor", () => {
 
     render(<CompatibilityEditor />);
 
-    fireEvent.click(await screen.findByRole("tab", { name: "Docks" }));
+    fireEvent.mouseDown(await screen.findByRole("tab", { name: "Docks" }));
     const nameInput = screen.getByLabelText("Name for D2");
     const urlInput = screen.getByLabelText("URL for D2");
     expect(nameInput).toBeEnabled();
@@ -449,12 +464,16 @@ describe("CompatibilityEditor", () => {
 
     render(<CompatibilityEditor />);
 
-    fireEvent.click(await screen.findByRole("tab", { name: "Review (1)" }));
+    fireEvent.mouseDown(await screen.findByRole("tab", { name: "Review (1)" }));
 
     expect(screen.getByRole("heading", { name: "New computer" })).toBeInTheDocument();
     expect(screen.getByText(/No approved computer with this SKU exists yet/i)).toBeInTheDocument();
     expect(screen.getByText("Product URL")).toBeInTheDocument();
     expect(screen.getByText("Website visibility")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Included compatibility results" })).toBeInTheDocument();
+    expect(screen.getByText("Partially Compatible")).toBeInTheDocument();
+    expect(screen.getByText("One display only")).toBeInTheDocument();
+    expect(screen.getByText("View included cell JSON")).toBeInTheDocument();
     expect(screen.getByText("View raw JSON")).toBeInTheDocument();
   });
 
@@ -463,7 +482,7 @@ describe("CompatibilityEditor", () => {
     const confirm = vi.spyOn(window, "confirm").mockReturnValueOnce(false).mockReturnValueOnce(true);
 
     render(<CompatibilityEditor />);
-    fireEvent.click(await screen.findByRole("tab", { name: "Review (1)" }));
+    fireEvent.mouseDown(await screen.findByRole("tab", { name: "Review (1)" }));
 
     fireEvent.click(screen.getByRole("button", { name: "Reject" }));
     expect(confirm).toHaveBeenCalledWith(expect.stringMatching(/discard the item and all 1 saved compatibility cell/i));
@@ -595,6 +614,8 @@ describe("CompatibilityEditor", () => {
     const completedDraft: CompatibilityEditorChange = {
       ...readyComputerChange,
       id: "admin-completed-draft",
+      submittedBy: "admin@example.test",
+      updatedBy: "admin@example.test",
       readyForReview: false,
       bundle: {
         ...readyComputerChange.bundle!,
@@ -633,12 +654,39 @@ describe("CompatibilityEditor", () => {
 
     render(<CompatibilityEditor />);
 
-    fireEvent.click(await screen.findByRole("tab", { name: "Computers" }));
+    fireEvent.mouseDown(await screen.findByRole("tab", { name: "Computers" }));
     fireEvent.click(screen.getByRole("button", { name: "Approve item" }));
 
     await waitFor(() => expect(mockedApi.review).toHaveBeenCalledWith(
       "admin-completed-draft",
       "approve"
     ));
+  });
+
+  it("does not let an admin approve another contributor's unsubmitted draft", async () => {
+    const studentDraft: CompatibilityEditorChange = {
+      ...readyComputerChange,
+      id: "student-completed-draft",
+      readyForReview: false,
+      bundle: {
+        ...readyComputerChange.bundle!,
+        ready: false,
+      },
+    };
+    mockedApi.getData.mockResolvedValueOnce({
+      ...document,
+      approval: {
+        pendingCount: 0,
+        pendingChanges: [],
+        draftCount: 1,
+        draftBundles: [studentDraft],
+      },
+    });
+
+    render(<CompatibilityEditor />);
+    fireEvent.mouseDown(await screen.findByRole("tab", { name: "Review (1)" }));
+
+    expect(screen.getByText(/Waiting for the contributor to submit this item/i)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Approve item" })).not.toBeInTheDocument();
   });
 });
