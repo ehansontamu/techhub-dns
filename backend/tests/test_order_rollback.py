@@ -181,7 +181,16 @@ def test_rma_reopen_refreshes_snapshot_and_resets_workflow(monkeypatch):
 
     refreshed_snapshot = {
         "orderNumber": "TH123",
-        "pickLines": [{"productId": "new-product"}],
+        "pickLines": [
+            {
+                "productId": "new-product",
+                "quantity": {"standardQuantity": "4"},
+            },
+            {
+                "productId": "new-product",
+                "quantity": {"standardQuantity": "1"},
+            },
+        ],
         "packLines": [
             {
                 "salesOrderPackLineId": "pack-before-rma",
@@ -223,11 +232,18 @@ def test_rma_reopen_refreshes_snapshot_and_resets_workflow(monkeypatch):
     assert result.signature_captured_at is None
     assert result.tagged_at is None
     assert result.shipping_workflow_status == ShippingWorkflowStatus.WORK_AREA.value
-    assert result.inflow_data["pickLines"] == [{"productId": "new-product"}]
+    assert result.inflow_data["pickLines"] == [
+        {
+            "productId": "new-product",
+            "quantity": {"standardQuantity": "1"},
+        }
+    ]
     assert result.inflow_data["packLines"] == []
     assert result.inflow_data["shipLines"] == []
     assert result.inflow_data[OrderService.RMA_FULFILLMENT_BASELINE_KEY] == {
         "pack_line_quantities": {"id:pack-before-rma": 4.0},
+        "packed_product_quantities": {"new-product": 4.0},
+        "packed_product_serials": {},
         "ship_line_keys": ["id:ship-before-rma"],
     }
     assert db.committed is True
@@ -330,6 +346,12 @@ def test_rma_merge_hides_old_fulfillment_and_keeps_replacement_delta():
     merged = service.merge_inflow_snapshot_preserving_split(
         order,
         {
+            "pickLines": [
+                {
+                    "productId": "laptop",
+                    "quantity": {"standardQuantity": "5"},
+                }
+            ],
             "packLines": [
                 {
                     "salesOrderPackLineId": "pack-before-rma",
@@ -364,9 +386,18 @@ def test_rma_merge_hides_old_fulfillment_and_keeps_replacement_delta():
     assert merged["shipLines"] == [
         {"salesOrderShipLineId": "ship-replacement"}
     ]
-    assert merged[OrderService.RMA_FULFILLMENT_BASELINE_KEY] == (
-        order.inflow_data[OrderService.RMA_FULFILLMENT_BASELINE_KEY]
-    )
+    assert merged["pickLines"] == [
+        {
+            "productId": "laptop",
+            "quantity": {"standardQuantity": "1"},
+        }
+    ]
+    assert merged[OrderService.RMA_FULFILLMENT_BASELINE_KEY] == {
+        "pack_line_quantities": {"id:pack-before-rma": 4.0},
+        "packed_product_quantities": {"laptop": 4.0},
+        "packed_product_serials": {},
+        "ship_line_keys": ["id:ship-before-rma"],
+    }
     print("[PASS] RMA merge hides old fulfillment and keeps replacement delta")
 
 
