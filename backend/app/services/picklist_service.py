@@ -195,11 +195,6 @@ class PicklistService:
             pdf.drawString(x_offset, y_offset, line)
             y_offset -= 14
 
-        # Signature line
-        pdf.setFont("Helvetica", 12)
-        pdf.drawString(x_offset, 70, "Customer Signature:")
-        pdf.line(x_offset, 60, x_offset + 500, 60)
-
         pdf.save()
         logger.info(f"Picklist PDF generated: {output_path}")
 
