@@ -216,12 +216,13 @@ class OrderService:
         }
 
     @classmethod
-    def _remove_rma_baseline_picks(
+    def _remove_rma_baseline_quantities(
         cls,
         snapshot: Dict[str, Any],
         baseline: Dict[str, Any],
+        field_name: str,
     ) -> list[Dict[str, Any]]:
-        """Remove pre-RMA cumulative picks from a freshly fetched InFlow snapshot."""
+        """Remove quantities delivered before an RMA from an InFlow line list."""
         remaining_quantities = {
             str(product_id): float(quantity or 0)
             for product_id, quantity in (
@@ -236,30 +237,32 @@ class OrderService:
             if isinstance(serials, list)
         }
 
-        visible_pick_lines: list[Dict[str, Any]] = []
-        for pick_line in snapshot.get("pickLines", []) or []:
-            if not isinstance(pick_line, dict):
+        visible_lines: list[Dict[str, Any]] = []
+        for source_line in snapshot.get(field_name, []) or []:
+            if not isinstance(source_line, dict):
                 continue
 
-            product_id = pick_line.get("productId")
+            product_id = source_line.get("productId")
             if product_id is None:
-                visible_pick_lines.append(deepcopy(pick_line))
+                visible_lines.append(deepcopy(source_line))
                 continue
 
             product_key = str(product_id)
-            picked_quantity = cls._standard_quantity(pick_line)
+            source_quantity = cls._standard_quantity(source_line)
             baseline_quantity = remaining_quantities.get(product_key, 0.0)
-            quantity = pick_line.get("quantity")
+            quantity = source_line.get("quantity")
             serials = quantity.get("serialNumbers", []) if isinstance(quantity, dict) else []
-            picked_serials = [str(serial) for serial in serials if serial is not None] if isinstance(serials, list) else []
+            source_serials = [
+                str(serial) for serial in serials if serial is not None
+            ] if isinstance(serials, list) else []
 
-            if picked_serials:
+            if source_serials:
                 baseline_serials = remaining_serials.get(product_key, set())
                 visible_serials = [
-                    serial for serial in picked_serials if serial not in baseline_serials
+                    serial for serial in source_serials if serial not in baseline_serials
                 ]
-                removed_quantity = len(picked_serials) - len(visible_serials)
-                remaining_serials[product_key] = baseline_serials.difference(picked_serials)
+                removed_quantity = len(source_serials) - len(visible_serials)
+                remaining_serials[product_key] = baseline_serials.difference(source_serials)
                 remaining_quantities[product_key] = max(
                     baseline_quantity - removed_quantity, 0.0
                 )
@@ -267,24 +270,24 @@ class OrderService:
                     continue
 
                 visible_line = cls._with_standard_quantity(
-                    pick_line, float(len(visible_serials))
+                    source_line, float(len(visible_serials))
                 )
                 visible_quantity = visible_line.get("quantity")
                 if isinstance(visible_quantity, dict):
                     visible_quantity["serialNumbers"] = visible_serials
-                visible_pick_lines.append(visible_line)
+                visible_lines.append(visible_line)
                 continue
 
-            removed_quantity = min(picked_quantity, baseline_quantity)
-            visible_quantity = picked_quantity - removed_quantity
+            removed_quantity = min(source_quantity, baseline_quantity)
+            visible_quantity = source_quantity - removed_quantity
             remaining_quantities[product_key] = baseline_quantity - removed_quantity
             if visible_quantity <= 0:
                 continue
-            visible_pick_lines.append(
-                cls._with_standard_quantity(pick_line, visible_quantity)
+            visible_lines.append(
+                cls._with_standard_quantity(source_line, visible_quantity)
             )
 
-        return visible_pick_lines
+        return visible_lines
 
     @classmethod
     def _enrich_rma_fulfillment_baseline(
@@ -360,10 +363,13 @@ class OrderService:
         baseline = cls._enrich_rma_fulfillment_baseline(baseline, merged)
         merged[cls.RMA_FULFILLMENT_BASELINE_KEY] = deepcopy(baseline)
 
-        # InFlow pickLines are cumulative. After an RMA reopen, remove the
-        # quantities packed before the new fulfillment cycle so tag eligibility
-        # and picklists only see newly picked items.
-        merged["pickLines"] = cls._remove_rma_baseline_picks(merged, baseline)
+        # InFlow lines and pickLines are cumulative. After an RMA reopen,
+        # remove quantities packed before the new fulfillment cycle so tag
+        # eligibility, partial-order detection, and picklists see only new work.
+        for field_name in ("lines", "pickLines"):
+            merged[field_name] = cls._remove_rma_baseline_quantities(
+                merged, baseline, field_name
+            )
 
         remaining_pack_quantities = {
             str(key): float(value)
@@ -2096,10 +2102,12 @@ class OrderService:
         refreshed_snapshot[self.RMA_FULFILLMENT_BASELINE_KEY] = (
             self._capture_rma_fulfillment_baseline(refreshed_snapshot)
         )
-        refreshed_snapshot["pickLines"] = self._remove_rma_baseline_picks(
-            refreshed_snapshot,
-            refreshed_snapshot[self.RMA_FULFILLMENT_BASELINE_KEY],
-        )
+        for field_name in ("lines", "pickLines"):
+            refreshed_snapshot[field_name] = self._remove_rma_baseline_quantities(
+                refreshed_snapshot,
+                refreshed_snapshot[self.RMA_FULFILLMENT_BASELINE_KEY],
+                field_name,
+            )
         refreshed_snapshot["packLines"] = []
         refreshed_snapshot["shipLines"] = []
 

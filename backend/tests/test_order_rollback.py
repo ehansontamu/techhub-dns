@@ -181,6 +181,12 @@ def test_rma_reopen_refreshes_snapshot_and_resets_workflow(monkeypatch):
 
     refreshed_snapshot = {
         "orderNumber": "TH123",
+        "lines": [
+            {
+                "productId": "new-product",
+                "quantity": {"standardQuantity": "5"},
+            }
+        ],
         "pickLines": [
             {
                 "productId": "new-product",
@@ -233,6 +239,12 @@ def test_rma_reopen_refreshes_snapshot_and_resets_workflow(monkeypatch):
     assert result.tagged_at is None
     assert result.shipping_workflow_status == ShippingWorkflowStatus.WORK_AREA.value
     assert result.inflow_data["pickLines"] == [
+        {
+            "productId": "new-product",
+            "quantity": {"standardQuantity": "1"},
+        }
+    ]
+    assert result.inflow_data["lines"] == [
         {
             "productId": "new-product",
             "quantity": {"standardQuantity": "1"},
@@ -346,6 +358,12 @@ def test_rma_merge_hides_old_fulfillment_and_keeps_replacement_delta():
     merged = service.merge_inflow_snapshot_preserving_split(
         order,
         {
+            "lines": [
+                {
+                    "productId": "laptop",
+                    "quantity": {"standardQuantity": "5"},
+                }
+            ],
             "pickLines": [
                 {
                     "productId": "laptop",
@@ -387,6 +405,12 @@ def test_rma_merge_hides_old_fulfillment_and_keeps_replacement_delta():
         {"salesOrderShipLineId": "ship-replacement"}
     ]
     assert merged["pickLines"] == [
+        {
+            "productId": "laptop",
+            "quantity": {"standardQuantity": "1"},
+        }
+    ]
+    assert merged["lines"] == [
         {
             "productId": "laptop",
             "quantity": {"standardQuantity": "1"},
