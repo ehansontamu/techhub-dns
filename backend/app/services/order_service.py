@@ -168,6 +168,8 @@ class OrderService:
         snapshot: Dict[str, Any],
     ) -> Dict[str, Any]:
         pack_quantities: Dict[str, float] = {}
+        packed_product_quantities: Dict[str, float] = {}
+        packed_product_serials: Dict[str, list[str]] = {}
         for pack_line in snapshot.get("packLines", []) or []:
             if not isinstance(pack_line, dict):
                 continue
@@ -178,6 +180,22 @@ class OrderService:
                 pack_quantities[line_key] = (
                     pack_quantities.get(line_key, 0.0)
                     + cls._standard_quantity(pack_line)
+                )
+
+            product_id = pack_line.get("productId")
+            if product_id is None:
+                continue
+
+            product_key = str(product_id)
+            packed_product_quantities[product_key] = (
+                packed_product_quantities.get(product_key, 0.0)
+                + cls._standard_quantity(pack_line)
+            )
+            quantity = pack_line.get("quantity")
+            serials = quantity.get("serialNumbers", []) if isinstance(quantity, dict) else []
+            if isinstance(serials, list) and serials:
+                packed_product_serials.setdefault(product_key, []).extend(
+                    str(serial) for serial in serials if serial is not None
                 )
 
         ship_line_keys = []
@@ -192,8 +210,140 @@ class OrderService:
 
         return {
             "pack_line_quantities": pack_quantities,
+            "packed_product_quantities": packed_product_quantities,
+            "packed_product_serials": packed_product_serials,
             "ship_line_keys": ship_line_keys,
         }
+
+    @classmethod
+    def _remove_rma_baseline_quantities(
+        cls,
+        snapshot: Dict[str, Any],
+        baseline: Dict[str, Any],
+        field_name: str,
+    ) -> list[Dict[str, Any]]:
+        """Remove quantities delivered before an RMA from an InFlow line list."""
+        remaining_quantities = {
+            str(product_id): float(quantity or 0)
+            for product_id, quantity in (
+                baseline.get("packed_product_quantities", {}) or {}
+            ).items()
+        }
+        remaining_serials = {
+            str(product_id): {str(serial) for serial in serials if serial is not None}
+            for product_id, serials in (
+                baseline.get("packed_product_serials", {}) or {}
+            ).items()
+            if isinstance(serials, list)
+        }
+
+        visible_lines: list[Dict[str, Any]] = []
+        for source_line in snapshot.get(field_name, []) or []:
+            if not isinstance(source_line, dict):
+                continue
+
+            product_id = source_line.get("productId")
+            if product_id is None:
+                visible_lines.append(deepcopy(source_line))
+                continue
+
+            product_key = str(product_id)
+            source_quantity = cls._standard_quantity(source_line)
+            baseline_quantity = remaining_quantities.get(product_key, 0.0)
+            quantity = source_line.get("quantity")
+            serials = quantity.get("serialNumbers", []) if isinstance(quantity, dict) else []
+            source_serials = [
+                str(serial) for serial in serials if serial is not None
+            ] if isinstance(serials, list) else []
+
+            if source_serials:
+                baseline_serials = remaining_serials.get(product_key, set())
+                visible_serials = [
+                    serial for serial in source_serials if serial not in baseline_serials
+                ]
+                removed_quantity = len(source_serials) - len(visible_serials)
+                remaining_serials[product_key] = baseline_serials.difference(source_serials)
+                remaining_quantities[product_key] = max(
+                    baseline_quantity - removed_quantity, 0.0
+                )
+                if not visible_serials:
+                    continue
+
+                visible_line = cls._with_standard_quantity(
+                    source_line, float(len(visible_serials))
+                )
+                visible_quantity = visible_line.get("quantity")
+                if isinstance(visible_quantity, dict):
+                    visible_quantity["serialNumbers"] = visible_serials
+                visible_lines.append(visible_line)
+                continue
+
+            removed_quantity = min(source_quantity, baseline_quantity)
+            visible_quantity = source_quantity - removed_quantity
+            remaining_quantities[product_key] = baseline_quantity - removed_quantity
+            if visible_quantity <= 0:
+                continue
+            visible_lines.append(
+                cls._with_standard_quantity(source_line, visible_quantity)
+            )
+
+        return visible_lines
+
+    @classmethod
+    def _enrich_rma_fulfillment_baseline(
+        cls,
+        baseline: Dict[str, Any],
+        snapshot: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Add product metadata to RMA baselines created before it was tracked."""
+        if baseline.get("packed_product_quantities"):
+            return baseline
+
+        remaining_by_line = {
+            str(line_key): float(quantity or 0)
+            for line_key, quantity in (
+                baseline.get("pack_line_quantities", {}) or {}
+            ).items()
+        }
+        product_quantities: Dict[str, float] = {}
+        product_serials: Dict[str, list[str]] = {}
+        for pack_line in snapshot.get("packLines", []) or []:
+            if not isinstance(pack_line, dict):
+                continue
+            line_key = cls._fulfillment_line_key(
+                pack_line, "salesOrderPackLineId"
+            )
+            product_id = pack_line.get("productId")
+            baseline_quantity = remaining_by_line.get(line_key or "", 0.0)
+            if product_id is None or baseline_quantity <= 0:
+                continue
+
+            packed_quantity = min(
+                cls._standard_quantity(pack_line), baseline_quantity
+            )
+            product_key = str(product_id)
+            product_quantities[product_key] = (
+                product_quantities.get(product_key, 0.0) + packed_quantity
+            )
+            remaining_by_line[line_key] = baseline_quantity - packed_quantity
+            quantity = pack_line.get("quantity")
+            serials = (
+                quantity.get("serialNumbers", [])
+                if isinstance(quantity, dict)
+                else []
+            )
+            if isinstance(serials, list) and serials:
+                product_serials.setdefault(product_key, []).extend(
+                    str(serial) for serial in serials if serial is not None
+                )
+
+        if not product_quantities:
+            return baseline
+
+        enriched = deepcopy(baseline)
+        enriched["packed_product_quantities"] = product_quantities
+        enriched["packed_product_serials"] = product_serials
+        return enriched
 
     @classmethod
     def _apply_rma_fulfillment_baseline(
@@ -210,6 +360,16 @@ class OrderService:
         baseline = current_snapshot.get(cls.RMA_FULFILLMENT_BASELINE_KEY)
         if not isinstance(baseline, dict):
             return merged
+        baseline = cls._enrich_rma_fulfillment_baseline(baseline, merged)
+        merged[cls.RMA_FULFILLMENT_BASELINE_KEY] = deepcopy(baseline)
+
+        # InFlow lines and pickLines are cumulative. After an RMA reopen,
+        # remove quantities packed before the new fulfillment cycle so tag
+        # eligibility, partial-order detection, and picklists see only new work.
+        for field_name in ("lines", "pickLines"):
+            merged[field_name] = cls._remove_rma_baseline_quantities(
+                merged, baseline, field_name
+            )
 
         remaining_pack_quantities = {
             str(key): float(value)
@@ -1942,6 +2102,12 @@ class OrderService:
         refreshed_snapshot[self.RMA_FULFILLMENT_BASELINE_KEY] = (
             self._capture_rma_fulfillment_baseline(refreshed_snapshot)
         )
+        for field_name in ("lines", "pickLines"):
+            refreshed_snapshot[field_name] = self._remove_rma_baseline_quantities(
+                refreshed_snapshot,
+                refreshed_snapshot[self.RMA_FULFILLMENT_BASELINE_KEY],
+                field_name,
+            )
         refreshed_snapshot["packLines"] = []
         refreshed_snapshot["shipLines"] = []
 

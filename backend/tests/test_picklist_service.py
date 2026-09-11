@@ -118,6 +118,8 @@ def test_wrap_text_with_newlines():
 
 def test_generate_picklist_pdf():
     """Test PDF generation creates a file"""
+    from pypdf import PdfReader
+
     from app.services.picklist_service import PicklistService
 
     # Create temp directory
@@ -136,6 +138,8 @@ def test_generate_picklist_pdf():
     # Verify file was created
     assert output_path.exists(), "PDF file should be created"
     assert output_path.stat().st_size > 0, "PDF file should not be empty"
+    pdf_text = "\n".join(page.extract_text() or "" for page in PdfReader(output_path).pages)
+    assert "Customer Signature:" not in pdf_text
 
     print(
         f"[PASS] generate_picklist_pdf test passed (file size: {output_path.stat().st_size} bytes)"
