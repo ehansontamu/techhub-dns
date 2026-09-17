@@ -119,7 +119,7 @@ class ProductCheckerService:
         job = {
             "id": uuid4().hex, "status": "running", "started_at": _now(),
             "finished_at": None, "started_by": actor, "progress": 0,
-            "message": "Starting a scan of visible BigCommerce products and inFlow records…", "error": None,
+            "message": "Loading catalogs for product checks and record links…", "error": None,
         }
         try:
             self._write("job.json", job)
@@ -137,7 +137,8 @@ class ProductCheckerService:
                 self._write("job.json", job)
 
             report = self._scan(progress)
-            report.update(completed_at=_now(), started_by=job["started_by"], job_id=job["id"])
+            report.update(completed_at=_now(), started_by=job["started_by"], job_id=job["id"],
+                          bigcommerce_store_id=self.settings.inventory_reorder_bigcommerce_store_id)
             # A failed scan never replaces the last complete comparison.
             self._write("report.json", report)
             job.update(status="completed", finished_at=report["completed_at"], progress=100,
@@ -170,7 +171,7 @@ class ProductCheckerService:
         headers = {"X-Auth-Token": self.settings.inventory_reorder_bigcommerce_token, "Accept": "application/json"}
         rows, page = [], 1
         while True:
-            catalog_part = "visible products" if path == "products" else f"variants for visible product {path.split('/')[1]}"
+            catalog_part = "products (hidden products supply links only)" if path == "products" else f"variants for product {path.split('/')[1]}"
             progress(f"Loading BigCommerce {catalog_part}, page {page}…", percentage)
             payload = self._get(session, url, headers, {**params, "limit": 250, "page": page}, "BigCommerce")
             batch = payload.get("data") if isinstance(payload, dict) else None
@@ -192,12 +193,17 @@ class ProductCheckerService:
                 total=3, backoff_factor=1, status_forcelist=(429, 500, 502, 503, 504),
                 allowed_methods=frozenset({"GET"}), respect_retry_after_header=True,
             )))
-            products = self._bigcommerce_pages(session, "products", {"is_visible": "true"}, progress, 5)
+            all_products = self._bigcommerce_pages(session, "products", {}, progress, 5)
+            # The API includes is_visible in the product payload. Fail closed if
+            # that flag is absent, rather than accidentally compare hidden items.
+            if any(not isinstance(product.get("is_visible"), bool) for product in all_products):
+                raise ExternalServiceError("BigCommerce", "catalog fetch", "Product visibility information was missing.")
+            products = [product for product in all_products if product["is_visible"]]
             variants = {}
-            for number, product in enumerate(products):
+            for number, product in enumerate(all_products):
                 variants[product["id"]] = self._bigcommerce_pages(
                     session, f"products/{product['id']}/variants", {}, progress,
-                    10 + int(55 * number / max(len(products), 1)),
+                    10 + int(55 * number / max(len(all_products), 1)),
                 )
                 time.sleep(max(0, self.settings.inventory_reorder_request_delay_seconds))
 
@@ -217,4 +223,4 @@ class ProductCheckerService:
                 skip += 100
                 time.sleep(max(0, self.settings.inventory_reorder_request_delay_seconds))
             progress("Matching SKUs and applying each report category's rules…", 95)
-            return compare_products(products, variants, inflow_products)
+            return compare_products(products, variants, inflow_products, bigcommerce_link_products=all_products)

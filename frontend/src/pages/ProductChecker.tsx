@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { Download, Info, Loader2, PackageCheck, RefreshCw, Search, ShieldCheck } from "lucide-react";
+import { Download, ExternalLink, Info, Loader2, PackageCheck, RefreshCw, Search, ShieldCheck } from "lucide-react";
 
 import { PRODUCT_CHECKER_SECTIONS, productCheckerApi } from "../api/productChecker";
-import type { ProductCheckerReport, ProductCheckerResponse, ProductCheckerSection } from "../api/productChecker";
+import type { ProductCheckerReport, ProductCheckerResponse, ProductCheckerRow, ProductCheckerSection } from "../api/productChecker";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -10,26 +10,70 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import { useAuth } from "../contexts/AuthContext";
 import { cn } from "../lib/utils";
 import { extractApiErrorMessage } from "../utils/apiErrors";
-import { describeProductCheckerReport, PRODUCT_CHECKER_SCOPE } from "../utils/productChecker";
+import { describeProductCheckerReport, getProductCheckerLinks, PRODUCT_CHECKER_SCOPE } from "../utils/productChecker";
 
 const PAGE_SIZE = 50;
+
+function ProductRecordLinks({ report, row }: { report: ProductCheckerReport; row: ProductCheckerRow }) {
+  if (!report.link_metadata_version) return null;
+  const links = getProductCheckerLinks(report, row);
+  const name = row.name || row.sku || "product";
+  const sources = [
+    { name: "inFlow", href: links.inflow, note: row.inflow_link_excluded ? "excluded category" : null },
+    { name: "BigCommerce", href: links.bigcommerce, note: row.bigcommerce_is_visible === false ? "hidden" : null },
+  ];
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-2" aria-label={`Record links for ${name}`}>
+      {sources.map((source) => source.href ? (
+        <a
+          key={source.name}
+          href={source.href}
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label={`Open ${name} in ${source.name}${source.note ? ` (${source.note})` : ""} (new tab)`}
+          title={`Open this product record in ${source.name} in a new tab`}
+          className="inline-flex min-h-[36px] items-center gap-1 rounded-md border px-2 py-1 text-xs font-medium text-primary hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          {source.name}{source.note && <span className="font-normal">· {source.note}</span>}
+          <ExternalLink aria-hidden="true" className="h-3 w-3 shrink-0" />
+        </a>
+      ) : (
+        <span key={source.name} className="text-xs font-normal text-muted-foreground" title={`No ${source.name} product ID is available for this row in the scan. The product may exist under another SKU.`}>
+          {source.name}: no record link
+        </span>
+      ))}
+    </div>
+  );
+}
 
 function downloadReport(report: ProductCheckerReport, format: "json" | "txt") {
   const guide = {
     scope: PRODUCT_CHECKER_SCOPE,
     counts: "Counts are report rows, not unique products or a total of individual field differences.",
+    links: "Links open product records in a new tab. Hidden BigCommerce records and excluded inFlow categories may supply links without participating in comparison checks. A missing link means no product ID was available for that row in this scan.",
     categories: Object.fromEntries(PRODUCT_CHECKER_SECTIONS.map(({ key, label, description, notes }) => [key, { label, description, notes }])),
   };
-  const content = format === "json" ? JSON.stringify({ ...report, report_guide: guide }, null, 2) : [
+  const exportReports = Object.fromEntries(PRODUCT_CHECKER_SECTIONS.map(({ key }) => [key,
+    report.reports[key].map((row) => ({ ...row, record_links: getProductCheckerLinks(report, row) })),
+  ]));
+  const content = format === "json" ? JSON.stringify({ ...report, reports: exportReports, report_guide: guide }, null, 2) : [
     `Product Checker — scan completed ${new Date(report.completed_at).toLocaleString()}`,
     guide.scope,
     guide.counts,
+    guide.links,
     "This export includes every category from the saved scan, regardless of the current search.",
     ...PRODUCT_CHECKER_SECTIONS.map(({ key, label, description, notes }) => [
       `\n${label} (${report.reports[key].length} rows)`,
       description,
       ...notes,
-      ...report.reports[key].map((row) => ` - ${row.name} (SKU: ${JSON.stringify(row.sku)}): ${row.details.join("; ")}`),
+      ...report.reports[key].map((row) => {
+        const links = getProductCheckerLinks(report, row);
+        return [
+          ` - ${row.name} (SKU: ${JSON.stringify(row.sku)}): ${row.details.join("; ")}`,
+          ...(links.inflow ? [`   inFlow${row.inflow_link_excluded ? " (excluded category)" : ""}: ${links.inflow}`] : []),
+          ...(links.bigcommerce ? [`   BigCommerce${row.bigcommerce_is_visible === false ? " (hidden)" : ""}: ${links.bigcommerce}`] : []),
+        ].join("\n");
+      }),
       ...(report.reports[key].length === 0 ? [" No rows met this category's rules in this scan."] : []),
     ].join("\n")),
   ].join("\n");
@@ -163,9 +207,16 @@ export default function ProductChecker() {
             <li>BigCommerce variant SKUs take precedence. The product SKU is used only when no variant has a usable SKU. Blank SKUs are excluded from matching.</li>
             <li>One record per trimmed SKU is compared in each source. If a SKU is duplicated, the last loaded record is used; duplicate SKUs are not reported as a separate issue.</li>
             <li>Results are a snapshot from the last completed scan. Opening this page reads the saved report; Run product check fetches a fresh snapshot.</li>
+            <li>Record links open in a new tab and may require you to sign in. Hidden BigCommerce products and excluded inFlow categories may supply links without being included in the comparison. BigCommerce variant rows open their parent product's edit page.</li>
           </ul>
         </details>
       </aside>
+
+      {report && !report.link_metadata_version && (
+        <div role="status" className="rounded-lg border bg-muted/40 p-4 text-sm">
+          This saved scan predates product record links. Run product check once to capture the product IDs and add inFlow and BigCommerce links.
+        </div>
+      )}
 
       {error && (
         <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-destructive/40 bg-destructive/10 p-4 text-sm">
@@ -218,7 +269,7 @@ export default function ProductChecker() {
           <PackageCheck className="mx-auto mb-4 h-10 w-10 text-muted-foreground" />
           <h2 className="text-lg font-medium">{running ? "Your product check is running" : "No completed scan to display"}</h2>
           <p className="mt-2 text-sm text-muted-foreground">
-            {running ? "Loading visible BigCommerce products, their variants, and inFlow records before comparing them." : "Run a product check to review unmatched SKUs, compared field differences, closeout quantities, and other catalog checks."}
+            {running ? "Loading products and variants for comparison, including hidden BigCommerce records for links only." : "Run a product check to review unmatched SKUs, compared field differences, closeout quantities, and other catalog checks."}
           </p>
         </div>
       ) : <>
@@ -297,7 +348,10 @@ export default function ProductChecker() {
                 <TableBody>
                   {rows.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE).map((row, index) => (
                     <TableRow key={`${row.sku}-${index}`}>
-                      <TableCell className="min-w-[180px] align-top font-medium">{row.name || "Unnamed product"}</TableCell>
+                      <TableCell className="min-w-[230px] align-top font-medium">
+                        {row.name || "Unnamed product"}
+                        <ProductRecordLinks report={report} row={row} />
+                      </TableCell>
                       <TableCell className="align-top">
                         <code className="whitespace-pre-wrap break-all rounded bg-muted px-1.5 py-1 text-xs">
                           {row.sku ? JSON.stringify(row.sku) : "(no SKU)"}

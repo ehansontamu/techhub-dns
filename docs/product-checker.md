@@ -13,13 +13,14 @@ BigCommerce catalog read access. Credentials stay on the server.
 
 ## Comparison rules
 
-- Fetch visible BigCommerce products and every page of their variants. Use trimmed,
+- Fetch BigCommerce products and every page of their variants; only visible
+  products enter the comparison. Hidden records supply product links only. Use trimmed,
   case-sensitive variant SKUs, falling back to the product SKU when no variant has
   a SKU. Report variants without SKUs separately.
 - Include active and inactive inFlow products with prices. Exclude the source
   script's Internal, Category Needed, and Testing category IDs.
 - “No visible BigCommerce match” applies only to active inFlow SKUs. It does not
-  prove a product is absent from BigCommerce: hidden products are not fetched.
+  prove a product is absent from BigCommerce: hidden products are not compared.
   BigCommerce SKUs without an included inFlow match are split by BigCommerce
   discontinued categories 49–52; those labels do not describe inFlow status.
 - Compare the source pricing scheme, BPN (`custom2`), and names. Variant sale price,
@@ -45,6 +46,25 @@ JSON and text downloads contain the entire displayed report, independent of the
 current search, along with the scope and explanations. JSON keeps the existing
 category keys and adds a `report_guide`. The UI formats both new and saved report
 details with the current wording, without changing stored data or comparison rules.
+
+## Product record links
+
+Each report row retains the BigCommerce parent product `id` and the inFlow
+`productId` when known. BigCommerce links use the scan's configured store hash:
+`https://store-{store}.mybigcommerce.com/manage/products/edit/{id}`.
+inFlow links use `https://app.inflowinventory.com/products/{productId}`.
+Variant rows open the parent BigCommerce product, not a variant ID.
+
+Links appear beneath the product name and open in a new tab. Hidden BigCommerce
+products and excluded inFlow categories can supply links without affecting report
+membership or counts; these links are labeled accordingly. Lookup prefers the
+record actually used in the comparison and uses the same trimmed, case-sensitive
+SKU. Product SKUs can additionally supply links when comparison uses variant SKUs.
+No link is invented when a matching record ID is unavailable.
+
+Run a new scan after deploying this change: old scans did not retain the IDs needed
+for links. JSON and text exports include the available record URLs. No database
+migration or new connection settings are required.
 
 ## Scan lifecycle
 

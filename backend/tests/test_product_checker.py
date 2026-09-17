@@ -24,6 +24,7 @@ def bc(**overrides):
 
 def inflow(**overrides):
     return {"name": "Laptop", "sku": "SKU-1", "isActive": True,
+            "productId": "8b2a80ff-6bbb-4653-80a0-781af7c9fb97",
             "categoryId": next(iter(LAPTOP_CATEGORIES)),
             "customFields": {"custom2": "43211508", **{f"custom{n}": "value" for n in range(3, 11)}},
             "prices": [{"pricingSchemeId": PRICING_SCHEME_ID, "unitPrice": 100}], **overrides}
@@ -113,6 +114,51 @@ class ComparisonTests(unittest.TestCase):
                 self.assertEqual(len(result["reports"]["bc_inconsistencies"]), 1)
                 self.assertEqual(result["reports"]["bc_inconsistencies"][0]["issue"], issue)
 
+    def test_links_use_parent_product_id_and_matched_inflow_id(self):
+        variants = {583: [{"id": 9999, "sku": " SKU-1 ", "price": 120}]}
+        result = compare_products([bc(id=583)], variants, [inflow()])
+        for category in ("mismatched_fields", "whitespace_skus"):
+            row = result["reports"][category][0]
+            self.assertEqual(row["bigcommerce_product_id"], 583)
+            self.assertTrue(row["bigcommerce_is_visible"])
+            self.assertEqual(row["inflow_product_id"], inflow()["productId"])
+        self.assertEqual(result["link_metadata_version"], 1)
+
+    def test_hidden_and_excluded_link_records_do_not_change_findings(self):
+        visible = bc(id=1, sku="EXCLUDED")
+        hidden = bc(id=583, sku="SKU-1", is_visible=False, page_title="Different")
+        excluded = inflow(sku="EXCLUDED", categoryId=next(iter(EXCLUDED_CATEGORIES)))
+        source = [inflow(), excluded]
+        baseline = compare_products([visible], {}, source)
+        enriched = compare_products([visible], {}, source, bigcommerce_link_products=[visible, hidden])
+        self.assertEqual(baseline["summary"], enriched["summary"])
+        self.assertEqual({key: len(rows) for key, rows in baseline["reports"].items()},
+                         {key: len(rows) for key, rows in enriched["reports"].items()})
+        row = enriched["reports"]["missing_in_bigcommerce"][0]
+        self.assertEqual(row["bigcommerce_product_id"], 583)
+        self.assertFalse(row["bigcommerce_is_visible"])
+        self.assertEqual(row["inflow_product_id"], inflow()["productId"])
+        row = enriched["reports"]["missing_in_inflow"][0]
+        self.assertEqual(row["inflow_product_id"], excluded["productId"])
+        self.assertTrue(row["inflow_link_excluded"])
+        self.assertEqual(enriched["reports"]["bc_inconsistencies"], [])
+
+    def test_links_handle_missing_skus_and_preserve_compared_duplicate(self):
+        visible = bc(id=1, price=120)
+        hidden = bc(id=583, is_visible=False)
+        excluded = inflow(productId="excluded-id", categoryId=next(iter(EXCLUDED_CATEGORIES)))
+        variants = {1: [{"id": 22, "sku": ""}]}
+        result = compare_products([visible], variants, [inflow(), excluded], bigcommerce_link_products=[visible, hidden])
+        missing = result["reports"]["variants_missing_sku"][0]
+        self.assertEqual(missing["bigcommerce_product_id"], 1)
+        self.assertIsNone(missing["inflow_product_id"])
+        compared = result["reports"]["mismatched_fields"][0]
+        self.assertEqual(compared["bigcommerce_product_id"], 1)
+        self.assertEqual(compared["inflow_product_id"], inflow()["productId"])
+        self.assertFalse(compared["inflow_link_excluded"])
+        absent = compare_products([], {}, [inflow()])["reports"]["missing_in_bigcommerce"][0]
+        self.assertIsNone(absent["bigcommerce_product_id"])
+
 
 class ScanLifecycleTests(unittest.TestCase):
     def setUp(self):
@@ -148,6 +194,7 @@ class ScanLifecycleTests(unittest.TestCase):
                 self.service._run(job, handle)
             handle = None
             self.assertEqual(other.status(include_report=True)["report"]["job_id"], job["id"])
+            self.assertEqual(other.status(include_report=True)["report"]["bigcommerce_store_id"], "test-store")
             self.assertEqual(other.status()["job"]["status"], "completed")
         finally:
             if handle:

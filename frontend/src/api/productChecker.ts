@@ -6,7 +6,7 @@ export const PRODUCT_CHECKER_SECTIONS = [
     label: "No visible BigCommerce match",
     description: "Active inFlow SKUs with no match among visible BigCommerce products. A product may already exist in BigCommerce with storefront visibility disabled.",
     notes: [
-      "Hidden BigCommerce products are not fetched, so this check cannot distinguish hidden products from products that are absent or use a different SKU.",
+      "Hidden BigCommerce products are looked up for record links but are excluded from the comparison. A link labeled hidden confirms a hidden record with that SKU was found. A missing link does not prove the product is absent; it may use a different SKU.",
       "Only active inFlow products outside Internal, Category Needed, and Testing are listed here. Matching ignores surrounding SKU whitespace but requires the same letter case.",
     ],
   },
@@ -112,12 +112,18 @@ export interface ProductCheckerRow {
   issue?: string;
   product_id?: number;
   variant_id?: number;
+  bigcommerce_product_id?: number | null;
+  bigcommerce_is_visible?: boolean | null;
+  inflow_product_id?: string | null;
+  inflow_link_excluded?: boolean;
 }
 
 export interface ProductCheckerReport {
   job_id: string;
   completed_at: string;
   started_by: string;
+  link_metadata_version?: number;
+  bigcommerce_store_id?: string;
   summary: {
     bigcommerce_products: number;
     bigcommerce_skus: number;

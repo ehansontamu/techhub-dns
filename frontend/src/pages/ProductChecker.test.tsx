@@ -15,10 +15,11 @@ function response(): ProductCheckerResponse {
     config: { configured: true, missing: [] }, job: null,
     report: {
       job_id: "scan-1", completed_at: "2026-09-17T12:00:00Z", started_by: "admin@example.test",
+      link_metadata_version: 1, bigcommerce_store_id: "jsj7fos9p1",
       summary: { bigcommerce_products: 3, bigcommerce_skus: 3, inflow_products: 5, inflow_eligible: 4, inflow_excluded: 1, inflow_inactive: 1, matched_skus: 2, total_findings: 2 },
       reports: {
         ...Object.fromEntries(PRODUCT_CHECKER_SECTIONS.map(({ key }) => [key, []])) as ProductCheckerReport["reports"],
-        missing_in_bigcommerce: [{ name: "Missing laptop", sku: " LT-1 ", details: ["Absent from visible BigCommerce products."] }],
+        missing_in_bigcommerce: [{ name: "Missing laptop", sku: " LT-1 ", inflow_product_id: "8b2a80ff-6bbb-4653-80a0-781af7c9fb97", details: ["Absent from visible BigCommerce products."] }],
         closeout_y_and_bc_inventory_zero: [{ name: "Retired desktop", sku: "DT-1", inflow_active: false, inventory_tracking: "variant", inventory_level: 0, details: ["Closeout Y; inFlow inactive; BigCommerce variant inventory: 0."] }],
       },
     },
@@ -59,6 +60,36 @@ describe("ProductChecker", () => {
     render(<ProductChecker />);
     expect(productCheckerApi.getData).not.toHaveBeenCalled();
     expect(screen.getByRole("status")).toHaveTextContent("Checking access");
+  });
+
+  it("opens known records in new tabs and labels hidden BigCommerce matches", async () => {
+    const data = response();
+    data.report!.reports.missing_in_bigcommerce[0].bigcommerce_product_id = 583;
+    data.report!.reports.missing_in_bigcommerce[0].bigcommerce_is_visible = false;
+    vi.mocked(productCheckerApi.getData).mockResolvedValue(data);
+    render(<ProductChecker />);
+    await screen.findByText("Missing laptop");
+    const bcLink = screen.getByRole("link", { name: "Open Missing laptop in BigCommerce (hidden) (new tab)" });
+    expect(bcLink).toHaveAttribute("href", "https://store-jsj7fos9p1.mybigcommerce.com/manage/products/edit/583");
+    expect(bcLink).toHaveAttribute("target", "_blank");
+    expect(bcLink).toHaveAttribute("rel", "noopener noreferrer");
+    expect(screen.getByRole("link", { name: "Open Missing laptop in inFlow (new tab)" })).toHaveAttribute("href", "https://app.inflowinventory.com/products/8b2a80ff-6bbb-4653-80a0-781af7c9fb97");
+    expect(screen.getByText(/Active in inFlow; a matching SKU was found in a hidden/)).toBeInTheDocument();
+  });
+
+  it("does not invent record links for unknown IDs or old scans", async () => {
+    const { unmount } = render(<ProductChecker />);
+    await screen.findByText("Missing laptop");
+    expect(screen.getByText("BigCommerce: no record link")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /BigCommerce/ })).not.toBeInTheDocument();
+    unmount();
+    const data = response();
+    delete data.report!.link_metadata_version;
+    delete data.report!.bigcommerce_store_id;
+    vi.mocked(productCheckerApi.getData).mockResolvedValue(data);
+    render(<ProductChecker />);
+    expect(await screen.findByText(/This saved scan predates product record links/)).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /inFlow/ })).not.toBeInTheDocument();
   });
 
   it("shows all report categories, preserves SKU whitespace, and searches results", async () => {
@@ -150,10 +181,12 @@ describe("ProductChecker", () => {
     expect(json.reports.closeout_y_and_bc_inventory_zero[0].name).toBe("Retired desktop");
     expect(json.reports.missing_in_bigcommerce[0].details[0]).toContain("visibility disabled");
     expect(json.report_guide.scope).toContain("Hidden products are not checked");
+    expect(json.reports.missing_in_bigcommerce[0].record_links.inflow).toBe("https://app.inflowinventory.com/products/8b2a80ff-6bbb-4653-80a0-781af7c9fb97");
     const text = await read(blobs[1][0]);
     expect(text).toContain("Retired desktop");
     expect(text).toContain("No visible BigCommerce match");
     expect(text).toContain("visibility disabled");
+    expect(text).toContain("https://app.inflowinventory.com/products/8b2a80ff-6bbb-4653-80a0-781af7c9fb97");
   });
 
   it("exposes the applet link only for admins", async () => {

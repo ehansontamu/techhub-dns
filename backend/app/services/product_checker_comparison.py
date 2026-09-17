@@ -108,7 +108,10 @@ def build_bigcommerce_index(products: list[dict], variants: dict) -> tuple[dict,
     return index, missing_skus
 
 
-def compare_products(products: list[dict], variants: dict, inflow_products: list[dict]) -> dict:
+def compare_products(
+    products: list[dict], variants: dict, inflow_products: list[dict],
+    *, bigcommerce_link_products: list[dict] | None = None,
+) -> dict:
     bc, missing_skus = build_bigcommerce_index(products, variants)
     eligible = [p for p in inflow_products if p.get("categoryId") not in EXCLUDED_CATEGORIES]
     inflow = {_text(p.get("sku")).strip(): p for p in eligible if _text(p.get("sku")).strip()}
@@ -118,6 +121,9 @@ def compare_products(products: list[dict], variants: dict, inflow_products: list
     def add(key: str, product: dict, *details: str, **extra: Any) -> None:
         reports[key].append({
             "name": _text(product.get("name")), "sku": _text(product.get("sku")),
+            # For BigCommerce-origin rows, retain this exact parent product even
+            # if another product shares its SKU. Variant IDs are not edit-page IDs.
+            "bigcommerce_product_id": product.get("product_id"),
             "details": list(details), **extra,
         })
 
@@ -209,7 +215,32 @@ def compare_products(products: list[dict], variants: dict, inflow_products: list
         if issue:
             add("bc_inconsistencies", item, f"{issue}: page title {title!r}.", page_title=title, issue=issue)
 
+    # Enrich only after calculating findings. Hidden BigCommerce products and
+    # excluded inFlow products may supply links, never comparison inputs.
+    link_products = products if bigcommerce_link_products is None else bigcommerce_link_products
+    bc_links, _ = build_bigcommerce_index(link_products, variants)
+    for product in link_products:
+        sku = _text(product.get("sku")).strip()
+        if sku:
+            bc_links.setdefault(sku, {"product_id": product["id"]})
+    bc_links.update(bc)  # Prefer the visible record used in the comparison.
+    inflow_links = {_text(p.get("sku")).strip(): p for p in inflow_products if _text(p.get("sku")).strip()}
+    inflow_links.update(inflow)  # Prefer included records over excluded duplicates.
+    visible_ids = {p["id"] for p in products}
+    for rows in reports.values():
+        for row in rows:
+            sku = _text(row.get("sku")).strip()
+            bc_product_id = row.get("bigcommerce_product_id") or row.get("product_id") or bc_links.get(sku, {}).get("product_id")
+            inflow_product = inflow_links.get(sku, {})
+            row.update(
+                bigcommerce_product_id=bc_product_id,
+                bigcommerce_is_visible=bc_product_id in visible_ids if bc_product_id is not None else None,
+                inflow_product_id=inflow_product.get("productId"),
+                inflow_link_excluded=inflow_product.get("categoryId") in EXCLUDED_CATEGORIES,
+            )
+
     return {
+        "link_metadata_version": 1,
         "reports": reports,
         "summary": {
             "bigcommerce_products": len(products), "bigcommerce_skus": len(bc),
