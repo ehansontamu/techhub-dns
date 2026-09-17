@@ -1,16 +1,99 @@
 import { apiClient } from "./client";
 
 export const PRODUCT_CHECKER_SECTIONS = [
-  { key: "missing_in_bigcommerce", label: "Missing in BigCommerce", description: "Active inFlow products absent from the visible BigCommerce catalog." },
-  { key: "missing_in_inflow", label: "Missing in inFlow", description: "Visible BigCommerce products absent from eligible inFlow products, excluding discontinued categories." },
-  { key: "mismatched_fields", label: "Field mismatches", description: "Price, commodity code, and name differences. Full name comparisons apply to product-level SKUs; variant names are checked for whitespace only." },
-  { key: "wrong_BPN", label: "Wrong commodity code", description: "Desktops require BPN 43211507; laptops require BPN 43211508 in both systems." },
-  { key: "whitespace_skus", label: "SKU whitespace", description: "Leading or trailing whitespace in either catalog. Matching uses trimmed, case-sensitive SKUs." },
-  { key: "discontinued_in_inflow", label: "Discontinued / missing", description: "BigCommerce products in discontinued categories 49–52 that are absent from eligible inFlow products." },
-  { key: "missing_custom_info", label: "Missing custom info", description: "The first missing field from custom3–custom10 for each active desktop or laptop. Discontinued BigCommerce products are exempt." },
-  { key: "closeout_y_and_bc_inventory_zero", label: "Closeouts at zero", description: "inFlow custom1 is Y and tracked BigCommerce inventory is zero. Includes inactive inFlow products." },
-  { key: "bc_inconsistencies", label: "Page title issues", description: "BigCommerce product names and page titles differ, or the page title is missing. One finding per product." },
-  { key: "variants_missing_sku", label: "Variants without SKUs", description: "BigCommerce variants without a SKU cannot be matched to inFlow. The product SKU is used when no variant has a SKU." },
+  {
+    key: "missing_in_bigcommerce",
+    label: "No visible BigCommerce match",
+    description: "Active inFlow SKUs with no match among visible BigCommerce products. A product may already exist in BigCommerce with storefront visibility disabled.",
+    notes: [
+      "Hidden BigCommerce products are not fetched, so this check cannot distinguish hidden products from products that are absent or use a different SKU.",
+      "Only active inFlow products outside Internal, Category Needed, and Testing are listed here. Matching ignores surrounding SKU whitespace but requires the same letter case.",
+    ],
+  },
+  {
+    key: "missing_in_inflow",
+    label: "No inFlow SKU match",
+    description: "Visible BigCommerce SKUs with no match in the inFlow products included in this scan. BigCommerce discontinued categories are listed separately.",
+    notes: [
+      "Both active and inactive inFlow products are searched. Internal, Category Needed, and Testing are excluded, so a product in one of those categories can still exist in inFlow.",
+      "Matching uses SKUs, not product names. A different SKU or letter case will not match.",
+    ],
+  },
+  {
+    key: "mismatched_fields",
+    label: "Field differences",
+    description: "Differences in the price, commodity code, or name values compared for matching SKUs. Only active inFlow products are checked; BigCommerce discontinued categories are exempt.",
+    notes: [
+      "BigCommerce price uses the first available nonzero value in this order: variant sale price, variant price, product sale price, product price. If none is selected, the comparison uses zero.",
+      "inFlow price comes from one designated pricing scheme; other pricing schemes are not compared. A missing price is compared as zero. The listed amounts may differ from a customer's final checkout price.",
+      "Commodity code compares inFlow custom2 with BigCommerce's Bin Picking Number (BPN). This category checks whether they agree; the commodity-code rule category checks the expected desktop or laptop code.",
+      "Full product-name comparisons run only when the product SKU is used because no variant has a usable SKU. For variant SKUs, only whitespace differences between the parent product name and the inFlow name are reported. Whitespace is collapsed for this name comparison; letter case is preserved.",
+    ],
+  },
+  {
+    key: "wrong_BPN",
+    label: "Commodity code rule checks",
+    description: "Matching SKUs where either system's commodity code differs from the expected code for the inFlow desktop or laptop categories recognized by this checker.",
+    notes: [
+      "The required code is 43211507 for desktops and 43211508 for laptops. The checker reads inFlow custom2 and BigCommerce's Bin Picking Number (BPN).",
+      "Only active inFlow products with a visible BigCommerce SKU match are checked. BigCommerce discontinued categories are included here. Other inFlow categories are not checked against these codes.",
+    ],
+  },
+  {
+    key: "whitespace_skus",
+    label: "SKU edge whitespace",
+    description: "SKUs with leading or trailing whitespace in the records used for matching. This whitespace is ignored when matching the two systems.",
+    notes: [
+      "Includes visible BigCommerce records and included inFlow records, whether active or inactive. Whitespace inside a SKU is not checked or removed; letter case still matters.",
+      "A SKU can appear once for each source. The quotes around displayed SKUs are added by the report to make whitespace easier to see.",
+    ],
+  },
+  {
+    key: "discontinued_in_inflow",
+    label: "Discontinued: no inFlow match",
+    description: "Visible BigCommerce SKUs in discontinued categories 49–52 with no match in the included inFlow products. “Discontinued” describes the BigCommerce category, not the inFlow status.",
+    notes: [
+      "Both active and inactive inFlow products are searched, after excluding Internal, Category Needed, and Testing. An inFlow product in an excluded category or with a different SKU will not match.",
+      "A discontinued category and storefront visibility are separate settings: these BigCommerce products are still marked visible.",
+    ],
+  },
+  {
+    key: "missing_custom_info",
+    label: "First missing custom field",
+    description: "The first inFlow field flagged as missing, from custom3 through custom10, for each matching SKU in the desktop or laptop categories recognized by this checker.",
+    notes: [
+      "Only active inFlow products with a visible BigCommerce SKU match are checked. BigCommerce discontinued categories are exempt.",
+      "The check stops at the first unfilled field for each SKU. Later fields may also need information. Field identifiers are shown because the checker does not load their display names from inFlow.",
+      "Absent, empty, false, or numeric-zero values are flagged. Whitespace-only text is not flagged, and entered values are not checked for correctness.",
+    ],
+  },
+  {
+    key: "closeout_y_and_bc_inventory_zero",
+    label: "Closeouts with zero BC stock",
+    description: "Matching SKUs marked closeout in inFlow whose BigCommerce quantity used by this check is zero. Includes active and inactive inFlow products.",
+    notes: [
+      "The inFlow closeout flag is custom1 = Y, ignoring surrounding whitespace and letter case. The BigCommerce parent product must be visible and have product or variant inventory tracking enabled.",
+      "The check uses the variant inventory quantity when available, otherwise the product quantity. It does not compare inFlow stock or calculate sellable stock, and it skips BigCommerce products with inventory tracking disabled.",
+    ],
+  },
+  {
+    key: "bc_inconsistencies",
+    label: "Product name / page title",
+    description: "Visible BigCommerce products whose page title is empty or differs from their product name. This compares two BigCommerce fields, not BigCommerce with inFlow.",
+    notes: [
+      "Only products represented in the SKU comparison are checked. No inFlow match is required, and discontinued categories are included.",
+      "At most one row is shown per product, even when it has multiple variant SKUs. The displayed SKU is one representative SKU. Capitalization and whitespace differences can produce a row; a different page title may be intentional.",
+    ],
+  },
+  {
+    key: "variants_missing_sku",
+    label: "Variants without usable SKUs",
+    description: "Variants of visible BigCommerce products with a blank or whitespace-only SKU. These variants cannot be matched to inFlow by SKU.",
+    notes: [
+      "One row is shown per variant. If no variant has a usable SKU, the checker falls back to the product SKU when it is populated.",
+      "This category checks variant SKUs only. It is not a complete list of products without SKUs in either system.",
+    ],
+  },
 ] as const;
 
 export type ProductCheckerSection = typeof PRODUCT_CHECKER_SECTIONS[number]["key"];

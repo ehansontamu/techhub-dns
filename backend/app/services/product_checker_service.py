@@ -119,7 +119,7 @@ class ProductCheckerService:
         job = {
             "id": uuid4().hex, "status": "running", "started_at": _now(),
             "finished_at": None, "started_by": actor, "progress": 0,
-            "message": "Starting product check…", "error": None,
+            "message": "Starting a scan of visible BigCommerce products and inFlow records…", "error": None,
         }
         try:
             self._write("job.json", job)
@@ -141,7 +141,7 @@ class ProductCheckerService:
             # A failed scan never replaces the last complete comparison.
             self._write("report.json", report)
             job.update(status="completed", finished_at=report["completed_at"], progress=100,
-                       message="Product check complete.")
+                       message="Scan complete. The saved report is ready to review.")
         except Exception as exc:
             logger.error("Product checker scan %s failed (%s)", job["id"], type(exc).__name__)
             message = exc.message if isinstance(exc, ExternalServiceError) else "Product check failed. Check the server logs and try again."
@@ -170,7 +170,8 @@ class ProductCheckerService:
         headers = {"X-Auth-Token": self.settings.inventory_reorder_bigcommerce_token, "Accept": "application/json"}
         rows, page = [], 1
         while True:
-            progress(f"BigCommerce: {path}, page {page}…", percentage)
+            catalog_part = "visible products" if path == "products" else f"variants for visible product {path.split('/')[1]}"
+            progress(f"Loading BigCommerce {catalog_part}, page {page}…", percentage)
             payload = self._get(session, url, headers, {**params, "limit": 250, "page": page}, "BigCommerce")
             batch = payload.get("data") if isinstance(payload, dict) else None
             if not isinstance(batch, list) or any(not isinstance(item, dict) for item in batch):
@@ -205,7 +206,7 @@ class ProductCheckerService:
             url = f"{self.settings.inflow_api_url.rstrip('/')}/{self.settings.inflow_company_id}/products"
             skip = 0
             while True:
-                progress(f"inFlow: fetching products ({len(inflow_products)} loaded)…", 75)
+                progress(f"Loading active and inactive inFlow products ({len(inflow_products)} loaded before category exclusions)…", 75)
                 # Deliberately omit isActive: V10 closeout checks include inactive products.
                 batch = self._get(session, url, headers, {"include": "prices", "count": 100, "skip": skip}, "inFlow")
                 if not isinstance(batch, list) or any(not isinstance(item, dict) for item in batch):
@@ -215,5 +216,5 @@ class ProductCheckerService:
                     break
                 skip += 100
                 time.sleep(max(0, self.settings.inventory_reorder_request_delay_seconds))
-            progress("Comparing product catalogs…", 95)
+            progress("Matching SKUs and applying each report category's rules…", 95)
             return compare_products(products, variants, inflow_products)

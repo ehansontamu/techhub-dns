@@ -19,7 +19,7 @@ function response(): ProductCheckerResponse {
       reports: {
         ...Object.fromEntries(PRODUCT_CHECKER_SECTIONS.map(({ key }) => [key, []])) as ProductCheckerReport["reports"],
         missing_in_bigcommerce: [{ name: "Missing laptop", sku: " LT-1 ", details: ["Absent from visible BigCommerce products."] }],
-        closeout_y_and_bc_inventory_zero: [{ name: "Retired desktop", sku: "DT-1", details: ["Closeout Y; inFlow inactive; BigCommerce variant inventory: 0."] }],
+        closeout_y_and_bc_inventory_zero: [{ name: "Retired desktop", sku: "DT-1", inflow_active: false, inventory_tracking: "variant", inventory_level: 0, details: ["Closeout Y; inFlow inactive; BigCommerce variant inventory: 0."] }],
       },
     },
   };
@@ -65,15 +65,19 @@ describe("ProductChecker", () => {
     render(<ProductChecker />);
     expect(await screen.findByText("Missing laptop")).toBeInTheDocument();
     expect(screen.getByText('" LT-1 "')).toBeInTheDocument();
+    expect(screen.getByLabelText("Report scope")).toHaveTextContent("Hidden products are not checked");
+    expect(screen.getByText(/Active in inFlow; no matching SKU among visible/)).toHaveTextContent("visibility disabled");
+    expect(screen.queryByText("Absent from visible BigCommerce products.")).not.toBeInTheDocument();
     for (const { label } of PRODUCT_CHECKER_SECTIONS) {
       expect(screen.getByRole("button", { name: new RegExp(label) })).toBeInTheDocument();
     }
-    fireEvent.change(screen.getByRole("textbox", { name: "Search report" }), { target: { value: "unknown" } });
-    expect(screen.getByText("No findings match your search in this category.")).toBeInTheDocument();
-    fireEvent.change(screen.getByRole("textbox", { name: "Search report" }), { target: { value: "inactive" } });
-    fireEvent.click(screen.getByRole("button", { name: /Closeouts at zero/ }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Search this category" }), { target: { value: "unknown" } });
+    expect(screen.getByText("No rows match your search in this category. Clear the search to see all rows.")).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("textbox", { name: "Search this category" }), { target: { value: "inactive" } });
+    fireEvent.click(screen.getByRole("button", { name: /Closeouts with zero BC stock/ }));
     expect(screen.getByText("Retired desktop")).toBeInTheDocument();
-    expect(screen.getByText(/Includes inactive inFlow products/)).toBeInTheDocument();
+    expect(screen.getByText(/Includes active and inactive inFlow products/)).toBeInTheDocument();
+    expect(screen.getByText(/^inFlow closeout flag/)).toHaveTextContent("inFlow status: inactive");
   });
 
   it("runs and polls to completion while retaining the previous report", async () => {
@@ -132,8 +136,8 @@ describe("ProductChecker", () => {
     const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
     render(<ProductChecker />);
     await screen.findByText("Missing laptop");
-    fireEvent.change(screen.getByRole("textbox", { name: "Search report" }), { target: { value: "not found" } });
-    for (const label of ["JSON", "Text"]) fireEvent.click(screen.getByRole("button", { name: label }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Search this category" }), { target: { value: "not found" } });
+    for (const label of ["Export JSON", "Export text"]) fireEvent.click(screen.getByRole("button", { name: label }));
     expect(click).toHaveBeenCalledTimes(2);
     expect(create.mock.calls).toHaveLength(2);
     const read = (blob: Blob) => new Promise<string>((resolve) => {
@@ -142,8 +146,14 @@ describe("ProductChecker", () => {
       reader.readAsText(blob);
     });
     const blobs = create.mock.calls as unknown as [Blob][];
-    expect(JSON.parse(await read(blobs[0][0])).reports.closeout_y_and_bc_inventory_zero[0].name).toBe("Retired desktop");
-    expect(await read(blobs[1][0])).toContain("Retired desktop");
+    const json = JSON.parse(await read(blobs[0][0]));
+    expect(json.reports.closeout_y_and_bc_inventory_zero[0].name).toBe("Retired desktop");
+    expect(json.reports.missing_in_bigcommerce[0].details[0]).toContain("visibility disabled");
+    expect(json.report_guide.scope).toContain("Hidden products are not checked");
+    const text = await read(blobs[1][0]);
+    expect(text).toContain("Retired desktop");
+    expect(text).toContain("No visible BigCommerce match");
+    expect(text).toContain("visibility disabled");
   });
 
   it("exposes the applet link only for admins", async () => {

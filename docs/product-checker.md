@@ -18,8 +18,10 @@ BigCommerce catalog read access. Credentials stay on the server.
   a SKU. Report variants without SKUs separately.
 - Include active and inactive inFlow products with prices. Exclude the source
   script's Internal, Category Needed, and Testing category IDs.
-- Missing in BigCommerce applies only to active inFlow products. BigCommerce
-  products missing in inFlow are split by discontinued categories 49–52.
+- “No visible BigCommerce match” applies only to active inFlow SKUs. It does not
+  prove a product is absent from BigCommerce: hidden products are not fetched.
+  BigCommerce SKUs without an included inFlow match are split by BigCommerce
+  discontinued categories 49–52; those labels do not describe inFlow status.
 - Compare the source pricing scheme, BPN (`custom2`), and names. Variant sale price,
   variant price, product sale price, and product price are considered in that order,
   using the source script's nonzero fallback rule. Full name comparisons apply only
@@ -33,9 +35,16 @@ BigCommerce catalog read access. Credentials stay on the server.
 - Compare BigCommerce names with page titles once per indexed product.
 
 The nine original report categories and the missing-variant-SKU diagnostic are
-searchable and paginated. JSON and text downloads contain the entire displayed
-report, independent of the current search. Finding counts can count a SKU more
-than once when it has issues in multiple categories.
+searchable and paginated. Each category explains its scope, exemptions, and fallback
+rules. Counts are report rows: one SKU can appear in multiple categories and one row
+can contain multiple differences. SKU matches include inactive inFlow products and
+do not indicate that the compared fields agree. The inFlow product count includes
+blank-SKU records even though those records cannot be matched.
+
+JSON and text downloads contain the entire displayed report, independent of the
+current search, along with the scope and explanations. JSON keeps the existing
+category keys and adds a `report_guide`. The UI formats both new and saved report
+details with the current wording, without changing stored data or comparison rules.
 
 ## Scan lifecycle
 
