@@ -16,6 +16,7 @@ from app.api.routes import (
     analytics,
     observability,
     vehicle_checkouts,
+    product_checker,
 )
 from app.api.middleware import register_error_handlers
 from app.api.auth_middleware import init_auth_middleware
@@ -125,6 +126,7 @@ app.register_blueprint(auth.bp)
 # Compatibility alias for older frontend bundles that still hit /auth/*.
 app.register_blueprint(auth.bp, url_prefix="/auth", name_prefix="legacy_auth")
 app.register_blueprint(system.bp)
+app.register_blueprint(product_checker.bp)
 
 
 @app.route("/health")
