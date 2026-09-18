@@ -38,10 +38,19 @@ function describeRow(section: ProductCheckerSection, row: ProductCheckerRow): st
       return [`First unfilled inFlow field found: ${row.field ?? "not recorded"}. Later fields are not listed for this SKU.`];
     case "closeout_y_and_bc_inventory_zero": {
       const active = row.inflow_active === true ? "active" : row.inflow_active === false ? "inactive" : "not recorded";
-      return [
+      const details = [
         `inFlow closeout flag (custom1): Y; inFlow status: ${active}.`,
-        `BigCommerce inventory tracking: ${row.inventory_tracking ?? "not recorded"}; quantity used by this check: ${row.inventory_level ?? 0}.`,
+        "BigCommerce: marked Visible on Storefront at the time of this scan. This does not confirm that purchasing is enabled.",
       ];
+      if (!row.inventory_source) {
+        return [...details, `Earlier scan: tracking ${row.inventory_tracking ?? "not recorded"}; previously reported quantity ${row.inventory_level ?? "not recorded"}. Run a new check to verify stock using the correct tracking source.`];
+      }
+      details.push(`BigCommerce inventory tracking: ${row.inventory_tracking}; ${row.inventory_source === "product" ? "parent product" : "SKU variant"} quantity checked: ${row.inventory_level ?? "not recorded"}.`);
+      details.push(`API quantities — parent product: ${row.product_inventory_level ?? "not returned"}; SKU variant: ${row.variant_inventory_level ?? "not returned"}. Only the configured tracking source is used.`);
+      if (row.bigcommerce_discontinued) {
+        details.push("In a BigCommerce discontinued category (49–52). That category does not turn off storefront visibility or inventory tracking.");
+      }
+      return details;
     }
     case "bc_inconsistencies": {
       const issues: Record<string, string> = {

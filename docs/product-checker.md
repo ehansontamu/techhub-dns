@@ -30,9 +30,14 @@ BigCommerce catalog read access. Credentials stay on the server.
 - Desktops require commodity code 43211507; laptops require 43211508. Report the
   first missing field in `custom3`–`custom10`. Discontinued items are exempt from
   field comparisons and custom-info checks, but retain the commodity-code check.
-- Closeouts have `custom1=Y` and tracked BigCommerce inventory of zero. Include
-  inactive inFlow items and use the source script's variant inventory with product
-  inventory fallback. Ignore untracked inventory.
+- Closeouts have `custom1=Y`, storefront visibility enabled, and tracked BigCommerce
+  inventory of zero. Include inactive inFlow items and BigCommerce discontinued
+  categories. Use parent product inventory for product tracking, and the matched
+  variant's inventory for variant tracking; never fall back between these sources.
+  Ignore untracked inventory and missing/invalid quantities. This corrects the V10
+  variant-first fallback, which could report zero from an unused inventory field.
+  Rows show the selected source and both returned quantities. Discontinued category
+  membership does not itself disable storefront visibility or purchasing.
 - Compare BigCommerce names with page titles once per indexed product.
 
 The nine original report categories and the missing-variant-SKU diagnostic are
@@ -65,6 +70,10 @@ No link is invented when a matching record ID is unavailable.
 Run a new scan after deploying this change: old scans did not retain the IDs needed
 for links. JSON and text exports include the available record URLs. No database
 migration or new connection settings are required.
+
+Reports with `inventory_check_version: 2` use the tracking-aware closeout rule.
+Older saved scans display a rerun notice and do not present their quantity as
+verified by the updated check. Run a new scan after deploying this correction.
 
 ## Scan lifecycle
 

@@ -59,10 +59,28 @@ def _choose_price(*values: Any) -> str:
 
 
 def _inventory(value: Any) -> int | None:
-    try:
-        return int(value)
-    except (ValueError, TypeError, OverflowError):
+    if isinstance(value, bool):
         return None
+    try:
+        quantity = Decimal(str(value))
+        if quantity.is_finite() and quantity == quantity.to_integral_value():
+            return int(quantity)
+    except (InvalidOperation, ValueError, TypeError, OverflowError):
+        return None
+    return None
+
+
+def _tracked_inventory(item: dict, tracking: str) -> int | None:
+    """Use only the quantity authoritative for the product's tracking mode.
+
+    A base variant can expose zero while the parent tracks nonzero product stock.
+    Conversely, aggregate product stock cannot stand in for a missing variant qty.
+    """
+    if tracking == "product":
+        return _inventory(item.get("product_inventory_level"))
+    if tracking == "variant" and not item["is_product_level"]:
+        return _inventory(item.get("inventory_level"))
+    return None
 
 
 def build_bigcommerce_index(products: list[dict], variants: dict) -> tuple[dict, list]:
@@ -152,13 +170,15 @@ def compare_products(
         fields = product.get("customFields") or {}
         tracking = _text(item.get("inventory_tracking")).strip().lower()
         if _text(fields.get("custom1")).strip().upper() == "Y" and tracking in {"product", "variant"}:
-            inventory = _inventory(item.get("inventory_level"))
-            if inventory is None:
-                inventory = _inventory(item.get("product_inventory_level"))
+            inventory = _tracked_inventory(item, tracking)
             if inventory == 0:
                 add("closeout_y_and_bc_inventory_zero", product,
-                    f"Closeout Y; inFlow {'active' if active else 'inactive'}; BigCommerce {tracking} inventory: 0.",
-                    inflow_active=active, inventory_tracking=tracking, inventory_level=0)
+                    f"Closeout Y; inFlow {'active' if active else 'inactive'}; visible in BigCommerce; tracked {tracking} inventory: 0.",
+                    inflow_active=active, inventory_tracking=tracking, inventory_level=0,
+                    inventory_source=tracking,
+                    product_inventory_level=_inventory(item.get("product_inventory_level")),
+                    variant_inventory_level=None if item["is_product_level"] else _inventory(item.get("inventory_level")),
+                    bigcommerce_discontinued=bool(DISCONTINUED_CATEGORIES.intersection(item["categories"])))
         if not active:
             continue
 
@@ -241,6 +261,7 @@ def compare_products(
 
     return {
         "link_metadata_version": 1,
+        "inventory_check_version": 2,
         "reports": reports,
         "summary": {
             "bigcommerce_products": len(products), "bigcommerce_skus": len(bc),

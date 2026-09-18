@@ -218,6 +218,13 @@ export default function ProductChecker() {
         </div>
       )}
 
+      {report && (report.inventory_check_version ?? 1) < 2 && (
+        <div role="status" className="rounded-lg border bg-muted/40 p-4 text-sm">
+          This saved scan used the earlier closeout stock check, which could use the wrong inventory quantity.
+          {" "}Run product check to refresh closeout results using BigCommerce's product or variant tracking setting.
+        </div>
+      )}
+
       {error && (
         <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-destructive/40 bg-destructive/10 p-4 text-sm">
           <span>{error}</span>

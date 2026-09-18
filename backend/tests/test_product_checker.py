@@ -90,14 +90,48 @@ class ComparisonTests(unittest.TestCase):
         self.assertEqual(report["missing_custom_info"], [])
         self.assertEqual(len(report["wrong_BPN"]), 1)
 
-    def test_closeout_includes_inactive_with_tracked_inventory_and_fallback(self):
+    def test_closeout_includes_inactive_and_uses_configured_tracking_source(self):
         product = inflow(isActive=False, customFields={"custom1": " y "})
-        for tracking, inventory, expected in [("variant", 0, 1), ("product", 0, 1), ("none", 0, 0), (None, 0, 0), ("variant", 2, 0), ("variant", None, 1)]:
-            with self.subTest(tracking=tracking, inventory=inventory):
-                report = compare_products([bc(inventory_tracking=tracking)], {1: [{"sku": "SKU-1", "inventory_level": inventory}]}, [product])["reports"]
+        cases = [
+            ("variant", 0, 5, 1),    # Variant stock is zero even if other variants have stock.
+            ("variant", 2, 0, 0),    # Product total must not override nonzero variant stock.
+            ("variant", None, 0, 0), # Missing variant quantity is unknown, not zero.
+            ("product", 0, 5, 0),    # Regression: unused base-variant zero caused false positives.
+            ("product", 5, 0, 1),    # Regression: unused variant stock concealed product zero.
+            ("product", 0, None, 0), # Missing product quantity must not fall back to the variant.
+            ("none", 0, 0, 0),
+            (None, 0, 0, 0),
+        ]
+        for tracking, variant_qty, product_qty, expected in cases:
+            with self.subTest(tracking=tracking, variant=variant_qty, product=product_qty):
+                report = compare_products([bc(inventory_tracking=tracking, inventory_level=product_qty)],
+                                          {1: [{"sku": "SKU-1", "inventory_level": variant_qty}]}, [product])["reports"]
                 self.assertEqual(len(report["closeout_y_and_bc_inventory_zero"]), expected)
                 self.assertEqual(report["mismatched_fields"], [])
                 self.assertEqual(report["wrong_BPN"], [])
+                if expected:
+                    row = report["closeout_y_and_bc_inventory_zero"][0]
+                    self.assertEqual(row["inventory_source"], tracking)
+                    self.assertEqual(row["product_inventory_level"], product_qty)
+                    self.assertEqual(row["variant_inventory_level"], variant_qty)
+
+    def test_variant_tracking_requires_a_variant_quantity_and_invalid_is_not_zero(self):
+        product = inflow(customFields={"custom1": "Y"})
+        result = compare_products([bc(inventory_tracking="variant", inventory_level=0)], {}, [product])
+        self.assertEqual(result["reports"]["closeout_y_and_bc_inventory_zero"], [])
+        for quantity in (None, "", "invalid", 0.5, False, float("nan"), float("inf")):
+            with self.subTest(quantity=quantity):
+                result = compare_products([bc(inventory_tracking="product", inventory_level=quantity)], {}, [product])
+                self.assertEqual(result["reports"]["closeout_y_and_bc_inventory_zero"], [])
+
+    def test_discontinued_category_does_not_exempt_a_visible_zero_stock_closeout(self):
+        result = compare_products([bc(inventory_tracking="product", categories=[49])], {},
+                                  [inflow(customFields={"custom1": "Y"})])
+        row = result["reports"]["closeout_y_and_bc_inventory_zero"][0]
+        self.assertTrue(row["bigcommerce_discontinued"])
+        self.assertTrue(row["bigcommerce_is_visible"])
+        self.assertEqual(row["inventory_source"], "product")
+        self.assertEqual(result["inventory_check_version"], 2)
 
     def test_sku_whitespace_trimmed_but_case_sensitive(self):
         report = compare_products([bc(sku=" SKU-1 ")], {}, [inflow(sku="SKU-1 ")])["reports"]

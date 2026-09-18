@@ -15,12 +15,12 @@ function response(): ProductCheckerResponse {
     config: { configured: true, missing: [] }, job: null,
     report: {
       job_id: "scan-1", completed_at: "2026-09-17T12:00:00Z", started_by: "admin@example.test",
-      link_metadata_version: 1, bigcommerce_store_id: "jsj7fos9p1",
+      link_metadata_version: 1, inventory_check_version: 2, bigcommerce_store_id: "jsj7fos9p1",
       summary: { bigcommerce_products: 3, bigcommerce_skus: 3, inflow_products: 5, inflow_eligible: 4, inflow_excluded: 1, inflow_inactive: 1, matched_skus: 2, total_findings: 2 },
       reports: {
         ...Object.fromEntries(PRODUCT_CHECKER_SECTIONS.map(({ key }) => [key, []])) as ProductCheckerReport["reports"],
         missing_in_bigcommerce: [{ name: "Missing laptop", sku: " LT-1 ", inflow_product_id: "8b2a80ff-6bbb-4653-80a0-781af7c9fb97", details: ["Absent from visible BigCommerce products."] }],
-        closeout_y_and_bc_inventory_zero: [{ name: "Retired desktop", sku: "DT-1", inflow_active: false, inventory_tracking: "variant", inventory_level: 0, details: ["Closeout Y; inFlow inactive; BigCommerce variant inventory: 0."] }],
+        closeout_y_and_bc_inventory_zero: [{ name: "Retired desktop", sku: "DT-1", inflow_active: false, inventory_tracking: "variant", inventory_source: "variant", inventory_level: 0, product_inventory_level: 5, variant_inventory_level: 0, bigcommerce_discontinued: true, details: ["Closeout Y; inFlow inactive; BigCommerce variant inventory: 0."] }],
       },
     },
   };
@@ -92,6 +92,18 @@ describe("ProductChecker", () => {
     expect(screen.queryByRole("link", { name: /inFlow/ })).not.toBeInTheDocument();
   });
 
+  it("marks old closeout quantities for rechecking rather than relabeling them as verified", async () => {
+    const data = response();
+    delete data.report!.inventory_check_version;
+    delete data.report!.reports.closeout_y_and_bc_inventory_zero[0].inventory_source;
+    vi.mocked(productCheckerApi.getData).mockResolvedValue(data);
+    render(<ProductChecker />);
+    expect(await screen.findByText(/This saved scan used the earlier closeout stock check/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Closeouts with zero BC stock/ }));
+    expect(screen.getByText(/Earlier scan: tracking variant/)).toHaveTextContent("Run a new check");
+    expect(screen.queryByText(/SKU variant quantity checked:/)).not.toBeInTheDocument();
+  });
+
   it("shows all report categories, preserves SKU whitespace, and searches results", async () => {
     render(<ProductChecker />);
     expect(await screen.findByText("Missing laptop")).toBeInTheDocument();
@@ -109,6 +121,9 @@ describe("ProductChecker", () => {
     expect(screen.getByText("Retired desktop")).toBeInTheDocument();
     expect(screen.getByText(/Includes active and inactive inFlow products/)).toBeInTheDocument();
     expect(screen.getByText(/^inFlow closeout flag/)).toHaveTextContent("inFlow status: inactive");
+    expect(screen.getByText(/SKU variant quantity checked: 0/)).toBeInTheDocument();
+    expect(screen.getByText(/API quantities/)).toHaveTextContent("parent product: 5; SKU variant: 0");
+    expect(screen.getByText(/^In a BigCommerce discontinued category/)).toHaveTextContent("does not turn off storefront visibility");
   });
 
   it("runs and polls to completion while retaining the previous report", async () => {

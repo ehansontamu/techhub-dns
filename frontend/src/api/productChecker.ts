@@ -70,10 +70,12 @@ export const PRODUCT_CHECKER_SECTIONS = [
   {
     key: "closeout_y_and_bc_inventory_zero",
     label: "Closeouts with zero BC stock",
-    description: "Matching SKUs marked closeout in inFlow whose BigCommerce quantity used by this check is zero. Includes active and inactive inFlow products.",
+    description: "Visible BigCommerce SKUs marked closeout in inFlow with zero stock in the inventory source selected by BigCommerce's tracking setting. Includes active and inactive inFlow products.",
     notes: [
       "The inFlow closeout flag is custom1 = Y, ignoring surrounding whitespace and letter case. The BigCommerce parent product must be visible and have product or variant inventory tracking enabled.",
-      "The check uses the variant inventory quantity when available, otherwise the product quantity. It does not compare inFlow stock or calculate sellable stock, and it skips BigCommerce products with inventory tracking disabled.",
+      "With product-level tracking, the check uses the parent product quantity. With variant-level tracking, it uses that SKU's variant quantity. It never substitutes a quantity from the other tracking mode; missing or invalid quantities are not treated as zero.",
+      "Products with inventory tracking disabled are skipped. This checks recorded stock, not inFlow stock or whether a customer can place an order.",
+      "BigCommerce discontinued categories are included. Category membership, Visible on Storefront, and inventory tracking are separate settings. A row means the product was marked visible when scanned; it does not mean every purchasing option is enabled.",
     ],
   },
   {
@@ -108,6 +110,10 @@ export interface ProductCheckerRow {
   inflow_active?: boolean;
   inventory_tracking?: string;
   inventory_level?: number;
+  inventory_source?: "product" | "variant";
+  product_inventory_level?: number | null;
+  variant_inventory_level?: number | null;
+  bigcommerce_discontinued?: boolean;
   page_title?: string;
   issue?: string;
   product_id?: number;
@@ -123,6 +129,7 @@ export interface ProductCheckerReport {
   completed_at: string;
   started_by: string;
   link_metadata_version?: number;
+  inventory_check_version?: number;
   bigcommerce_store_id?: string;
   summary: {
     bigcommerce_products: number;
