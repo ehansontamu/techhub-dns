@@ -859,13 +859,22 @@ class OrderSplittingService:
                 if serial_number is not None
             ]
 
-            if serial_numbers and allowed_serials.get(product_key):
-                remaining_allowed_serials = allowed_serials[product_key]
-                matched_serials: List[str] = []
-                for serial_number in serial_numbers:
-                    if serial_number in remaining_allowed_serials:
-                        matched_serials.append(serial_number)
-                        remaining_allowed_serials.remove(serial_number)
+            line_quantity = self._parse_standard_quantity(quantity_data)
+            if serial_numbers:
+                if allowed_serials.get(product_key):
+                    remaining_allowed_serials = allowed_serials[product_key]
+                    matched_serials: List[str] = []
+                    for serial_number in serial_numbers:
+                        if serial_number in remaining_allowed_serials:
+                            matched_serials.append(serial_number)
+                            remaining_allowed_serials.remove(serial_number)
+                else:
+                    # Sales-order lines normally do not carry serial numbers.
+                    # In that case the picked line is authoritative for serials;
+                    # cap it by both the picked and allowed quantities.
+                    serial_limit = int(min(line_quantity, available_quantity))
+                    matched_serials = serial_numbers[:serial_limit]
+
                 if not matched_serials:
                     continue
                 quantity_data["serialNumbers"] = matched_serials
@@ -878,7 +887,6 @@ class OrderSplittingService:
                 )
                 continue
 
-            line_quantity = self._parse_standard_quantity(quantity_data)
             restricted_quantity = min(line_quantity, available_quantity)
             if restricted_quantity <= 0.0001:
                 continue
@@ -971,14 +979,20 @@ class OrderSplittingService:
             normalized_lines.append(copied_line)
 
         assigned_view["lines"] = normalized_lines
+        stored_pick_lines = [
+            line
+            for line in assigned_view.get("pickLines", [])
+            if isinstance(line, dict)
+        ]
         if pick_lines_mode == "lines":
-            assigned_view["pickLines"] = deepcopy(normalized_lines)
+            # InFlow keeps serials on pickLines, not sales-order lines. Keep
+            # them while restricting quantities to this remainder leg so prior
+            # child-leg picks cannot reappear on the new picklist.
+            assigned_view["pickLines"] = self._restrict_lines_to_source(
+                stored_pick_lines,
+                normalized_lines,
+            )
         else:
-            stored_pick_lines = [
-                line
-                for line in assigned_view.get("pickLines", [])
-                if isinstance(line, dict)
-            ]
             assigned_view["pickLines"] = self._restrict_lines_to_source(
                 stored_pick_lines,
                 normalized_lines,
