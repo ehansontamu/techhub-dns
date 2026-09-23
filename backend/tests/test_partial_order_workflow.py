@@ -1516,7 +1516,10 @@ def test_generate_picklist_uses_parent_remainder_items_when_child_leg_exists():
                 {
                     "productId": "prod-2",
                     "product": {"name": "Dock", "sku": "DOCK-1"},
-                    "quantity": {"standardQuantity": "1"},
+                    "quantity": {
+                        "standardQuantity": "1",
+                        "serialNumbers": ["DOCK-ONE"],
+                    },
                 }
             ],
         },
@@ -1574,7 +1577,10 @@ def test_generate_picklist_uses_parent_remainder_items_when_child_leg_exists():
             "quantity": {"standardQuantity": 1.0},
         },
     ]
-    assert picklist_view["pickLines"] == picklist_view["lines"]
+    assert picklist_view["pickLines"][0]["quantity"] == {
+        "standardQuantity": 1.0,
+        "serialNumbers": ["DOCK-ONE"],
+    }
 
     class FakeSharePointService:
         is_enabled = True
