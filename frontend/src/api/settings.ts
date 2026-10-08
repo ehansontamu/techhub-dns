@@ -17,6 +17,7 @@ export interface SystemSettings {
     document_signing_enabled: SystemSettingValue;
     picklist_auto_print_enabled: SystemSettingValue;
     require_asset_tags_before_picklist: SystemSettingValue;
+    asset_tag_exempt_college_units: SystemSettingValue;
     require_same_user_for_tagging_and_picklist: SystemSettingValue;
     require_different_user_for_pick_and_qa: SystemSettingValue;
     require_partial_picklist_confirmation: SystemSettingValue;

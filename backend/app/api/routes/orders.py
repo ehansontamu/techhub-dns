@@ -13,6 +13,7 @@ from app.services.order_service import OrderService
 from app.services.order_splitting import OrderSplittingService
 from app.services.inflow_service import InflowService
 from app.services.audit_service import AuditService
+from app.services.asset_tag_policy_service import AssetTagPolicyService
 from app.utils.broadcast_dedup import broadcast_dedup
 
 from app.schemas.order import (
@@ -91,6 +92,13 @@ def _resolve_asset_tag_required(
     asset_tag_requirement_cache: Optional[dict[tuple[object, ...], bool]] = None,
 ) -> dict:
     inflow_data = getattr(order, "inflow_data", None)
+    data["college_unit"] = AssetTagPolicyService.college_unit(inflow_data)
+    data["asset_tag_exempt"] = AssetTagPolicyService.is_college_unit_exempt(
+        inflow_data, object_session(order)
+    ) if data["college_unit"] else False
+    if data["asset_tag_exempt"]:
+        data["asset_tag_required"] = False
+        return data
     if not inflow_data:
         data["asset_tag_required"] = False
         return data

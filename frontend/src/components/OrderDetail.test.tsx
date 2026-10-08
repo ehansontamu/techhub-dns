@@ -8,6 +8,27 @@ import type { OrderDetail as OrderDetailType } from "../types/order";
 import { OrderStatus } from "../types/order";
 
 describe("OrderDetail", () => {
+  it("displays College/Unit exemptions and omits tagging actions", () => {
+    const order: OrderDetailType = {
+      id: "tti-order", inflow_order_id: "TH5727", status: OrderStatus.PICKED,
+      college_unit: "TTI - Texas A&M Transportation Institute",
+      asset_tag_exempt: true, asset_tag_required: false,
+      tag_data: { canopyorders_request_sent_at: "2026-10-08T11:00:00Z" },
+      created_at: "2026-10-08T12:00:00Z", updated_at: "2026-10-08T12:00:00Z",
+    };
+    render(<MemoryRouter><OrderDetail
+      order={order} auditLogs={[]} notifications={[]} canDismissOrder={false}
+      onStatusChange={vi.fn()} onRmaReopen={vi.fn()} onDismissOrder={vi.fn()}
+      onArchiveOrder={vi.fn()} onRollbackStatus={vi.fn()} onTagOrder={vi.fn()}
+      onRequestTags={vi.fn()} onGeneratePicklist={vi.fn()} generatingPicklist={false}
+    /></MemoryRouter>);
+    expect(screen.getByText("College/Unit")).toBeInTheDocument();
+    expect(screen.getByText(order.college_unit!)).toBeInTheDocument();
+    expect(screen.getByText(/Not required — College\/Unit exemption/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Request Tags" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Mark Tagged" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Generate & Email" })).toBeEnabled();
+  });
   it("copies the complete Inflow payload as formatted JSON", async () => {
     const user = userEvent.setup();
     const writeText = vi.fn().mockResolvedValue(undefined);

@@ -157,6 +157,8 @@ class PrintJobSummary(BaseModel):
 
 
 class OrderResponse(OrderBase):
+    college_unit: Optional[str] = None
+    asset_tag_exempt: bool = False
     id: UUID
     inflow_sales_order_id: Optional[str] = None
     status: OrderStatus

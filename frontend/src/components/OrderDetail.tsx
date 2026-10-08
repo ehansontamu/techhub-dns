@@ -533,6 +533,10 @@ export default function OrderDetail({
               <p className="text-sm text-foreground">{order.po_number || "N/A"}</p>
             </div>
             <div>
+              <p className="text-sm font-medium text-muted-foreground">College/Unit</p>
+              <p className="text-sm text-foreground">{order.college_unit || "Not provided"}</p>
+            </div>
+            <div>
               <p className="text-sm font-medium text-muted-foreground">Deliverer</p>
               <p className="text-sm text-foreground">
                 {order.assigned_deliverer || "Unassigned"}
@@ -638,7 +642,9 @@ export default function OrderDetail({
                 <p className="font-medium text-foreground">Asset Tagging</p>
                 <p className="text-sm text-muted-foreground">
                   {!assetTagRequired
-                    ? "Not required"
+                    ? order.asset_tag_exempt
+                      ? `Not required — College/Unit exemption: ${order.college_unit}`
+                      : "Not required"
                     : order.tagged_at
                       ? `Completed ${formatToCentralTime(order.tagged_at)}`
                       : requestSentAt

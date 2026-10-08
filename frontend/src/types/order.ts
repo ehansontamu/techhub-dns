@@ -105,6 +105,8 @@ export interface Order {
   remainder_inflow_order_id?: string | null;
   inflow_data?: Record<string, unknown>;
   asset_tag_required?: boolean;
+  college_unit?: string | null;
+  asset_tag_exempt?: boolean;
   pick_status?: PickStatus;
   latest_picklist_print_job?: PrintJobSummary;
   asset_tag_serials?: AssetTagSerial[];

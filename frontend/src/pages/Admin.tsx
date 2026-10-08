@@ -4,6 +4,7 @@ import { Loader2, Settings2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { settingsApi, type SystemSettings } from "../api/settings";
+import AssetTagExemptions from "../components/admin/AssetTagExemptions";
 import { useAuth } from "../contexts/AuthContext";
 import { SectionErrorBoundary } from "../components/error-boundaries/AppErrorBoundaries";
 import { Badge } from "../components/ui/badge";
@@ -19,6 +20,7 @@ const InventoryReorderRecipientsTab = lazy(
 );
 
 type RuleKey =
+    | "asset_tag_exempt_college_units"
     | "email_notifications_enabled"
     | "teams_recipient_notifications_enabled"
     | "document_signing_enabled"
@@ -88,20 +90,21 @@ export default function Admin() {
 
     const ruleMutation = useMutation({
         mutationFn: async ({ key, value }: { key: RuleKey; value: string }) => settingsApi.updateSetting(key, value, user?.email),
-        onSuccess: (_result, variables) => {
+        onSuccess: (result, variables) => {
             queryClient.setQueryData<SystemSettings | undefined>(adminQueryKeys.settings(), (current) => {
                 if (!current) return current;
                 return {
                     ...current,
                     [variables.key]: {
                         ...current[variables.key],
-                        value: variables.value,
+                        value: result.value,
                         updated_at: new Date().toISOString(),
                         updated_by: user?.email ?? null,
                     },
                 };
             });
             toast.success("Rule updated", { description: `${variables.key} = ${variables.value}` });
+            void queryClient.invalidateQueries({ queryKey: ["orders"] });
         },
         onError: (error: unknown) => {
             toast.error("Failed to update rule", { description: extractApiErrorMessage(error, "Please try again.") });
@@ -153,6 +156,27 @@ export default function Admin() {
             </div>
 
             <section className="grid grid-cols-1 gap-6 xl:grid-cols-2">
+                <Card className="border-border/70 bg-card/80 shadow-none">
+                    <CardHeader>
+                        <CardTitle className="text-base">College/Units exempt from asset tagging</CardTitle>
+                        <CardDescription>Manage units that skip the tagging process.</CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                        {settings?.asset_tag_exempt_college_units ? (
+                            <AssetTagExemptions
+                                value={settings.asset_tag_exempt_college_units.value}
+                                saving={ruleMutation.isPending}
+                                onSave={async (value) => {
+                                    await ruleMutation.mutateAsync({ key: "asset_tag_exempt_college_units", value });
+                                }}
+                            />
+                        ) : (
+                            <p className="text-sm text-muted-foreground">
+                                {settingsQuery.isError ? "Unable to load exemptions. Reload this panel." : "Loading exemptions..."}
+                            </p>
+                        )}
+                    </CardContent>
+                </Card>
                 <Card className="border-border/70 bg-card/80 shadow-none">
                     <CardHeader>
                         <CardTitle className="text-base">Workflow rules</CardTitle>

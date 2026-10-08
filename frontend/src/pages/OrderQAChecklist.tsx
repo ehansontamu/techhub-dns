@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Order, OrderStatus } from "../types/order";
+import { OrderStatus } from "../types/order";
+import type { Order } from "../types/order";
 import { ordersApi } from "../api/orders";
 import { settingsApi } from "../api/settings";
 import { Badge } from "../components/ui/badge";
@@ -16,6 +17,27 @@ import { isValidOrderId } from "../utils/orderIds";
 
 function safeArray<T>(value: unknown): T[] {
     return Array.isArray(value) ? value : [];
+}
+
+async function loadQaOrders(search: string): Promise<Order[]> {
+    const loadStatus = async (status: OrderStatus) => {
+        const orders: Order[] = [];
+        let total = 0;
+        do {
+            const page = await ordersApi.getOrders({ status, search: search || undefined, skip: orders.length, limit: 200 });
+            const items = safeArray<Order>(page.items);
+            orders.push(...items);
+            total = page.total;
+            if (items.length === 0) break;
+        } while (orders.length < total);
+        return orders;
+    };
+    const [qaOrders, pickedOrders] = await Promise.all([
+        loadStatus(OrderStatus.QA),
+        loadStatus(OrderStatus.PICKED),
+    ]);
+    // Existing picklists can become QA-ready when their College/Unit is exempted.
+    return [...qaOrders, ...pickedOrders.filter((order) => order.asset_tag_exempt && order.picklist_generated_at)];
 }
 
 type SavedQAChecklist = {
@@ -68,29 +90,13 @@ export default function OrderQAChecklist() {
         navigate(`/orders/${orderId}/qa`);
     };
 
-    const [orders, setOrders] = useState<Order[]>([]);
-    const [loadingOrders, setLoadingOrders] = useState(true);
     const [search, setSearch] = useState("");
-
-    useEffect(() => {
-        loadOrders();
-    }, [search]);
-
-    const loadOrders = async () => {
-        setLoadingOrders(true);
-        try {
-            const data = await ordersApi.getOrders({
-                status: OrderStatus.QA,
-                search: search.trim() ? search.trim() : undefined,
-            });
-            setOrders(safeArray<Order>(data.items));
-        } catch (error) {
-            console.error("Failed to load orders:", error);
-            toast.error("Failed to load orders");
-        } finally {
-            setLoadingOrders(false);
-        }
-    };
+    const ordersQuery = useQuery({
+        queryKey: ["orders", "qa-checklist", search.trim()],
+        queryFn: () => loadQaOrders(search.trim()),
+    });
+    const orders = ordersQuery.data;
+    const loadingOrders = ordersQuery.isPending;
 
     const completedMap = useMemo(() => {
         const map = new Map<string, string>(); // orderId -> submittedAt
@@ -149,7 +155,9 @@ export default function OrderQAChecklist() {
                     </div>
                 </div>
 
-                {loadingOrders ? (
+                {ordersQuery.isError ? (
+                    <p role="alert" className="p-4 text-destructive">Unable to load orders. Please reload this page.</p>
+                ) : loadingOrders ? (
                     <div className="p-4">Loading...</div>
                 ) : (
                     <div className="mt-4 overflow-x-auto ios-scroll rounded-lg border border-border bg-card shadow-sm">
