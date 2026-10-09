@@ -15,6 +15,7 @@ import {
   FilePenLine,
   Cable,
   PackageSearch,
+  PackageCheck,
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "../lib/utils";
@@ -280,6 +281,24 @@ export function Sidebar({
 
           {isAdmin && (
             <>
+              <NavLink
+                to="/product-checker"
+                aria-label="Product Checker"
+                title="Product Checker"
+                className={({ isActive: isCurrentProductChecker }) =>
+                  cn(
+                    "flex min-h-[44px] items-center rounded-lg py-2.5 text-sm font-medium transition-colors",
+                    showExpandedContent ? "gap-3 px-3" : "justify-center px-0",
+                    isCurrentProductChecker
+                      ? activeNavItemClassName
+                      : "text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+                  )
+                }
+              >
+                <PackageCheck className="h-5 w-5 flex-shrink-0" />
+                {showExpandedContent && <span className="overflow-hidden whitespace-nowrap">Product Checker</span>}
+              </NavLink>
+
               <NavLink
                 key="/vetting-editor"
                 to="/vetting-editor"

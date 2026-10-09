@@ -1,5 +1,7 @@
+import json
+from typing import Optional
+
 from sqlalchemy.orm import Session
-from typing import Optional, Dict, Any
 
 from app.database import get_db_session
 from app.models.system_setting import SystemSetting
@@ -25,6 +27,7 @@ SETTING_INVENTORY_REORDER_TEAMS_RECIPIENT_EMAILS = (
 # Picklist / tagging workflow controls
 SETTING_PICKLIST_AUTO_PRINT_ENABLED = "picklist_auto_print_enabled"
 SETTING_REQUIRE_ASSET_TAGS_BEFORE_PICKLIST = "require_asset_tags_before_picklist"
+SETTING_ASSET_TAG_EXEMPT_COLLEGE_UNITS = "asset_tag_exempt_college_units"
 SETTING_REQUIRE_SAME_USER_FOR_TAGGING_AND_PICKLIST = "require_same_user_for_tagging_and_picklist"
 SETTING_REQUIRE_DIFFERENT_USER_FOR_PICK_AND_QA = "require_different_user_for_pick_and_qa"
 SETTING_REQUIRE_PARTIAL_PICKLIST_CONFIRMATION = "require_partial_picklist_confirmation"
@@ -78,6 +81,11 @@ DEFAULT_SETTINGS = {
         "type": SETTING_TYPE_BOOLEAN,
         "description": "Require asset tags before an order can proceed through picklist generation",
     },
+    SETTING_ASSET_TAG_EXEMPT_COLLEGE_UNITS: {
+        "value": json.dumps(["TTI - Texas A&M Transportation Institute"]),
+        "type": SETTING_TYPE_JSON,
+        "description": "College/Units exempt from asset tagging (JSON array of complete College/Unit values)",
+    },
     SETTING_REQUIRE_SAME_USER_FOR_TAGGING_AND_PICKLIST: {
         "value": "true",
         "type": SETTING_TYPE_BOOLEAN,
@@ -103,6 +111,26 @@ DEFAULT_SETTINGS = {
 
 class SystemSettingService:
     @staticmethod
+    def normalize_college_units(value: str) -> list[str]:
+        """Validate and deduplicate complete College/Unit values."""
+        try:
+            entries = json.loads(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("College/Units must be a JSON array of strings") from exc
+        if not isinstance(entries, list):
+            raise ValueError("College/Units must be a JSON array of strings")
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for entry in entries:
+            if not isinstance(entry, str) or not entry.strip():
+                raise ValueError("Each College/Unit must be a non-empty string")
+            name = " ".join(entry.split())
+            if name.casefold() not in seen:
+                seen.add(name.casefold())
+                normalized.append(name)
+        return normalized
+
+    @staticmethod
     def get_setting(db: Session, key: str) -> str:
         """Get a setting value from DB, or default if not set."""
         setting = db.query(SystemSetting).filter(SystemSetting.key == key).first()
@@ -118,6 +146,7 @@ class SystemSettingService:
         db = get_db_session()
         try:
             setting = db.query(SystemSetting).filter(SystemSetting.key == key).first()
+            old_value = setting.value if setting else DEFAULT_SETTINGS.get(key, {}).get("value")
             if not setting:
                 setting = SystemSetting(
                     key=key,
@@ -129,6 +158,18 @@ class SystemSettingService:
             else:
                 setting.value = value
                 setting.updated_by = updated_by
+            if key == SETTING_ASSET_TAG_EXEMPT_COLLEGE_UNITS:
+                from app.services.audit_service import AuditService
+
+                AuditService(db).log_action(
+                    entity_type="system_setting",
+                    entity_id=key,
+                    action="updated",
+                    user_id=updated_by,
+                    old_value={"value": old_value},
+                    new_value={"value": value},
+                    description="Updated College/Unit asset tagging exemptions",
+                )
             db.commit()
             db.refresh(setting)
             return setting

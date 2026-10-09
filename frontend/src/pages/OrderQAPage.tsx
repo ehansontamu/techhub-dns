@@ -81,10 +81,10 @@ const verificationSteps = [
     },
 ];
 
-function isFormComplete(form: QAFormState) {
+function isFormComplete(form: QAFormState, assetTagExempt: boolean) {
     return (
         form.orderNumber.trim().length > 0 &&
-        form.verifyAssetTagSerialMatch &&
+        (assetTagExempt || form.verifyAssetTagSerialMatch) &&
         form.verifyOrderDetailsTemplateSentAndElectronicPackingSlipSaved &&
         form.verifyPackagedProperly &&
         form.verifyPackingSlipSerialsMatch &&
@@ -195,7 +195,7 @@ export default function OrderQAPage() {
             return;
         }
 
-        if (!isFormComplete(form)) {
+        if (!isFormComplete(form, order.asset_tag_exempt === true)) {
             toast.error("Please complete all required QA fields before submitting.");
             return;
         }
@@ -204,6 +204,7 @@ export default function OrderQAPage() {
             await submitQaMutation.mutateAsync({
                 responses: {
                     ...form,
+                    verifyAssetTagSerialMatch: order.asset_tag_exempt ? false : form.verifyAssetTagSerialMatch,
                     qaSignature: currentUserName,
                 },
                 technician: currentUserName,
@@ -235,7 +236,10 @@ export default function OrderQAPage() {
 
     if (!order) return null;
 
-    const hasIncompleteSteps = verificationSteps.some((step) => !form[step.id as keyof QAFormState]);
+    const requiredVerificationSteps = verificationSteps.filter(
+        (step) => step.id !== "verifyAssetTagSerialMatch" || !order.asset_tag_exempt,
+    );
+    const hasIncompleteSteps = requiredVerificationSteps.some((step) => !form[step.id as keyof QAFormState]);
     const qaMethod = order.qa_method?.trim().toLowerCase();
     const routingMethod =
         qaMethod === "delivery" || qaMethod === "shipping"
@@ -292,7 +296,12 @@ export default function OrderQAPage() {
                                 <p className="text-xs text-muted-foreground">All steps must be checked before submission.</p>
                             </div>
                             <div className="space-y-3">
-                                {verificationSteps.map((step) => {
+                                {order.asset_tag_exempt && (
+                                    <p className="rounded-2xl border border-border bg-muted/40 px-4 py-3 text-sm">
+                                        Asset tag verification not required — College/Unit exemption: {order.college_unit}.
+                                    </p>
+                                )}
+                                {requiredVerificationSteps.map((step) => {
                                     const checked = form[step.id as keyof QAFormState] as boolean;
                                     return (
                                         <label
@@ -354,9 +363,9 @@ export default function OrderQAPage() {
                             <button
                                 type="button"
                                 onClick={submitQA}
-                                disabled={submitQaMutation.isPending || sameUserQaBlocked || !isFormComplete(form)}
+                                disabled={submitQaMutation.isPending || sameUserQaBlocked || !isFormComplete(form, order.asset_tag_exempt === true)}
                                 className={`rounded-2xl px-5 py-2 text-sm font-semibold transition-colors ${
-                                    submitQaMutation.isPending || sameUserQaBlocked || !isFormComplete(form)
+                                    submitQaMutation.isPending || sameUserQaBlocked || !isFormComplete(form, order.asset_tag_exempt === true)
                                         ? "bg-muted text-muted-foreground/70 cursor-not-allowed"
                                         : "bg-primary text-primary-foreground hover:bg-maroon-800 hover:text-white"
                                 }`}

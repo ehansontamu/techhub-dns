@@ -21,6 +21,7 @@ from requests.auth import HTTPBasicAuth, HTTPDigestAuth
 from app.config import settings
 from app.services.saml_auth_service import saml_auth_service
 from app.services.canopy_orders_uploader_service import CanopyOrdersUploaderService
+from app.services.asset_tag_policy_service import AssetTagPolicyService
 from app.services.graph_service import graph_service
 from app.services.inflow_service import InflowService
 from app.services.inventory_reorder_service import InventoryReorderService
@@ -78,6 +79,7 @@ from app.services.system_setting_service import (
     SETTING_INVENTORY_REORDER_TEAMS_RECIPIENT_EMAILS,
     SETTING_REQUIRE_DIFFERENT_USER_FOR_PICK_AND_QA,
     SETTING_PICKLIST_PRINT_CLAIM_TIMEOUT_SECONDS,
+    SETTING_ASSET_TAG_EXEMPT_COLLEGE_UNITS,
 )
 
 
@@ -1044,7 +1046,13 @@ def update_system_setting(key: str):
     updated_by = get_current_user_email()
 
     # SystemSettingService handles its own DB session
-    setting = SystemSettingService.set_setting(key, str(data["value"]), updated_by)
+    value = str(data["value"])
+    if key == SETTING_ASSET_TAG_EXEMPT_COLLEGE_UNITS:
+        try:
+            value = json.dumps(SystemSettingService.normalize_college_units(value))
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+    setting = SystemSettingService.set_setting(key, value, updated_by)
     defaults = DEFAULT_SETTINGS[key]
 
     return jsonify(
@@ -2572,6 +2580,27 @@ def upload_canopy_orders_bypass():
 
     if not normalized_orders:
         return jsonify({"error": "No orders provided"}), 400
+
+    # Admin bypasses preparation checks, but College/Unit exemptions still apply.
+    lookup_numbers = set(normalized_orders) | {
+        _base_canopyorders_order(number) for number in normalized_orders
+        if _normalize_canopyorders_order_value(number)
+    }
+    db = get_db_session()
+    try:
+        db_orders = db.query(Order).filter(Order.inflow_order_id.in_(lookup_numbers)).all()
+        exempt_orders = [
+            {"order": order.inflow_order_id, "reason": "College/Unit exempt from asset tagging"}
+            for order in db_orders
+            if AssetTagPolicyService.is_college_unit_exempt(order.inflow_data, db)
+        ]
+        if exempt_orders:
+            return jsonify({
+                "error": "One or more orders are exempt from asset tagging.",
+                "ineligible_orders": exempt_orders,
+            }), 400
+    finally:
+        db.close()
 
     canopy_orders = list(
         dict.fromkeys(

@@ -698,7 +698,7 @@ class DeliveryRunService:
                             exc,
                         )
                         already_fulfilled_order = await self._get_already_fulfilled_inflow_order(
-                            inflow_service, inflow_sales_order_id
+                            inflow_service, inflow_sales_order_id, order
                         )
                         if already_fulfilled_order is not None:
                             order.inflow_data = self._merge_partial_leg_fulfillment_result(
@@ -729,17 +729,115 @@ class DeliveryRunService:
         return asyncio.run(_fulfill())
 
     async def _get_already_fulfilled_inflow_order(
-        self, inflow_service: InflowService, sales_order_id: str
+        self,
+        inflow_service: InflowService,
+        sales_order_id: str,
+        order: Order,
     ) -> Optional[Dict[str, Any]]:
         try:
             current_order = await inflow_service.get_order_by_id(sales_order_id)
         except Exception:
             return None
 
-        if not self._is_inflow_order_fulfilled(current_order):
+        partial_leg_result = self._get_completed_partial_leg_inflow_order(
+            order, current_order
+        )
+        if partial_leg_result is not None:
+            return partial_leg_result
+
+        if self._is_inflow_order_fulfilled(current_order):
+            return current_order
+
+        return None
+
+    def _get_completed_partial_leg_inflow_order(
+        self, order: Order, inflow_order: Optional[Dict[str, Any]]
+    ) -> Optional[Dict[str, Any]]:
+        """Return a split-leg fulfillment result when InFlow saved it despite an error.
+
+        A split leg intentionally leaves its source sales order partially open, so
+        ``inventoryStatus`` cannot confirm that its shipment was created. InFlow
+        occasionally returns an error after persisting that shipment. Confirm the
+        new shipment by its tracking marker, containers, and the local leg's
+        picked quantities before treating the request as successful.
+        """
+        if not self._is_partial_order_leg(order) or not isinstance(inflow_order, dict):
             return None
 
-        return current_order
+        source_snapshot = order.inflow_data if isinstance(order.inflow_data, dict) else {}
+        source_pick_lines = source_snapshot.get("pickLines")
+        if not isinstance(source_pick_lines, list) or not source_pick_lines:
+            source_pick_lines = source_snapshot.get("lines", [])
+        expected_lines = filter_picklines(source_snapshot, source_pick_lines)
+        if not expected_lines:
+            return None
+
+        expected_quantities: Dict[str, float] = {}
+        for line in expected_lines:
+            if not isinstance(line, dict) or not line.get("productId"):
+                continue
+            quantity = self._line_standard_quantity(line)
+            if quantity > 0:
+                product_id = str(line["productId"])
+                expected_quantities[product_id] = (
+                    expected_quantities.get(product_id, 0) + quantity
+                )
+        if not expected_quantities:
+            return None
+
+        pack_lines = inflow_order.get("packLines")
+        ship_lines = inflow_order.get("shipLines")
+        if not isinstance(pack_lines, list) or not isinstance(ship_lines, list):
+            return None
+
+        for ship_line in reversed(ship_lines):
+            if not isinstance(ship_line, dict):
+                continue
+            if ship_line.get("trackingNumber") != self.PARTIAL_ORDER_TRACKING_NUMBER:
+                continue
+
+            containers = ship_line.get("containers")
+            if not isinstance(containers, list) or not containers:
+                continue
+            shipment_containers = {str(container) for container in containers}
+            shipment_pack_lines = [
+                line
+                for line in pack_lines
+                if isinstance(line, dict)
+                and str(line.get("containerNumber")) in shipment_containers
+            ]
+            packed_quantities: Dict[str, float] = {}
+            for line in shipment_pack_lines:
+                if not line.get("productId"):
+                    continue
+                product_id = str(line["productId"])
+                packed_quantities[product_id] = (
+                    packed_quantities.get(product_id, 0)
+                    + self._line_standard_quantity(line)
+                )
+
+            if any(
+                packed_quantities.get(product_id, 0) + 0.0001 < quantity
+                for product_id, quantity in expected_quantities.items()
+            ):
+                continue
+
+            confirmed_order = dict(inflow_order)
+            confirmed_order["_techhub_partial_leg_pack_lines"] = shipment_pack_lines
+            confirmed_order["_techhub_partial_leg_ship_lines"] = [ship_line]
+            return confirmed_order
+
+        return None
+
+    @staticmethod
+    def _line_standard_quantity(line: Dict[str, Any]) -> float:
+        quantity = line.get("quantity")
+        if not isinstance(quantity, dict):
+            return 0.0
+        try:
+            return float(quantity.get("standardQuantity") or 0)
+        except (TypeError, ValueError):
+            return 0.0
 
     def _is_inflow_order_fulfilled(
         self, inflow_order: Optional[Dict[str, Any]]

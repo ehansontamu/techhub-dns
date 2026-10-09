@@ -431,6 +431,86 @@ def test_fulfill_orders_already_fulfilled_preserves_split_snapshot():
     print("[PASS] DeliveryRunService keeps split snapshots on already-fulfilled retries")
 
 
+def test_fulfill_orders_accepts_persisted_partial_leg_after_inflow_error():
+    """A persisted split-leg shipment should complete the run despite InFlow's error."""
+
+    order = SimpleNamespace(
+        id="order-split-persisted",
+        inflow_order_id="TH5722-P",
+        inflow_sales_order_id="sales-order-5722",
+        parent_order_id="parent-order-5722",
+        remainder_order_id=None,
+        has_remainder=None,
+        inflow_data={
+            "lines": [
+                {"productId": "prod-1", "quantity": {"standardQuantity": "1"}}
+            ],
+            "pickLines": [
+                {"productId": "prod-1", "quantity": {"standardQuantity": "1"}}
+            ],
+            "packLines": [],
+            "shipLines": [],
+        },
+    )
+    persisted_payload = {
+        "id": "sales-order-5722",
+        "orderNumber": "TH5722",
+        "inventoryStatus": "started",
+        "pickLines": [
+            {"productId": "prod-1", "quantity": {"standardQuantity": "1"}}
+        ],
+        "packLines": [
+            {
+                "productId": "prod-1",
+                "containerNumber": "DELIVERY-TH5722-1",
+                "quantity": {"standardQuantity": "1"},
+            }
+        ],
+        "shipLines": [
+            {
+                "salesOrderShipLineId": "ship-leg-5722",
+                "containers": ["DELIVERY-TH5722-1"],
+                "trackingNumber": DeliveryRunService.PARTIAL_ORDER_TRACKING_NUMBER,
+            }
+        ],
+    }
+
+    service = DeliveryRunService(db=cast(Any, object()))
+
+    with patch("app.services.delivery_run_service.InflowService") as inflow_service_cls:
+        inflow_service = inflow_service_cls.return_value
+        inflow_service.fulfill_sales_order = AsyncMock(
+            side_effect=ValueError("InFlow fulfillment failed after persisting shipment")
+        )
+        inflow_service.get_order_by_id = AsyncMock(return_value=persisted_payload)
+
+        successes, failures = service._fulfill_orders_in_inflow(
+            cast(Any, [order]), user_id="user-1"
+        )
+
+    assert failures == []
+    assert len(successes) == 1
+    assert successes[0]["already_fulfilled"] is True
+    assert order.inflow_data["lines"] == [
+        {"productId": "prod-1", "quantity": {"standardQuantity": "1"}}
+    ]
+    assert order.inflow_data["packLines"] == [
+        {
+            "productId": "prod-1",
+            "containerNumber": "DELIVERY-TH5722-1",
+            "quantity": {"standardQuantity": "1"},
+        }
+    ]
+    assert order.inflow_data["shipLines"] == [
+        {
+            "salesOrderShipLineId": "ship-leg-5722",
+            "containers": ["DELIVERY-TH5722-1"],
+            "trackingNumber": DeliveryRunService.PARTIAL_ORDER_TRACKING_NUMBER,
+        }
+    ]
+    print("[PASS] DeliveryRunService accepts persisted split-leg shipments after errors")
+
+
 def test_fulfill_orders_accepts_already_fulfilled_inflow_order():
     """Retrying run completion should succeed when InFlow already fulfilled the order."""
 

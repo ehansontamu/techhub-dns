@@ -24,6 +24,7 @@ from app.models.user import User
 from app.utils.pdf_helpers import wrap_text, check_page_break, filter_picklines
 from app.models.audit_log import AuditLog
 from app.services.audit_service import AuditService
+from app.services.asset_tag_policy_service import AssetTagPolicyService
 from app.services.location_resolver_service import location_resolver_service
 
 from app.utils.building_mapper import (
@@ -447,6 +448,8 @@ class OrderService:
         return merged
 
     def _requires_asset_tags(self, order: Order) -> bool:
+        if AssetTagPolicyService.is_college_unit_exempt(order.inflow_data, self.db):
+            return False
         if not SystemSettingService.is_setting_enabled(
             SETTING_REQUIRE_ASSET_TAGS_BEFORE_PICKLIST
         ):
@@ -954,6 +957,9 @@ class OrderService:
         self.assert_not_stale(order, expected_updated_at)
         self._ensure_remainder_leg_ready(order, "tag assets")
 
+        if AssetTagPolicyService.is_college_unit_exempt(order.inflow_data, self.db):
+            raise ValidationError("Tags are not required for this College/Unit")
+
         tag_data = dict(order.tag_data or {})
         tag_data["tag_ids"] = tag_ids
 
@@ -1112,6 +1118,7 @@ class OrderService:
             and order.tagged_by
             and generated_by
             and order.tagged_by != generated_by
+            and not AssetTagPolicyService.is_college_unit_exempt(order.inflow_data, self.db)
         ):
             same_user = False
             if generated_by_display:
@@ -1263,6 +1270,17 @@ class OrderService:
 
         return order
 
+    def _apply_qa_asset_tag_exemption(self, order: Order, qa_data: Dict[str, Any]) -> None:
+        """Record the server's policy decision instead of a false tag verification."""
+        exempt = AssetTagPolicyService.is_college_unit_exempt(order.inflow_data, self.db)
+        # Ignore client-supplied exemption metadata; retain the policy at QA time.
+        qa_data.pop("assetTagVerificationNotRequired", None)
+        qa_data.pop("assetTagExemptCollegeUnit", None)
+        if exempt:
+            qa_data["verifyAssetTagSerialMatch"] = False
+            qa_data["assetTagVerificationNotRequired"] = True
+            qa_data["assetTagExemptCollegeUnit"] = AssetTagPolicyService.college_unit(order.inflow_data)
+
     def submit_qa(
         self,
         order_id: Union[UUID, str],
@@ -1312,6 +1330,8 @@ class OrderService:
         # This ensures consistency between the audit log and the stored form data
         if technician:
             qa_data["technician"] = technician
+
+        self._apply_qa_asset_tag_exemption(order, qa_data)
 
         # Validate QA data format - must use detailed shipping QA format
         required_fields = [
@@ -3816,7 +3836,11 @@ class OrderService:
             ]
 
             for field, description in checklist_items:
-                status = "PASS" if qa_data.get(field, False) else "FAIL"
+                if field == "verifyAssetTagSerialMatch" and qa_data.get("assetTagVerificationNotRequired") is True:
+                    status = "N/A"
+                    description = "Asset tagging not required (College/Unit exemption)"
+                else:
+                    status = "PASS" if qa_data.get(field, False) else "FAIL"
                 pdf.drawString(70, y_pos, f"[{status}] {description}")
                 y_pos -= 20
 
