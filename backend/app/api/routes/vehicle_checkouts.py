@@ -5,11 +5,12 @@ from flask import Blueprint, jsonify, request, abort
 from pydantic import ValidationError as PydanticValidationError
 
 from app.api.vehicle_status_events import broadcast_vehicle_status_update_sync
-from app.api.auth_middleware import require_auth
+from app.api.auth_middleware import require_admin, require_auth
 from app.database import get_db
 from app.schemas.vehicle_checkout import (
     CheckoutRequest,
     CheckinRequest,
+    ForceReturnRequest,
     VehicleCheckoutResponse,
     VehicleStatusItem,
     VehicleStatusResponse,
@@ -70,6 +71,28 @@ def get_active_checkouts():
         active = service.get_active_checkouts()
         response = [VehicleCheckoutResponse.model_validate(c).model_dump() for c in active]
         return jsonify(response)
+
+
+@vehicle_checkouts_bp.route("/force-return", methods=["POST"])
+@require_admin
+def force_return_vehicle():
+    try:
+        req = ForceReturnRequest(**(request.get_json() or {}))
+    except PydanticValidationError as exc:
+        raise ValidationError(
+            "Invalid force return request",
+            details={"errors": exc.errors(include_context=False)},
+        )
+
+    with get_db() as db:
+        checkout = VehicleCheckoutService(db).force_return(
+            vehicle=req.vehicle,
+            checkout_id=str(req.checkout_id),
+            reason=req.reason,
+        )
+        broadcast_dedup.request_broadcast(broadcast_vehicle_status_update_sync)
+        response = VehicleCheckoutResponse.model_validate(checkout)
+        return jsonify(response.model_dump(mode="json"))
 
 
 @vehicle_checkouts_bp.route("", methods=["GET"])

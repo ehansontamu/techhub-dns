@@ -5,6 +5,7 @@ import { toast } from "sonner";
 
 import { settingsApi, type SystemSettings } from "../api/settings";
 import AssetTagExemptions from "../components/admin/AssetTagExemptions";
+import VehicleForceReturn from "../components/admin/VehicleForceReturn";
 import { useAuth } from "../contexts/AuthContext";
 import { SectionErrorBoundary } from "../components/error-boundaries/AppErrorBoundaries";
 import { Badge } from "../components/ui/badge";
@@ -152,10 +153,15 @@ export default function Admin() {
         <div className="container mx-auto py-6 space-y-6">
             <div className="space-y-1">
                 <h1 className="text-2xl font-semibold tracking-tight">Admin Tools</h1>
-                <p className="text-sm text-muted-foreground">Durable workflow defaults. Operator actions live on /settings.</p>
+                <p className="text-sm text-muted-foreground">Workflow defaults, access controls, and vehicle recovery.</p>
             </div>
 
             <section className="grid grid-cols-1 gap-6 xl:grid-cols-2">
+                {isAdmin && (
+                    <SectionErrorBoundary title="Vehicle recovery failed" message="Try reloading the panel.">
+                        <VehicleForceReturn />
+                    </SectionErrorBoundary>
+                )}
                 <Card className="border-border/70 bg-card/80 shadow-none">
                     <CardHeader>
                         <CardTitle className="text-base">College/Units exempt from asset tagging</CardTitle>
