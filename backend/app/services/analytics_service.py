@@ -1,7 +1,7 @@
 from typing import Dict, List, Any, Optional
 from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
-from sqlalchemy import case, func
+from sqlalchemy import case, func, or_
 
 from app.models.order import Order, OrderStatus
 from app.models.delivery_run import DeliveryRun, DeliveryRunStatus
@@ -30,13 +30,21 @@ class AnalyticsService:
 
     def get_order_status_counts(self) -> Dict[str, int]:
         """
-        Get count of orders grouped by status.
+        Get count of orders grouped by status, excluding archived QA orders.
 
         Returns:
             Dict mapping status names to counts, e.g. {"picked": 5, "qa": 3, "delivered": 10}
         """
         results = (
             self._visible_orders_query(Order.status, func.count(Order.id).label("count"))
+            # The QA docket uses the order list, which excludes archived orders.
+            # Keep other status totals available for historical analytics.
+            .filter(
+                or_(
+                    Order.status != OrderStatus.QA.value,
+                    Order.archived_from_order_list.is_(False),
+                )
+            )
             .group_by(Order.status)
             .all()
         )

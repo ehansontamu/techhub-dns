@@ -97,6 +97,69 @@ def test_archived_orders_still_count_in_analytics():
         engine.dispose()
 
 
+def test_archived_qa_orders_do_not_count_as_ready_for_qa():
+    session, engine = _make_session()
+    try:
+        session.add(
+            Order(
+                inflow_order_id="TH000186",
+                status=OrderStatus.QA.value,
+                archived_from_order_list=True,
+            )
+        )
+        session.commit()
+
+        service = AnalyticsService(session)
+        assert service.get_order_status_counts().get(OrderStatus.QA.value, 0) == 0
+        _, qa_total = OrderService(session).get_orders(status=OrderStatus.QA)
+        assert qa_total == 0
+        assert session.query(Order).count() == 1
+        print("[PASS] archived QA order is excluded from the dashboard and QA docket")
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_ready_for_qa_count_includes_only_visible_unarchived_qa_orders():
+    session, engine = _make_session()
+    try:
+        session.add_all(
+            [
+                Order(inflow_order_id="TH3002", status=OrderStatus.QA.value),
+                Order(
+                    inflow_order_id="TH3003",
+                    status=OrderStatus.QA.value,
+                    archived_from_order_list=True,
+                ),
+                Order(
+                    inflow_order_id="TH3004",
+                    status=OrderStatus.QA.value,
+                    hidden_from_ops=True,
+                ),
+                Order(inflow_order_id="TH3005", status=OrderStatus.PICKED.value),
+                Order(
+                    inflow_order_id="TH3006",
+                    status=OrderStatus.DELIVERED.value,
+                    archived_from_order_list=True,
+                ),
+            ]
+        )
+        session.commit()
+
+        counts = AnalyticsService(session).get_order_status_counts()
+        assert counts == {
+            OrderStatus.QA.value: 1,
+            OrderStatus.PICKED.value: 1,
+            OrderStatus.DELIVERED.value: 1,
+        }
+        _, qa_total = OrderService(session).get_orders(status=OrderStatus.QA)
+        assert counts[OrderStatus.QA.value] == qa_total
+        print("[PASS] QA dashboard count matches unarchived QA orders and preserves completed totals")
+    finally:
+        session.close()
+        engine.dispose()
+
+
 if __name__ == "__main__":
     print("Running order-details workflow regression tests...")
     print()
@@ -107,6 +170,8 @@ if __name__ == "__main__":
     test_is_business_day_filters_weekends()
     test_workflow_daily_trends_skip_weekend_rows()
     test_archived_orders_still_count_in_analytics()
+    test_archived_qa_orders_do_not_count_as_ready_for_qa()
+    test_ready_for_qa_count_includes_only_visible_unarchived_qa_orders()
 
     print()
     print("[SUCCESS] Order-details workflow regression tests passed!")
