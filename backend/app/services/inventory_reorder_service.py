@@ -5,6 +5,7 @@ import time
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from typing import Any, Callable, Optional
 from uuid import uuid4
 
@@ -351,7 +352,12 @@ class InventoryReorderService:
     def get_job(self, job_id: str) -> Optional[JobStatus]:
         with self._lock:
             job = self._jobs.get(job_id)
-            return dict(job) if job else None
+            if job:
+                return dict(job)
+
+        # Scheduled refreshes and other web workers have separate job dictionaries.
+        job = self._read_latest_metadata_job()
+        return job if job and job.get("job_id") == job_id else None
 
     def latest_job(self) -> Optional[JobStatus]:
         metadata_job = self._read_latest_metadata_job()
@@ -373,10 +379,14 @@ class InventoryReorderService:
         if not metadata_job:
             return memory_job
 
-        memory_finished_at = _parse_utc_iso(memory_job.get("finished_at"))
-        metadata_finished_at = _parse_utc_iso(metadata_job.get("finished_at"))
-        if metadata_finished_at and (
-            memory_finished_at is None or metadata_finished_at > memory_finished_at
+        memory_timestamp = _parse_utc_iso(
+            memory_job.get("finished_at") or memory_job.get("started_at")
+        )
+        metadata_timestamp = _parse_utc_iso(
+            metadata_job.get("finished_at") or metadata_job.get("started_at")
+        )
+        if metadata_timestamp and (
+            memory_timestamp is None or metadata_timestamp > memory_timestamp
         ):
             return metadata_job
         return memory_job
@@ -482,6 +492,7 @@ class InventoryReorderService:
         def progress(message: str, pct: Optional[float] = None) -> None:
             logger.info("Inventory reorder refresh %s: %s", job_id, message)
             self._update_job(job_id, message=message, progress=pct)
+            self._write_latest_metadata_from_job(job_id)
 
         inflow_headers = {
             "Authorization": f"Bearer {self._settings.inflow_api_key}",
@@ -1150,7 +1161,26 @@ class InventoryReorderService:
             "latest_job": job,
             "updated_at": _utc_now_iso(),
         }
+        temporary_path: Optional[Path] = None
         try:
-            self._write_json(metadata_path, payload)
+            # Readers in other processes must see a complete status snapshot.
+            with NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=metadata_path.parent,
+                prefix="inventory_metadata_",
+                suffix=".tmp",
+                delete=False,
+            ) as handle:
+                temporary_path = Path(handle.name)
+                json.dump(payload, handle, indent=2)
+                handle.write("\n")
+            temporary_path.replace(metadata_path)
         except OSError as exc:
             logger.warning("Failed to write inventory reorder metadata: %s", exc)
+        finally:
+            if temporary_path is not None:
+                try:
+                    temporary_path.unlink(missing_ok=True)
+                except OSError as exc:
+                    logger.warning("Failed to remove inventory reorder metadata temp file: %s", exc)

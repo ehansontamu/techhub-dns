@@ -1,3 +1,4 @@
+import json
 import sys
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -285,6 +286,121 @@ def test_latest_summary_path_is_absolute_for_file_downloads(tmp_path):
     assert latest_path.is_absolute()
 
 
+def test_job_status_is_shared_between_scheduler_and_web_processes(tmp_path):
+    settings = SimpleNamespace(storage_root=str(tmp_path))
+    scheduler = InventoryReorderService(settings)
+    web_worker = InventoryReorderService(settings)
+
+    def refresh(job_id):
+        running = web_worker.latest_job()
+        assert running["job_id"] == job_id
+        assert running["status"] == "running"
+        assert web_worker.get_job(job_id) == running
+        return tmp_path / "summary.json"
+
+    with patch.object(scheduler, "_refresh_inventory", refresh):
+        completed = scheduler.run_refresh_sync(trigger="scheduled")
+
+    assert completed["status"] == "done"
+    assert web_worker.get_job(completed["job_id"]) == completed
+    assert web_worker.get_job("unknown-job") is None
+    assert web_worker._jobs == {}
+
+
+def test_latest_job_prefers_new_scheduled_run_over_old_worker_result(tmp_path):
+    settings = SimpleNamespace(storage_root=str(tmp_path))
+    web_worker = InventoryReorderService(settings)
+    scheduler = InventoryReorderService(settings)
+    old_job = {
+        "job_id": "old-manual-job", "status": "done", "result_path": "old.json",
+        "started_at": "2026-10-12T12:30:00Z", "finished_at": "2026-10-12T12:35:00Z",
+    }
+    web_worker._jobs[old_job["job_id"]] = old_job
+    web_worker._latest_job_id = old_job["job_id"]
+    scheduled_job = {
+        "job_id": "new-scheduled-job", "status": "running", "progress": 0.01,
+        "started_at": "2026-10-12T17:00:00Z", "finished_at": None,
+    }
+    scheduler._jobs[scheduled_job["job_id"]] = scheduled_job
+    scheduler._write_latest_metadata_from_job(scheduled_job["job_id"])
+
+    assert web_worker.latest_job() == scheduled_job
+    assert web_worker.get_job(old_job["job_id"]) == old_job
+
+    scheduler._update_job(scheduled_job["job_id"], progress=0.5, message="Loading orders")
+    scheduler._write_latest_metadata_from_job(scheduled_job["job_id"])
+    updated = web_worker.get_job(scheduled_job["job_id"])
+    assert updated["progress"] == 0.5
+    assert updated["message"] == "Loading orders"
+
+
+def test_metadata_write_failure_preserves_previous_status(tmp_path):
+    service = InventoryReorderService(SimpleNamespace(storage_root=str(tmp_path)))
+    service._jobs["job-1"] = {"job_id": "job-1", "status": "running"}
+    service._write_latest_metadata_from_job("job-1")
+    previous = service._metadata_path().read_text(encoding="utf-8")
+    service._update_job("job-1", status="done")
+
+    with patch.object(json, "dump", side_effect=OSError("Interrupted write")):
+        service._write_latest_metadata_from_job("job-1")
+
+    assert service._metadata_path().read_text(encoding="utf-8") == previous
+    assert list(service._data_dir().glob("*.tmp")) == []
+
+
+def test_failed_refresh_status_is_shared_with_other_workers(tmp_path):
+    settings = SimpleNamespace(storage_root=str(tmp_path))
+    scheduler = InventoryReorderService(settings)
+    web_worker = InventoryReorderService(settings)
+
+    with patch.object(scheduler, "_refresh_inventory", side_effect=RuntimeError("Upstream unavailable")):
+        failed = scheduler.run_refresh_sync(trigger="scheduled")
+
+    assert failed["status"] == "error"
+    assert failed["error"] == "Upstream unavailable"
+    assert failed["finished_at"] is not None
+    assert web_worker.get_job(failed["job_id"]) == failed
+    assert web_worker.latest_job() == failed
+
+
+def test_refresh_publishes_progress_and_summary_without_external_calls(tmp_path):
+    settings = SimpleNamespace(
+        storage_root=str(tmp_path),
+        inventory_reorder_refresh_cooldown_seconds=0,
+        inflow_api_key="test", inflow_company_id="test-company",
+        inventory_reorder_bigcommerce_token="test",
+        inventory_reorder_bigcommerce_store_id="test-store",
+        inventory_reorder_location_id="test-location",
+    )
+    scheduler = InventoryReorderService(settings)
+    web_worker = InventoryReorderService(settings)
+
+    def fetch_products(_headers, *, progress):
+        running = web_worker.latest_job()
+        assert running["status"] == "running"
+        assert running["message"] == "Fetching InFlow products..."
+        assert running["progress"] == 0.08
+        progress("Fetched product page", 0.2)
+        assert web_worker.get_job(running["job_id"])["progress"] == 0.2
+        return []
+
+    with (
+        patch.object(scheduler, "_fetch_all_products", side_effect=fetch_products),
+        patch.object(scheduler, "_fetch_all_summaries", return_value=[]),
+        patch.object(scheduler, "_fetch_bigcommerce_status9_demand", return_value=({}, {}, [])),
+        patch.object(scheduler, "_fetch_recent_bigcommerce_orders", return_value=[]),
+        patch.object(scheduler, "_fetch_inflow_active_order_details", return_value={}),
+        patch.object(scheduler, "_notify_new_high_quantity_bigcommerce_orders") as notify,
+    ):
+        completed = scheduler.run_refresh_sync(trigger="scheduled")
+
+    assert completed["status"] == "done"
+    assert web_worker.get_job(completed["job_id"]) == completed
+    assert web_worker.get_latest_summary()["latest_job"] == completed
+    assert web_worker.get_latest_summary()["has_data"] is True
+    notify.assert_called_once_with([])
+
+
 def test_latest_summary_counts_ten_plus_bc_items_regardless_of_reorder_settings(tmp_path):
     service = InventoryReorderService(
         SimpleNamespace(
@@ -454,4 +570,13 @@ if __name__ == "__main__":
         test_inventory_reorder_latest_job_reads_persisted_metadata(Path(tmp))
         test_latest_summary_path_is_absolute_for_file_downloads(Path(tmp))
         test_latest_summary_counts_ten_plus_bc_items_regardless_of_reorder_settings(Path(tmp))
+    for test in (
+        test_job_status_is_shared_between_scheduler_and_web_processes,
+        test_latest_job_prefers_new_scheduled_run_over_old_worker_result,
+        test_metadata_write_failure_preserves_previous_status,
+        test_failed_refresh_status_is_shared_with_other_workers,
+        test_refresh_publishes_progress_and_summary_without_external_calls,
+    ):
+        with tempfile.TemporaryDirectory() as tmp:
+            test(Path(tmp))
     print("[PASS] inventory reorder service tests passed")
