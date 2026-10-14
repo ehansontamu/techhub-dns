@@ -11,7 +11,8 @@ from sqlalchemy.orm import Session
 
 from app.models.delivery_run import DeliveryRun, DeliveryRunStatus, VehicleEnum
 from app.models.vehicle_checkout import VehicleCheckout
-from app.utils.exceptions import ValidationError
+from app.services.audit_service import AuditService
+from app.utils.exceptions import ConflictError, ValidationError
 from app.utils.timezone import to_utc_iso_z
 
 logger = logging.getLogger(__name__)
@@ -32,8 +33,8 @@ class VehicleCheckoutService:
             )
         return vehicle_norm
 
-    def _delivery_run_active(self, vehicle: str) -> bool:
-        active = (
+    def _delivery_run_active(self, vehicle: str, lock: bool = False) -> bool:
+        query = (
             self.db.query(DeliveryRun)
             .filter(
                 and_(
@@ -41,8 +42,10 @@ class VehicleCheckoutService:
                     DeliveryRun.status == DeliveryRunStatus.ACTIVE.value,
                 )
             )
-            .first()
         )
+        if lock:
+            query = query.with_for_update()
+        active = query.first()
         return active is not None
 
     def get_active_checkout(self, vehicle: str) -> Optional[VehicleCheckout]:
@@ -230,22 +233,34 @@ class VehicleCheckoutService:
             )
             return checkout
 
+    def force_return(
+        self,
+        vehicle: str,
+        checkout_id: str,
+        reason: str,
+    ) -> VehicleCheckout:
+        reason_norm = (reason or "").strip()
+        if not reason_norm:
+            raise ValidationError("Force return reason is required", field="reason")
+        return self.checkin(
+            vehicle=vehicle,
+            notes=f"[Admin force return] {reason_norm}",
+            expected_checkout_id=checkout_id,
+            force_return_reason=reason_norm,
+        )
+
     def checkin(
         self,
         vehicle: str,
         notes: Optional[str] = None,
         allow_active_delivery_run: bool = False,
+        expected_checkout_id: Optional[str] = None,
+        force_return_reason: Optional[str] = None,
     ) -> VehicleCheckout:
         vehicle_norm = self._validate_vehicle(vehicle)
         actor_user_id, actor_email, actor_display_name = self._get_authenticated_actor()
         checked_in_by_display = self._format_actor_display(actor_display_name)
         with self._vehicle_lock(vehicle_norm):
-            if self._delivery_run_active(vehicle_norm) and not allow_active_delivery_run:
-                raise ValidationError(
-                    f"Cannot check in {vehicle_norm} while a delivery run is active",
-                    details={"vehicle": vehicle_norm, "delivery_run_active": True},
-                )
-
             checkout = (
                 self.db.query(VehicleCheckout)
                 .filter(
@@ -254,11 +269,28 @@ class VehicleCheckoutService:
                         VehicleCheckout.checked_in_at.is_(None),
                     )
                 )
+                .with_for_update()
                 .first()
             )
+            # Run creation locks this checkout too. Recheck runs with a current
+            # locking read after acquiring it, so a concurrent dispatch wins
+            # before check-in or sees the vehicle already returned.
+            if self._delivery_run_active(vehicle_norm, lock=True) and (
+                force_return_reason is not None or not allow_active_delivery_run
+            ):
+                raise ValidationError(
+                    f"Cannot check in {vehicle_norm} while a delivery run is active",
+                    details={"vehicle": vehicle_norm, "delivery_run_active": True},
+                )
             if not checkout:
                 raise ValidationError(
                     f"Vehicle {vehicle_norm} is not currently checked out",
+                    details={"vehicle": vehicle_norm},
+                )
+
+            if expected_checkout_id is not None and str(checkout.id) != expected_checkout_id:
+                raise ConflictError(
+                    "Vehicle checkout has changed. Refresh and review the current checkout before returning it.",
                     details={"vehicle": vehicle_norm},
                 )
 
@@ -275,6 +307,30 @@ class VehicleCheckoutService:
             checkout.checked_in_by_email = actor_email
             checkout.checked_in_by_display_name = actor_display_name
             checkout.updated_at = datetime.utcnow()
+
+            if force_return_reason is not None:
+                AuditService(self.db).log_action(
+                    entity_type="vehicle_checkout",
+                    entity_id=str(checkout.id),
+                    action="force_returned",
+                    user_id=actor_user_id,
+                    user_role="admin",
+                    old_value={"checked_in_at": None},
+                    new_value={
+                        "checked_in_at": to_utc_iso_z(checkout.checked_in_at),
+                        "checked_in_by": checked_in_by_display,
+                    },
+                    description=f"Admin force returned {vehicle_norm}",
+                    audit_metadata={
+                        "reason": force_return_reason,
+                        "vehicle": vehicle_norm,
+                        "checkout_type": checkout.checkout_type,
+                        "purpose": checkout.purpose,
+                        "checked_out_by_user_id": checkout.checked_out_by_user_id,
+                        "checked_out_by": checkout.checked_out_by,
+                        "checked_in_by_email": actor_email,
+                    },
+                )
 
             self.db.commit()
             self.db.refresh(checkout)

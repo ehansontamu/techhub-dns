@@ -1,4 +1,5 @@
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { isAxiosError } from "axios";
 import { AlertTriangle, ArrowUpDown, ChevronRight, Download, Loader2, PackageSearch, RefreshCw, Search } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -116,6 +117,8 @@ export default function InventoryReorder() {
   const [sortKey, setSortKey] = useState<SortKey>("status");
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
   const [activeJob, setActiveJob] = useState<InventoryReorderJob | null>(null);
+  const unavailableJobId = useRef<string | null>(null);
+  const dataRequestId = useRef(0);
   const [refreshing, setRefreshing] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -130,14 +133,14 @@ export default function InventoryReorder() {
     if (!options?.silent) {
       setLoading(true);
     }
+    const requestId = ++dataRequestId.current;
     try {
       const payload = await inventoryReorderApi.getData(showAll || showTenPlusOnly);
+      if (requestId !== dataRequestId.current) return;
       setData(payload);
-      if (isRunningJob(payload.latest_job)) {
-        setActiveJob(payload.latest_job);
-      }
+      setActiveJob(payload.latest_job?.job_id === unavailableJobId.current ? null : payload.latest_job);
     } catch (error: unknown) {
-      if (!options?.silent) {
+      if (!options?.silent && requestId === dataRequestId.current) {
         const message = extractApiErrorMessage(error, "Failed to load inventory reorder data.");
         toast.error("Failed to load Inventory Reorder", { description: message });
         setData(null);
@@ -153,34 +156,65 @@ export default function InventoryReorder() {
     void loadData();
   }, [loadData]);
 
+  const activeJobId = activeJob?.job_id;
+  const activeJobStatus = activeJob?.status;
+
   useEffect(() => {
-    if (!activeJob || !isRunningJob(activeJob)) {
+    if (!activeJobId || (activeJobStatus !== "queued" && activeJobStatus !== "running")) {
       return;
     }
 
-    const interval = window.setInterval(() => {
-      void inventoryReorderApi
-        .getJob(activeJob.job_id)
-        .then(({ job }) => {
-          setActiveJob(job);
-          if (job.status === "done") {
-            toast.success("Inventory reorder refresh complete");
-            void loadData();
-          }
-          if (job.status === "error") {
-            toast.error("Inventory reorder refresh failed", {
-              description: job.error ?? "The refresh job failed.",
-            });
-          }
-        })
-        .catch((error: unknown) => {
+    let cancelled = false;
+    let reportedError = false;
+    let timeout: number;
+
+    const poll = async () => {
+      let delay = 2000;
+      try {
+        const { job } = await inventoryReorderApi.getJob(activeJobId);
+        if (cancelled) return;
+        reportedError = false;
+        setActiveJob(job);
+        if (job.status === "done") {
+          ++dataRequestId.current;
+          toast.success("Inventory reorder refresh complete");
+          void loadData({ silent: true });
+          return;
+        }
+        if (job.status === "error") {
+          ++dataRequestId.current;
+          toast.error("Inventory reorder refresh failed", {
+            description: job.error ?? "The refresh job failed.",
+          });
+          void loadData({ silent: true });
+          return;
+        }
+      } catch (error: unknown) {
+        if (cancelled) return;
+        if (isAxiosError(error) && error.response?.status === 404) {
+          // An old job may disappear after a restart or a newer scheduled run.
+          unavailableJobId.current = activeJobId;
+          ++dataRequestId.current;
+          setActiveJob(null);
+          void loadData({ silent: true });
+          return;
+        }
+        if (!reportedError) {
           const message = extractApiErrorMessage(error, "Failed to check refresh status.");
           toast.error("Inventory reorder refresh status failed", { description: message });
-        });
-    }, 2000);
+          reportedError = true;
+        }
+        delay = 10000;
+      }
+      if (!cancelled) timeout = window.setTimeout(() => void poll(), delay);
+    };
 
-    return () => window.clearInterval(interval);
-  }, [activeJob, loadData]);
+    timeout = window.setTimeout(() => void poll(), 2000);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeout);
+    };
+  }, [activeJobId, activeJobStatus, loadData]);
 
   useEffect(() => {
     if (!isAdmin) {
@@ -193,7 +227,16 @@ export default function InventoryReorder() {
       }
     }, 60000);
 
-    return () => window.clearInterval(interval);
+    const reloadOnReturn = () => {
+      if (document.visibilityState === "visible") void loadData({ silent: true });
+    };
+    window.addEventListener("focus", reloadOnReturn);
+    document.addEventListener("visibilitychange", reloadOnReturn);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener("focus", reloadOnReturn);
+      document.removeEventListener("visibilitychange", reloadOnReturn);
+    };
   }, [activeJob, isAdmin, loadData]);
 
   useEffect(() => {
@@ -207,9 +250,12 @@ export default function InventoryReorder() {
   }, [data?.cooldown.ends_at]);
 
   const startRefresh = async () => {
+    // Older inventory responses must not replace a newly started refresh job.
+    ++dataRequestId.current;
     setRefreshing(true);
     try {
       const response = await inventoryReorderApi.refresh();
+      ++dataRequestId.current;
       setActiveJob(response.job);
       toast.success(response.created ? "Inventory refresh started" : "Inventory refresh already running");
     } catch (error: unknown) {
@@ -274,7 +320,7 @@ export default function InventoryReorder() {
     });
   };
 
-  const job = activeJob ?? data?.latest_job ?? null;
+  const job = activeJob;
   const refreshRunning = isRunningJob(job);
   const configMissing = data?.config.configured === false;
   const scheduledRefresh = data?.config.scheduled_refresh;

@@ -443,6 +443,7 @@ class DeliveryRunService:
                     VehicleCheckout.checked_in_at.is_(None),
                 )
             )
+            .with_for_update()
             .first()
         )
 

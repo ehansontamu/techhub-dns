@@ -28,6 +28,12 @@ export interface CheckinRequest {
   notes?: string;
 }
 
+export interface ForceReturnRequest {
+  vehicle: Vehicle;
+  checkout_id: string;
+  reason: string;
+}
+
 export interface VehicleStatusItem {
   vehicle: Vehicle;
   checked_out: boolean;
@@ -82,6 +88,14 @@ export const vehicleCheckoutsApi = {
   getActive: async (): Promise<VehicleCheckoutResponse[]> => {
     const response = await apiClient.get<VehicleCheckoutResponse[]>(
       "/vehicle-checkouts/active"
+    );
+    return response.data;
+  },
+
+  forceReturn: async (request: ForceReturnRequest): Promise<VehicleCheckoutResponse> => {
+    const response = await apiClient.post<VehicleCheckoutResponse>(
+      "/vehicle-checkouts/force-return",
+      request
     );
     return response.data;
   },

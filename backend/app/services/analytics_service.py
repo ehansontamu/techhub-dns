@@ -1,7 +1,7 @@
 from typing import Dict, List, Any, Optional
 from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
-from sqlalchemy import case, func
+from sqlalchemy import case, func, or_
 
 from app.models.order import Order, OrderStatus
 from app.models.delivery_run import DeliveryRun, DeliveryRunStatus
@@ -30,21 +30,45 @@ class AnalyticsService:
 
     def get_order_status_counts(self) -> Dict[str, int]:
         """
-        Get count of orders grouped by status.
+        Get count of orders grouped by status and the actionable QA count.
 
         Returns:
-            Dict mapping status names to counts, e.g. {"picked": 5, "qa": 3, "delivered": 10}
+            Dict mapping status names to counts, plus ``ready_for_qa`` for QA-stage
+            orders that have not already completed QA.
         """
         results = (
             self._visible_orders_query(Order.status, func.count(Order.id).label("count"))
+            # The QA docket uses the order list, which excludes archived orders.
+            # Keep other status totals available for historical analytics.
+            .filter(
+                or_(
+                    Order.status != OrderStatus.QA.value,
+                    Order.archived_from_order_list.is_(False),
+                )
+            )
             .group_by(Order.status)
             .all()
         )
 
-        if not results:
-            return {}
+        counts = {status: count for status, count in results}
 
-        return {status: count for status, count in results}
+        # A record can remain in the QA status after its checklist is completed
+        # (for example, when a downstream status transition has not occurred).
+        # The home-page QA card should count work an operator can still perform,
+        # not every record currently labelled QA.
+        if OrderStatus.QA.value in counts:
+            counts["ready_for_qa"] = (
+                self._visible_orders_query(func.count(Order.id))
+                .filter(
+                    Order.status == OrderStatus.QA.value,
+                    Order.archived_from_order_list.is_(False),
+                    Order.qa_completed_at.is_(None),
+                )
+                .scalar()
+                or 0
+            )
+
+        return counts
 
     def get_delivery_performance(self) -> Dict[str, int]:
         """

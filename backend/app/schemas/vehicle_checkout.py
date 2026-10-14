@@ -100,6 +100,16 @@ class CheckinRequest(BaseModel):
         return normalized or None
 
 
+class ForceReturnRequest(CheckinRequest):
+    checkout_id: UUID
+    reason: str = Field(min_length=1, max_length=2000)
+
+    @field_validator("reason", mode="before")
+    @classmethod
+    def strip_reason(cls, value):
+        return value.strip() if isinstance(value, str) else value
+
+
 class VehicleCheckoutResponse(BaseModel):
     id: UUID
     vehicle: str
