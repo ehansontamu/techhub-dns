@@ -382,7 +382,7 @@ export default function Dashboard() {
           />
           <StatCard
             title="Ready for QA"
-            value={statusCounts.qa ?? 0}
+            value={statusCounts.ready_for_qa ?? 0}
             icon={CheckCircle2}
             loading={statusLoading}
             accent="maroon"

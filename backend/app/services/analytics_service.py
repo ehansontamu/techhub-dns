@@ -30,10 +30,11 @@ class AnalyticsService:
 
     def get_order_status_counts(self) -> Dict[str, int]:
         """
-        Get count of orders grouped by status, excluding archived QA orders.
+        Get count of orders grouped by status and the actionable QA count.
 
         Returns:
-            Dict mapping status names to counts, e.g. {"picked": 5, "qa": 3, "delivered": 10}
+            Dict mapping status names to counts, plus ``ready_for_qa`` for QA-stage
+            orders that have not already completed QA.
         """
         results = (
             self._visible_orders_query(Order.status, func.count(Order.id).label("count"))
@@ -49,10 +50,25 @@ class AnalyticsService:
             .all()
         )
 
-        if not results:
-            return {}
+        counts = {status: count for status, count in results}
 
-        return {status: count for status, count in results}
+        # A record can remain in the QA status after its checklist is completed
+        # (for example, when a downstream status transition has not occurred).
+        # The home-page QA card should count work an operator can still perform,
+        # not every record currently labelled QA.
+        if OrderStatus.QA.value in counts:
+            counts["ready_for_qa"] = (
+                self._visible_orders_query(func.count(Order.id))
+                .filter(
+                    Order.status == OrderStatus.QA.value,
+                    Order.archived_from_order_list.is_(False),
+                    Order.qa_completed_at.is_(None),
+                )
+                .scalar()
+                or 0
+            )
+
+        return counts
 
     def get_delivery_performance(self) -> Dict[str, int]:
         """

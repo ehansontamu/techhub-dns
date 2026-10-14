@@ -3,7 +3,7 @@
 
 import os
 import sys
-from datetime import date
+from datetime import date, datetime
 from typing import Any, cast
 
 from sqlalchemy import create_engine
@@ -136,6 +136,11 @@ def test_ready_for_qa_count_includes_only_visible_unarchived_qa_orders():
                     status=OrderStatus.QA.value,
                     hidden_from_ops=True,
                 ),
+                Order(
+                    inflow_order_id="TH3007",
+                    status=OrderStatus.QA.value,
+                    qa_completed_at=datetime(2026, 3, 20, 10, 0, 0),
+                ),
                 Order(inflow_order_id="TH3005", status=OrderStatus.PICKED.value),
                 Order(
                     inflow_order_id="TH3006",
@@ -148,13 +153,14 @@ def test_ready_for_qa_count_includes_only_visible_unarchived_qa_orders():
 
         counts = AnalyticsService(session).get_order_status_counts()
         assert counts == {
-            OrderStatus.QA.value: 1,
+            OrderStatus.QA.value: 2,
             OrderStatus.PICKED.value: 1,
             OrderStatus.DELIVERED.value: 1,
+            "ready_for_qa": 1,
         }
         _, qa_total = OrderService(session).get_orders(status=OrderStatus.QA)
         assert counts[OrderStatus.QA.value] == qa_total
-        print("[PASS] QA dashboard count matches unarchived QA orders and preserves completed totals")
+        print("[PASS] QA dashboard count matches the actionable QA docket")
     finally:
         session.close()
         engine.dispose()
