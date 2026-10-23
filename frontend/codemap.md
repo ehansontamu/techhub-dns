@@ -7,6 +7,7 @@
 
 
 ## Responsibility
+- `DocumentSigningPage` saves the customer signature, then resumes or opens `components/document-signing/DeliveryPhotoStep` for camera/upload previews (1–10 photos) or a recorded skip reason. `OrderDetail` links stored SharePoint photos and shows exceptions/history. Advanced signing recovery also records a photo skip reason.
 
 - Hosts the Vite-powered React SPA (see `package.json` scripts) that ships the operations workspace: dashboards, orders, delivery schedules, admin tooling, QA flows, and supporting utilities such as the document signing and tagging surfaces.
 - Supplies the runtime experience for authenticated users, keeping UI state, navigation, toast notifications, and animation wrappers inside the SPA so backend/Flask only needs to serve `frontend/dist/` in production.

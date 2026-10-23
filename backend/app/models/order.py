@@ -130,6 +130,8 @@ class Order(Base):
     signature_captured_at = Column(DateTime, nullable=True)
     signed_picklist_path = Column(String(500), nullable=True)
     bundle_path = Column(String(500), nullable=True)
+    # Delivery attempts contain SharePoint references and audit metadata, never image bytes.
+    delivery_evidence = Column(JSON, nullable=True)
     # Order Details PDF fields
     order_details_path = Column(String(500), nullable=True)
     order_details_generated_at = Column(DateTime, nullable=True)

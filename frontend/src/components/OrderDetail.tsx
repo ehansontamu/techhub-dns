@@ -624,7 +624,7 @@ export default function OrderDetail({
             <div>
               <Button asChild variant="destructive">
                 <Link to={`/document-signing?orderId=${order.id}`}>
-                  Open Document Signing
+                  {order.signature_captured_at ? "Continue Delivery Proof" : "Open Document Signing"}
                 </Link>
               </Button>
             </div>
@@ -783,6 +783,33 @@ export default function OrderDetail({
           </div>
         </div>
       </section>
+
+      {order.delivery_evidence && order.delivery_evidence.length > 0 && (
+        <section className="rounded-2xl border border-border/70 bg-card/80 p-5 shadow-none">
+          <h3 className="text-lg font-semibold tracking-tight">Delivery photos and exceptions</h3>
+          <div className="mt-4 space-y-4">
+            {order.delivery_evidence.map(record => (
+              <div key={record.id} className="space-y-2 rounded-xl border p-3">
+                <p className="text-sm text-muted-foreground">
+                  Signature saved {new Date(record.signed_at).toLocaleString()} by {record.signed_by}
+                </p>
+                {record.completed_at ? (
+                  <p className="text-sm">Completed {new Date(record.completed_at).toLocaleString()} by {record.completed_by}</p>
+                ) : <p className="text-sm text-muted-foreground">Photo step was not completed for this signature.</p>}
+                {record.skip_reason && <p className="text-sm"><span className="font-medium">Photos skipped:</span> {record.skip_reason}</p>}
+                <div className="flex flex-wrap gap-3">
+                  {record.photos.map((photo, index) => (
+                    <a key={photo.sha256} href={photo.url} target="_blank" rel="noreferrer"
+                      className="text-sm text-primary underline-offset-4 hover:underline">
+                      Delivery photo {index + 1}
+                    </a>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       {order.inflow_data && (
         <section className="rounded-2xl border border-border/70 bg-card/80 p-5 shadow-none">

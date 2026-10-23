@@ -1,6 +1,7 @@
 # backend/app/api/routes/
 
 ## Responsibility
+- The orders `POST /<order_id>/sign` endpoint stages the customer signature. `POST /<order_id>/delivery-evidence/<record_id>/complete` accepts bounded multipart photos or a JSON skip reason and delegates proof validation/storage/completion to `DeliveryEvidenceService`. Inflow Proof of Delivery and vehicle check-in occur after delivery proof completion.
 - Hosts the Flask blueprints that expose every HTTP API surface the Delivery app serves (analytics, audit, auth/session handling, order management, delivery runs, Inflow syncing/webhooks, observability, system health/configuration, SharePoint tooling, and vehicle checkouts).
 - Each module wires request input validation, business services, and schema-driven JSON responses so the SPA and supporting admin tools can rely on a consistent request → service → schema pipeline.
 

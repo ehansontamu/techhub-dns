@@ -34,6 +34,7 @@ export interface DeliveryRunResponse {
 
 export interface OrderSummary {
   id: string;
+  signature_captured_at?: string | null;
   inflow_order_id: string | null;
   recipient_name: string | null;
   delivery_location: string | null;

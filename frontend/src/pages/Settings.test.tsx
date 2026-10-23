@@ -25,6 +25,7 @@ vi.mock("../api/inflow", () => ({
 vi.mock("../api/orders", () => ({
     ordersApi: {
         signOrder: vi.fn(),
+        completeDeliveryEvidence: vi.fn(),
         rollbackOrderStatus: vi.fn(),
         updateOrder: vi.fn(),
     },
@@ -189,7 +190,8 @@ describe("Settings", () => {
             updated_at: "2026-05-20T00:00:00Z",
         } as never);
         mockedInflowApi.deleteWebhook.mockResolvedValue({ success: true } as never);
-        mockedOrdersApi.signOrder.mockResolvedValue({ success: true, message: "signed" } as never);
+        mockedOrdersApi.signOrder.mockResolvedValue({ success: true, message: "signed", delivery_evidence: { id: "proof-1" } } as never);
+        mockedOrdersApi.completeDeliveryEvidence.mockResolvedValue({ success: true, message: "delivered" } as never);
         mockedOrdersApi.rollbackOrderStatus.mockResolvedValue({
             inflow_order_id: "TH3001",
             status: "picked",
@@ -238,6 +240,8 @@ describe("Settings", () => {
         renderWithProviders(<OperatorOverrideCard />);
 
         fireEvent.change(screen.getAllByPlaceholderText("order id")[0], { target: { value: "TH3001" } });
+        expect(screen.getByRole("button", { name: /bypass signing/i })).toBeDisabled();
+        fireEvent.change(screen.getByPlaceholderText("Reason for skipping delivery photos"), { target: { value: "Recovery: camera unavailable" } });
         fireEvent.click(screen.getByRole("button", { name: /bypass signing/i }));
 
         const confirmInput = await screen.findByPlaceholderText("Type TH3001 to confirm");
@@ -253,6 +257,7 @@ describe("Settings", () => {
                     signature_image: expect.stringContaining("data:image/png;base64"),
                 }),
             );
+            expect(mockedOrdersApi.completeDeliveryEvidence).toHaveBeenCalledWith("TH3001", "proof-1", [], "Recovery: camera unavailable");
         });
     });
 });

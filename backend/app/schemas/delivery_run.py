@@ -73,6 +73,7 @@ class OrderSummary(BaseModel):
     delivery_location: Optional[str] = None
     status: str
     delivery_sequence: Optional[int] = None
+    signature_captured_at: Optional[datetime] = None
 
     model_config = {"from_attributes": True}
 

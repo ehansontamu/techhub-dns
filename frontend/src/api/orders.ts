@@ -1,6 +1,7 @@
 import apiClient from "./client";
 import { Order, OrderDetail, OrderStatus, OrderStatusUpdate, OrderRollbackUpdate, OrderRmaReopenUpdate, BulkStatusUpdate, AuditLog, ShippingWorkflowStatus, OrderDismissUpdate, OrderArchiveUpdate } from "../types/order";
 import { normalizeExpectedUpdatedAt } from "./expectedUpdatedAt";
+import type { DeliveryEvidence } from "../types/order";
 
 function safeArray<T>(value: unknown): T[] {
   return Array.isArray(value) ? value : [];
@@ -165,9 +166,20 @@ export const ordersApi = {
     page_number?: number;
     position?: { x: number; y: number }
   }) => {
-    const response = await apiClient.post<{ success: boolean; message: string; bundled_document_path?: string }>(
+    const response = await apiClient.post<{ success: boolean; message: string; delivery_evidence: DeliveryEvidence; bundled_document_path?: string }>(
       `/orders/${orderId}/sign`,
       signatureData ? normalizeExpectedUpdatedAt(signatureData) : signatureData,
+    );
+    return response.data;
+  },
+
+  completeDeliveryEvidence: async (orderId: string, recordId: string, photos: File[], skipReason?: string) => {
+    const payload = new FormData();
+    photos.forEach(photo => payload.append("photos", photo));
+    if (skipReason) payload.append("skip_reason", skipReason);
+    const response = await apiClient.post<{ success: boolean; message: string; delivery_evidence: DeliveryEvidence }>(
+      `/orders/${orderId}/delivery-evidence/${recordId}/complete`, payload,
+      { headers: { "Content-Type": "multipart/form-data" }, timeout: 10 * 60 * 1000 },
     );
     return response.data;
   },

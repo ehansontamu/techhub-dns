@@ -1700,7 +1700,17 @@ class OrderService:
                     "Only shipping orders (outside Bryan/College Station) can be transitioned to Shipping"
                 )
 
-        # Require reason for Issue status
+        # Customer-delivery completion must include the recorded proof step.
+        if new_status == OrderStatus.DELIVERED and old_status == OrderStatus.IN_DELIVERY.value:
+            from app.services.delivery_evidence_service import current_evidence
+
+            evidence = current_evidence(order)
+            if not evidence or not evidence.get("completed_at") or not (
+                evidence.get("photos") or (evidence.get("skip_reason") or "").strip()
+            ):
+                raise ValidationError("Save the signature and delivery photos or a skip reason before completing delivery")
+
+        # Require reason for Issue status.
         if new_status == OrderStatus.ISSUE and not reason:
             raise ValidationError("Reason is required when flagging an issue")
 

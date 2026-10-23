@@ -1,15 +1,16 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { isAxiosError } from "axios";
+import { ArrowLeft, PenTool } from "lucide-react";
 import type { PDFPageProxy } from "pdfjs-dist";
 // pdf-lib is used server-side for PDF bundling
 import { ordersApi } from "../api/orders";
-import { OrderDetail } from "../types/order";
+import type { DeliveryEvidence, OrderDetail } from "../types/order";
+import { OrderStatus } from "../types/order";
 import { signatureCache, type LastSignature } from "../lib/signatureCache";
 import { Button } from "../components/ui/button";
 import { SignaturePlacementLayer } from "../components/document-signing/SignaturePlacementLayer";
-
-import { ArrowLeft, PenTool } from "lucide-react";
+import { DeliveryPhotoStep } from "../components/document-signing/DeliveryPhotoStep";
 
 const SignatureModal = lazy(() => import("../components/SignatureModal").then((module) => ({ default: module.SignatureModal })));
 const PdfPane = lazy(() => import("../components/document-signing/PdfPane"));
@@ -60,6 +61,7 @@ function DocumentSigningPage() {
     const [selectedPlacementId, setSelectedPlacementId] = useState<string | null>(null);
     const viewerRef = useRef<HTMLDivElement | null>(null);
     const [isSaving, setIsSaving] = useState(false);
+    const [deliveryEvidence, setDeliveryEvidence] = useState<DeliveryEvidence | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [cachedSignature, setCachedSignature] = useState<LastSignature | null>(null);
 
@@ -99,6 +101,11 @@ function DocumentSigningPage() {
                 setOrderError(null);
                 const orderData = await ordersApi.getOrder(orderId);
                 setOrder(orderData);
+                setDeliveryEvidence([...(orderData.delivery_evidence || [])].reverse().find(record =>
+                    orderData.status === OrderStatus.IN_DELIVERY && !record.completed_at
+                    && record.signed_picklist_path === orderData.signed_picklist_path && record.bundle_path === orderData.bundle_path
+                    && new Date(record.signed_at).getTime() === new Date(orderData.signature_captured_at || "").getTime()
+                ) || null);
 
                 if (orderData.picklist_path) {
                     setSelectedPdf({
@@ -363,12 +370,8 @@ function DocumentSigningPage() {
                 expected_updated_at: order.updated_at,
             };
 
-            console.log('SIGN_PAYLOAD:', JSON.stringify(payload, null, 2));
-            await ordersApi.signOrder(order.id, payload);
-
-            navigate(returnTo, {
-                state: { message: 'Document signed successfully!' }
-            });
+            const result = await ordersApi.signOrder(order.id, payload);
+            setDeliveryEvidence(result.delivery_evidence);
 
         } catch (saveError: unknown) {
             console.error(saveError);
@@ -392,6 +395,23 @@ function DocumentSigningPage() {
 
     if (orderError || !order) {
         return <div className="p-8 text-center text-destructive">{orderError || "Order not found"}</div>;
+    }
+
+    if (order.status !== OrderStatus.IN_DELIVERY) {
+        return <div className="p-8 text-center">
+            <p>This order is no longer In Delivery. Open its details to review the current status.</p>
+            <Button asChild variant="outline" className="mt-4"><Link to={returnTo}>Back to order</Link></Button>
+        </div>;
+    }
+
+    if (deliveryEvidence) {
+        return <div className="min-h-[100dvh] bg-muted/20 px-4 py-8">
+            <div className="mx-auto mb-4 max-w-3xl">
+                <Button asChild variant="ghost"><Link to={returnTo}><ArrowLeft className="mr-2 h-4 w-4" />Back to order</Link></Button>
+            </div>
+            <DeliveryPhotoStep key={deliveryEvidence.id} orderId={order.id} evidence={deliveryEvidence}
+                onComplete={() => navigate(returnTo, { state: { message: "Delivery completed successfully!" } })} />
+        </div>;
     }
 
     return (
@@ -445,7 +465,7 @@ function DocumentSigningPage() {
                             onClick={saveSignedPdf}
                             disabled={placements.length === 0 || isSaving}
                         >
-                            {isSaving ? "Saving..." : "Finish & Save"}
+                            {isSaving ? "Saving..." : "Save & Continue to Photos"}
                         </Button>
                     </div>
                 </header>

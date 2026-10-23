@@ -24,6 +24,8 @@ from app.database import Base
 from app.models.delivery_run import DeliveryRunStatus
 from app.models.order import Order, OrderStatus
 from app.models.audit_log import AuditLog
+from app.schemas.order import SignatureData
+from app.services.delivery_evidence_service import DeliveryEvidenceService
 from app.services.delivery_run_service import DeliveryRunService
 from app.services.order_service import OrderService
 from app.services.order_splitting import OrderSplittingService
@@ -291,11 +293,16 @@ def test_partial_order_smoke_split_to_delivery(monkeypatch):
         assert recursive_child.status == OrderStatus.IN_DELIVERY.value
         assert recursive_child.delivery_run_id == run.id
 
-        delivered = order_service.transition_status(
-            recursive_child.id,
-            OrderStatus.DELIVERED,
-            changed_by="Runner User",
-            reason="Delivered during smoke test",
+        monkeypatch.setattr(OrderService, "generate_bundled_documents", lambda *_args: (
+            "https://sharepoint.test/signed.pdf", "https://sharepoint.test/bundle.pdf", None,
+        ))
+        evidence_service = DeliveryEvidenceService(session)
+        evidence = evidence_service.stage_signature(
+            recursive_child.id, SignatureData(signature_image="smoke-signature"), "Runner User",
+        )
+        assert recursive_child.status == OrderStatus.IN_DELIVERY.value
+        delivered, _evidence = evidence_service.complete(
+            recursive_child.id, evidence["id"], [], "No camera in automated smoke test", "Runner User",
         )
         session.refresh(delivered)
         assert delivered.status == OrderStatus.DELIVERED.value

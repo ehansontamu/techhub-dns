@@ -235,6 +235,7 @@ def get_run(run_id):
                     delivery_location=o.delivery_location,
                     status=o.status,
                     delivery_sequence=o.delivery_sequence,
+                    signature_captured_at=o.signature_captured_at,
                 )
                 for o in sorted(
                     run.orders,
