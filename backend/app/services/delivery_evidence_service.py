@@ -153,8 +153,8 @@ class DeliveryEvidenceService:
         )
 
     @staticmethod
-    def _attach_photos_to_bundle(order: Order, record: dict, sharepoint, subfolder: str,
-                                 legacy_subfolder: str):
+    def _attach_photos_to_bundle(order: Order, record: dict, photo_contents: dict[str, bytes],
+                                 sharepoint, subfolder: str, legacy_subfolder: str):
         """Rebuild from the original documents so a retry cannot duplicate photo pages."""
         order_number = order.inflow_order_id or order.id
         signed = sharepoint.download_file("signed", f"{order_number}_signed.pdf")
@@ -167,8 +167,10 @@ class DeliveryEvidenceService:
             writer.append(io.BytesIO(signed))
             writer.append(io.BytesIO(checklist))
             for photo in record["photos"]:
-                photo_folder = legacy_subfolder if photo["filename"].startswith("photo-") else subfolder
-                content = sharepoint.download_file(photo_folder, photo["filename"])
+                content = photo_contents.get(photo["sha256"])
+                if content is None:
+                    photo_folder = legacy_subfolder if photo["filename"].startswith("photo-") else subfolder
+                    content = sharepoint.download_file(photo_folder, photo["filename"])
                 if not content:
                     raise ExternalServiceError("SharePoint", "download delivery photo")
                 with Image.open(io.BytesIO(content)) as image:
@@ -233,47 +235,29 @@ class DeliveryEvidenceService:
         if len(existing_hashes | photos.keys()) > MAX_PHOTOS:
             raise ValidationError("A delivery can have at most 10 photos")
         new_photos = {key: value for key, value in photos.items() if key not in existing_hashes}
-        if new_photos:
-            sharepoint = get_sharepoint_service()
-            for checksum, content in new_photos.items():
-                # Stable content-based names make retries safe after a lost response.
-                filename = f"{safe_leg}_{record_id}_photo-{checksum}.jpg"
-                try:
-                    url = sharepoint.upload_file(content, subfolder, filename)
-                except Exception as exc:
-                    raise ExternalServiceError("SharePoint", "upload delivery photo") from exc
-                if not url or not url.startswith("https://"):
-                    raise ExternalServiceError("SharePoint", "confirm delivery photo upload")
-                order = self._order(resolved_id)
-                self._require_in_delivery(order)
-                record = self._active_record(order, record_id)
-                if checksum not in {photo["sha256"] for photo in record["photos"]}:
-                    if len(record["photos"]) >= MAX_PHOTOS:
-                        raise ValidationError("A delivery can have at most 10 photos")
-                    record["photos"].append({
-                        "url": url, "filename": filename, "sha256": checksum,
-                        "uploaded_at": to_utc_iso_z(datetime.utcnow()), "uploaded_by": actor,
-                    })
-                    self._save_record(order, record)
-                    self._audit(order, actor, "Delivery photo saved to SharePoint", record)
-                # Keep confirmed uploads even if a later upload fails; retries deduplicate.
-                self.db.commit()
+        for checksum in new_photos:
+            record["photos"].append({
+                "url": record["bundle_path"],
+                "filename": f"{safe_leg}_{record_id}_photo-{checksum}.jpg",
+                "sha256": checksum,
+                "uploaded_at": to_utc_iso_z(datetime.utcnow()),
+                "uploaded_by": actor,
+            })
 
         order = self._order(resolved_id)
-        record = self._active_record(order, record_id)
-        if record.get("completed_at") and order.status == OrderStatus.DELIVERED.value:
+        current_record = self._active_record(order, record_id)
+        if current_record.get("completed_at") and order.status == OrderStatus.DELIVERED.value:
             self.db.commit()
-            return order, record
+            return order, current_record
         self._require_in_delivery(order)
         if not reason and not record["photos"]:
             raise ValidationError("At least one photo or a recorded skip reason is required")
         if record["photos"]:
-            self.db.commit()
             self._attach_photos_to_bundle(
-                order, record, get_sharepoint_service(), subfolder, legacy_subfolder
+                order, record, new_photos, get_sharepoint_service(), subfolder, legacy_subfolder
             )
             order = self._order(resolved_id)
-            record = self._active_record(order, record_id)
+            self._active_record(order, record_id)
             self._require_in_delivery(order)
         record["skip_reason"] = reason or None
         record["completed_at"] = to_utc_iso_z(datetime.utcnow())

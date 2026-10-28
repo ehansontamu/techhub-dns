@@ -798,7 +798,12 @@ export default function OrderDetail({
                 ) : <p className="text-sm text-muted-foreground">Photo step was not completed for this signature.</p>}
                 {record.skip_reason && <p className="text-sm"><span className="font-medium">Photos skipped:</span> {record.skip_reason}</p>}
                 <div className="flex flex-wrap gap-3">
-                  {record.photos.map((photo, index) => (
+                  {record.photos.length > 0 && record.photos.every(photo => photo.url === record.bundle_path) ? (
+                    <a href={record.bundle_path} target="_blank" rel="noreferrer"
+                      className="text-sm text-primary underline-offset-4 hover:underline">
+                      View delivery bundle ({record.photos.length} photos)
+                    </a>
+                  ) : record.photos.map((photo, index) => (
                     <a key={photo.sha256} href={photo.url} target="_blank" rel="noreferrer"
                       className="text-sm text-primary underline-offset-4 hover:underline">
                       Delivery photo {index + 1}

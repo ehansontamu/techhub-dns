@@ -111,10 +111,14 @@ export function DeliveryPhotoStep({ orderId, evidence, onComplete }: Props) {
                             <Upload className="mr-2 h-4 w-4" />Upload photos
                         </Button>
                     </div>
-                    <p className="text-sm">{photos.length} selected · {record.photos.length} saved to SharePoint</p>
+                    <p className="text-sm">{photos.length} selected · {record.photos.length} saved in the delivery bundle</p>
                     {record.photos.length > 0 && (
                         <div className="flex flex-wrap gap-3">
-                            {record.photos.map((photo, index) => (
+                            {record.photos.every(photo => photo.url === record.bundle_path) ? (
+                                <a href={record.bundle_path} target="_blank" rel="noreferrer" className="text-sm text-primary underline">
+                                    View delivery bundle ({record.photos.length} photos)
+                                </a>
+                            ) : record.photos.map((photo, index) => (
                                 <a key={photo.sha256} href={photo.url} target="_blank" rel="noreferrer" className="text-sm text-primary underline">
                                     Saved photo {index + 1}
                                 </a>

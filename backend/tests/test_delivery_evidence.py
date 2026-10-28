@@ -149,50 +149,30 @@ def test_photo_completion_and_no_local_archive(delivery, monkeypatch):
     assert len(result["photos"]) == 1
     assert result["photos"][0]["uploaded_by"] == "runner@example.test"
     assert sharepoint.folders == []
-    assert sharepoint.uploads[0][1] == "bundles"
-    assert sharepoint.uploads[0][0].startswith(b"\xff\xd8")
-    assert sharepoint.uploads[1][1:] == ("bundles", "TH1001_bundle.pdf")
-    assert len(PdfReader(io.BytesIO(sharepoint.uploads[1][0])).pages) == 3
-    assert result["photos"][0]["url"].startswith("https://sharepoint.test/bundles/")
+    assert len(sharepoint.uploads) == 1
+    assert sharepoint.uploads[0][1:] == ("bundles", "TH1001_bundle.pdf")
+    assert len(PdfReader(io.BytesIO(sharepoint.uploads[0][0])).pages) == 3
+    assert result["photos"][0]["url"] == result["bundle_path"]
     assert list(path.iterdir()) == []
 
 
-def test_upload_failure_retains_signature_and_deduplicates_retry(delivery, monkeypatch):
+def test_bundle_upload_failure_retains_signature_and_retries(delivery, monkeypatch):
     db, order, record, service, path = delivery
-    sharepoint = SharePoint(fail_on=2)
+    sharepoint = SharePoint(fail_on=1)
     monkeypatch.setattr("app.services.delivery_evidence_service.get_sharepoint_service", lambda: sharepoint)
-    with pytest.raises(ExternalServiceError, match="upload delivery photo"):
+    with pytest.raises(ExternalServiceError, match="update delivery bundle"):
         service.complete(order.id, record["id"], [photo("red"), photo("blue")], None, "runner@example.test")
     db.refresh(order)
     assert order.status == "in-delivery"
     assert order.signature_captured_at
-    assert len(current_evidence(order)["photos"]) == 1
+    assert current_evidence(order)["photos"] == []
     assert list(path.iterdir()) == []
     sharepoint.fail_on = None
     order, result = service.complete(order.id, record["id"], [photo("red"), photo("blue")], None, "runner@example.test")
     assert order.status == "delivered"
     assert len(result["photos"]) == 2
-    assert len(sharepoint.uploads) == 3
+    assert len(sharepoint.uploads) == 1
     assert len(PdfReader(io.BytesIO(sharepoint.uploads[-1][0])).pages) == 4
-
-
-def test_bundle_update_failure_retries_without_duplicate_photo_pages(delivery, monkeypatch):
-    db, order, record, service, _path = delivery
-    sharepoint = SharePoint(fail_on=2)
-    monkeypatch.setattr("app.services.delivery_evidence_service.get_sharepoint_service", lambda: sharepoint)
-
-    with pytest.raises(ExternalServiceError, match="update delivery bundle"):
-        service.complete(order.id, record["id"], [photo()], None, "runner@example.test")
-    db.refresh(order)
-    assert order.status == "in-delivery"
-    assert len(current_evidence(order)["photos"]) == 1
-
-    sharepoint.fail_on = None
-    order, result = service.complete(order.id, record["id"], [photo()], None, "runner@example.test")
-    assert order.status == "delivered"
-    assert len(result["photos"]) == 1
-    assert len(sharepoint.uploads) == 2
-    assert len(PdfReader(io.BytesIO(sharepoint.uploads[-1][0])).pages) == 3
 
 
 def test_pending_legacy_photo_can_be_added_to_bundle(delivery, monkeypatch):
@@ -242,6 +222,7 @@ def test_partial_leg_uses_original_order_folder(delivery, monkeypatch):
     monkeypatch.setattr("app.services.delivery_evidence_service.get_sharepoint_service", lambda: sharepoint)
     service.complete(order.id, record["id"], [photo()], None, "runner@example.test")
     assert sharepoint.uploads[0][1] == "bundles/TH1000_bundles"
+    assert len(sharepoint.uploads) == 1
     assert sharepoint.uploads[-1][1:] == ("bundles/TH1000_bundles", "TH1000-P1_bundle.pdf")
 
 
