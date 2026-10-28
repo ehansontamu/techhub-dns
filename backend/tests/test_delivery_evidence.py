@@ -11,6 +11,7 @@ os.environ["DATABASE_URL"] = "sqlite+pysqlite:///:memory:"
 import pytest
 from flask import Flask
 from PIL import Image
+from pypdf import PdfReader, PdfWriter
 from sqlalchemy import create_engine
 from sqlalchemy import text
 from sqlalchemy.orm import sessionmaker
@@ -45,7 +46,7 @@ def delivery(monkeypatch, tmp_path):
     db.commit()
     monkeypatch.setattr("app.services.order_service.settings.local_document_storage", str(tmp_path))
     monkeypatch.setattr(OrderService, "generate_bundled_documents", lambda *_args: (
-        "https://sharepoint.test/signed/TH1001_signed.pdf", "https://sharepoint.test/bundles/TH1001.pdf", None,
+        "https://sharepoint.test/signed/TH1001_signed.pdf", "https://sharepoint.test/bundles/TH1001_bundle.pdf", None,
     ))
     service = DeliveryEvidenceService(db)
     record = service.stage_signature(order.id, SignatureData(signature_image="signature"), "runner@example.test")
@@ -59,6 +60,13 @@ class SharePoint:
         self.folders = []
         self.uploads = []
         self.fail_on = fail_on
+        self.files = {}
+        for folder, filename in (("signed", "TH1001_signed.pdf"), ("qa", "TH1001_qa.pdf")):
+            writer = PdfWriter()
+            writer.add_blank_page(width=612, height=792)
+            output = io.BytesIO()
+            writer.write(output)
+            self.files[(folder, filename)] = output.getvalue()
 
     def ensure_folder(self, folder):
         self.folders.append(folder)
@@ -68,7 +76,11 @@ class SharePoint:
         if self.fail_on == len(self.uploads) + 1:
             raise RuntimeError("SharePoint unavailable")
         self.uploads.append((content, folder, filename))
+        self.files[(folder, filename)] = content
         return f"https://sharepoint.test/{folder}/{filename}"
+
+    def download_file(self, folder, filename):
+        return self.files.get((folder, filename))
 
 
 def test_signature_is_resumable_and_does_not_complete_delivery(delivery):
@@ -136,8 +148,12 @@ def test_photo_completion_and_no_local_archive(delivery, monkeypatch):
     assert order.status == "delivered"
     assert len(result["photos"]) == 1
     assert result["photos"][0]["uploaded_by"] == "runner@example.test"
-    assert sharepoint.folders == ["delivery-photos", "delivery-photos/TH1001", f"delivery-photos/TH1001/{record['id']}"]
+    assert sharepoint.folders == []
+    assert sharepoint.uploads[0][1] == "bundles"
     assert sharepoint.uploads[0][0].startswith(b"\xff\xd8")
+    assert sharepoint.uploads[1][1:] == ("bundles", "TH1001_bundle.pdf")
+    assert len(PdfReader(io.BytesIO(sharepoint.uploads[1][0])).pages) == 3
+    assert result["photos"][0]["url"].startswith("https://sharepoint.test/bundles/")
     assert list(path.iterdir()) == []
 
 
@@ -156,7 +172,46 @@ def test_upload_failure_retains_signature_and_deduplicates_retry(delivery, monke
     order, result = service.complete(order.id, record["id"], [photo("red"), photo("blue")], None, "runner@example.test")
     assert order.status == "delivered"
     assert len(result["photos"]) == 2
+    assert len(sharepoint.uploads) == 3
+    assert len(PdfReader(io.BytesIO(sharepoint.uploads[-1][0])).pages) == 4
+
+
+def test_bundle_update_failure_retries_without_duplicate_photo_pages(delivery, monkeypatch):
+    db, order, record, service, _path = delivery
+    sharepoint = SharePoint(fail_on=2)
+    monkeypatch.setattr("app.services.delivery_evidence_service.get_sharepoint_service", lambda: sharepoint)
+
+    with pytest.raises(ExternalServiceError, match="update delivery bundle"):
+        service.complete(order.id, record["id"], [photo()], None, "runner@example.test")
+    db.refresh(order)
+    assert order.status == "in-delivery"
+    assert len(current_evidence(order)["photos"]) == 1
+
+    sharepoint.fail_on = None
+    order, result = service.complete(order.id, record["id"], [photo()], None, "runner@example.test")
+    assert order.status == "delivered"
+    assert len(result["photos"]) == 1
     assert len(sharepoint.uploads) == 2
+    assert len(PdfReader(io.BytesIO(sharepoint.uploads[-1][0])).pages) == 3
+
+
+def test_pending_legacy_photo_can_be_added_to_bundle(delivery, monkeypatch):
+    db, order, record, service, _path = delivery
+    sharepoint = SharePoint()
+    checksum, content = normalize_photo(photo())
+    filename = f"photo-{checksum}.jpg"
+    legacy_folder = f"delivery-photos/TH1001/{record['id']}"
+    sharepoint.files[(legacy_folder, filename)] = content
+    record["photos"] = [{"url": f"https://sharepoint.test/{legacy_folder}/{filename}",
+                         "filename": filename, "sha256": checksum}]
+    order.delivery_evidence = [record]
+    db.commit()
+    monkeypatch.setattr("app.services.delivery_evidence_service.get_sharepoint_service", lambda: sharepoint)
+
+    order, result = service.complete(order.id, record["id"], [], None, "runner@example.test")
+    assert order.status == "delivered"
+    assert len(result["photos"]) == 1
+    assert len(PdfReader(io.BytesIO(sharepoint.uploads[-1][0])).pages) == 3
 
 
 def test_ten_photos_allowed_eleven_rejected(delivery, monkeypatch):
@@ -176,11 +231,18 @@ def test_partial_leg_uses_original_order_folder(delivery, monkeypatch):
     db.flush()
     order.parent_order_id = parent.id
     order.inflow_order_id = "TH1000-P1"
+    bundle_url = "https://sharepoint.test/bundles/TH1000_bundles/TH1000-P1_bundle.pdf"
+    order.bundle_path = bundle_url
+    record["bundle_path"] = bundle_url
+    order.delivery_evidence = [record]
     db.commit()
     sharepoint = SharePoint()
+    sharepoint.files[("signed", "TH1000-P1_signed.pdf")] = sharepoint.files[("signed", "TH1001_signed.pdf")]
+    sharepoint.files[("qa", "TH1000-P1_qa.pdf")] = sharepoint.files[("qa", "TH1001_qa.pdf")]
     monkeypatch.setattr("app.services.delivery_evidence_service.get_sharepoint_service", lambda: sharepoint)
     service.complete(order.id, record["id"], [photo()], None, "runner@example.test")
-    assert sharepoint.uploads[0][1] == f"delivery-photos/TH1000/TH1000-P1_{record['id']}"
+    assert sharepoint.uploads[0][1] == "bundles/TH1000_bundles"
+    assert sharepoint.uploads[-1][1:] == ("bundles/TH1000_bundles", "TH1000-P1_bundle.pdf")
 
 
 def test_old_proof_cannot_complete_reopened_order(delivery):

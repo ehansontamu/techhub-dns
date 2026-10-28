@@ -8,6 +8,10 @@ from datetime import datetime
 from uuid import uuid4
 
 from PIL import Image, ImageOps, UnidentifiedImageError
+from pypdf import PdfReader, PdfWriter
+from reportlab.lib.pagesizes import letter, landscape
+from reportlab.lib.utils import ImageReader
+from reportlab.pdfgen import canvas
 from sqlalchemy.orm import Session
 from werkzeug.datastructures import FileStorage
 
@@ -148,6 +152,52 @@ class DeliveryEvidenceService:
             description=description, audit_metadata=record,
         )
 
+    @staticmethod
+    def _attach_photos_to_bundle(order: Order, record: dict, sharepoint, subfolder: str,
+                                 legacy_subfolder: str):
+        """Rebuild from the original documents so a retry cannot duplicate photo pages."""
+        order_number = order.inflow_order_id or order.id
+        signed = sharepoint.download_file("signed", f"{order_number}_signed.pdf")
+        checklist = sharepoint.download_file("qa", f"{order_number}_qa.pdf")
+        if not signed or not checklist:
+            raise ExternalServiceError("SharePoint", "download delivery documents")
+
+        writer = PdfWriter()
+        try:
+            writer.append(io.BytesIO(signed))
+            writer.append(io.BytesIO(checklist))
+            for photo in record["photos"]:
+                photo_folder = legacy_subfolder if photo["filename"].startswith("photo-") else subfolder
+                content = sharepoint.download_file(photo_folder, photo["filename"])
+                if not content:
+                    raise ExternalServiceError("SharePoint", "download delivery photo")
+                with Image.open(io.BytesIO(content)) as image:
+                    page_size = landscape(letter) if image.width > image.height else letter
+                    page = io.BytesIO()
+                    pdf = canvas.Canvas(page, pagesize=page_size)
+                    margin = 36
+                    scale = min(
+                        (page_size[0] - 2 * margin) / image.width,
+                        (page_size[1] - 2 * margin) / image.height,
+                    )
+                    width, height = image.width * scale, image.height * scale
+                    pdf.drawImage(
+                        ImageReader(image), (page_size[0] - width) / 2,
+                        (page_size[1] - height) / 2, width=width, height=height,
+                    )
+                    pdf.save()
+                    page.seek(0)
+                    writer.append(PdfReader(page))
+            output = io.BytesIO()
+            writer.write(output)
+            url = sharepoint.upload_file(output.getvalue(), subfolder, f"{order_number}_bundle.pdf")
+        except ExternalServiceError:
+            raise
+        except Exception as exc:
+            raise ExternalServiceError("SharePoint", "update delivery bundle") from exc
+        if url != record["bundle_path"]:
+            raise ExternalServiceError("SharePoint", "confirm delivery bundle update")
+
     def complete(self, order_id: str, record_id: str, uploads: list[FileStorage],
                  skip_reason: str | None, actor: str) -> tuple[Order, dict]:
         reason = (skip_reason or "").strip()
@@ -169,11 +219,12 @@ class DeliveryEvidenceService:
         if not uploads and not reason and not record["photos"]:
             raise ValidationError("At least one photo or a recorded skip reason is required")
         resolved_id = order.id
-        family = self.orders._partial_order_family_number(order) or order.inflow_order_id
+        subfolder, _family = self.orders._bundle_storage_location(order)
+        safe_leg = re.sub(r"[^A-Za-z0-9._-]+", "_", order.inflow_order_id or order.id).strip("._-")
+        family = self.orders._partial_order_family_number(order) or order.inflow_order_id or order.id
         safe_family = re.sub(r"[^A-Za-z0-9._-]+", "_", family).strip("._-") or order.id
-        safe_leg = re.sub(r"[^A-Za-z0-9._-]+", "_", order.inflow_order_id).strip("._-")
         attempt = f"{safe_leg}_{record_id}" if family != order.inflow_order_id else record_id
-        subfolder = f"delivery-photos/{safe_family}/{attempt}"
+        legacy_subfolder = f"delivery-photos/{safe_family}/{attempt}"
         self.db.commit()
 
         # Validate every selected file before the first external write. No disk archive.
@@ -184,15 +235,9 @@ class DeliveryEvidenceService:
         new_photos = {key: value for key, value in photos.items() if key not in existing_hashes}
         if new_photos:
             sharepoint = get_sharepoint_service()
-            try:
-                sharepoint.ensure_folder("delivery-photos")
-                sharepoint.ensure_folder(f"delivery-photos/{safe_family}")
-                sharepoint.ensure_folder(subfolder)
-            except Exception as exc:
-                raise ExternalServiceError("SharePoint", "prepare delivery photo storage") from exc
             for checksum, content in new_photos.items():
                 # Stable content-based names make retries safe after a lost response.
-                filename = f"photo-{checksum}.jpg"
+                filename = f"{safe_leg}_{record_id}_photo-{checksum}.jpg"
                 try:
                     url = sharepoint.upload_file(content, subfolder, filename)
                 except Exception as exc:
@@ -222,6 +267,14 @@ class DeliveryEvidenceService:
         self._require_in_delivery(order)
         if not reason and not record["photos"]:
             raise ValidationError("At least one photo or a recorded skip reason is required")
+        if record["photos"]:
+            self.db.commit()
+            self._attach_photos_to_bundle(
+                order, record, get_sharepoint_service(), subfolder, legacy_subfolder
+            )
+            order = self._order(resolved_id)
+            record = self._active_record(order, record_id)
+            self._require_in_delivery(order)
         record["skip_reason"] = reason or None
         record["completed_at"] = to_utc_iso_z(datetime.utcnow())
         record["completed_by"] = actor
