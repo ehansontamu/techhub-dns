@@ -1343,6 +1343,7 @@ class OrderService:
             "verifyPackagedProperly",
             "verifyPackingSlipSerialsMatch",
             "verifyBoxesLabeledCorrectly",
+            "verifyAttachedServicesCompleted",
         ]
 
         missing_fields = [field for field in required_fields if field not in qa_data]
@@ -1359,6 +1360,7 @@ class OrderService:
             "verifyPackagedProperly",
             "verifyPackingSlipSerialsMatch",
             "verifyBoxesLabeledCorrectly",
+            "verifyAttachedServicesCompleted",
         ]
         for field in boolean_fields:
             if not isinstance(qa_data.get(field), bool):
@@ -3843,9 +3845,15 @@ class OrderService:
                     "verifyBoxesLabeledCorrectly",
                     "Boxes labeled with correct order details and shipping labels marked out",
                 ),
+                (
+                    "verifyAttachedServicesCompleted",
+                    "Verify any attached services have been completed",
+                ),
             ]
 
             for field, description in checklist_items:
+                if field == "verifyAttachedServicesCompleted" and field not in qa_data:
+                    continue
                 if field == "verifyAssetTagSerialMatch" and qa_data.get("assetTagVerificationNotRequired") is True:
                     status = "N/A"
                     description = "Asset tagging not required (College/Unit exemption)"

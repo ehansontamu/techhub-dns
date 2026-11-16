@@ -259,6 +259,7 @@ def test_partial_order_smoke_split_to_delivery(monkeypatch):
             "verifyPackagedProperly": True,
             "verifyPackingSlipSerialsMatch": True,
             "verifyBoxesLabeledCorrectly": True,
+            "verifyAttachedServicesCompleted": True,
         }
         qa_result = order_service.submit_qa(
             recursive_child.id,

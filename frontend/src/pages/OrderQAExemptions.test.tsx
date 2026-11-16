@@ -51,17 +51,17 @@ beforeEach(() => {
 });
 
 describe("College/Unit exemptions in QA", () => {
-    it("requires the other four checks and submits exempt tagging as false", async () => {
+    it("requires the other five checks and submits exempt tagging as false", async () => {
         vi.mocked(ordersApi.getOrder).mockResolvedValue(order({ college_unit: tti, asset_tag_exempt: true, asset_tag_required: false }));
         renderPage();
         expect(await screen.findByText(/Asset tag verification not required/)).toHaveTextContent(tti);
         expect(screen.queryByLabelText(/Confirm the asset tag is applied/)).not.toBeInTheDocument();
         const checks = screen.getAllByRole("checkbox");
-        expect(checks).toHaveLength(4);
+        expect(checks).toHaveLength(5);
         const submit = screen.getByRole("button", { name: "Submit QA Checklist" });
-        for (const check of checks.slice(0, 3)) fireEvent.click(check);
+        for (const check of checks.slice(0, 4)) fireEvent.click(check);
         expect(submit).toBeDisabled();
-        fireEvent.click(checks[3]);
+        fireEvent.click(checks[4]);
         expect(submit).toBeEnabled();
         await act(async () => { fireEvent.click(submit); });
         await waitFor(() => expect(ordersApi.submitQa).toHaveBeenCalledWith("order-1", expect.objectContaining({
@@ -71,6 +71,7 @@ describe("College/Unit exemptions in QA", () => {
                 verifyPackingSlipSerialsMatch: true,
                 verifyBoxesLabeledCorrectly: true,
                 verifyOrderDetailsTemplateSentAndElectronicPackingSlipSaved: true,
+                verifyAttachedServicesCompleted: true,
             }),
         })));
         expect(await screen.findByText("QA submitted")).toBeInTheDocument();

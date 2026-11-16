@@ -21,6 +21,7 @@ type QAFormState = {
     verifyPackagedProperly: boolean;
     verifyPackingSlipSerialsMatch: boolean;
     verifyBoxesLabeledCorrectly: boolean;
+    verifyAttachedServicesCompleted: boolean;
     qaSignature: string;
 };
 
@@ -43,6 +44,7 @@ const defaultForm = (orderNumber: string): QAFormState => ({
     verifyPackagedProperly: false,
     verifyPackingSlipSerialsMatch: false,
     verifyBoxesLabeledCorrectly: false,
+    verifyAttachedServicesCompleted: false,
     qaSignature: "",
 });
 
@@ -79,6 +81,10 @@ const verificationSteps = [
         id: "verifyBoxesLabeledCorrectly",
         label: "Confirm boxes are labeled with the correct order details and shipping labels are marked out.",
     },
+    {
+        id: "verifyAttachedServicesCompleted",
+        label: "Verify any attached services have been completed.",
+    },
 ];
 
 function isFormComplete(form: QAFormState, assetTagExempt: boolean) {
@@ -88,7 +94,8 @@ function isFormComplete(form: QAFormState, assetTagExempt: boolean) {
         form.verifyOrderDetailsTemplateSentAndElectronicPackingSlipSaved &&
         form.verifyPackagedProperly &&
         form.verifyPackingSlipSerialsMatch &&
-        form.verifyBoxesLabeledCorrectly
+        form.verifyBoxesLabeledCorrectly &&
+        form.verifyAttachedServicesCompleted
     );
 }
 

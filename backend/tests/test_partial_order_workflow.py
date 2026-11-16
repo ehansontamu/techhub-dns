@@ -3921,6 +3921,7 @@ def test_parent_remainder_blocks_prep_actions_until_remaining_items_are_picked()
                     "verifyPackagedProperly": True,
                     "verifyPackingSlipSerialsMatch": True,
                     "verifyBoxesLabeledCorrectly": True,
+                    "verifyAttachedServicesCompleted": True,
                 },
                 technician="tech@example.com",
             )

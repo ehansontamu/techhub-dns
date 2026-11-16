@@ -164,13 +164,16 @@ def test_exempt_qa_submission_preserves_policy_and_does_not_mark_tagged(sessions
             "verifyPackagedProperly": True,
             "verifyPackingSlipSerialsMatch": True,
             "verifyBoxesLabeledCorrectly": True,
+            "verifyAttachedServicesCompleted": True,
         }, technician="QA Technician")
         assert result.tagged_at is None
         assert result.qa_data["verifyAssetTagSerialMatch"] is False
+        assert result.qa_data["verifyAttachedServicesCompleted"] is True
         assert result.qa_data["assetTagVerificationNotRequired"] is True
         assert result.qa_data["assetTagExemptCollegeUnit"] == TTI
         uploaded_data = json.loads(upload.upload_file.call_args.args[0])
         assert uploaded_data["responses"]["assetTagVerificationNotRequired"] is True
+        assert uploaded_data["responses"]["verifyAttachedServicesCompleted"] is True
         assert transition.call_args.kwargs["new_status"] == OrderStatus.PRE_DELIVERY
 
 
@@ -190,7 +193,7 @@ def test_qa_pdf_preserves_exemption_after_unit_changes(sessions):
     with sessions() as db:
         order = make_order(db)
         service = OrderService(db)
-        responses = {"verifyPackagedProperly": True}
+        responses = {"verifyPackagedProperly": True, "verifyAttachedServicesCompleted": True}
         service._apply_qa_asset_tag_exemption(order, responses)
         order.inflow_data = {"customFields": {"custom1": "Other College"}}
         path = Path(service._generate_qa_pdf(responses, order))
@@ -199,6 +202,7 @@ def test_qa_pdf_preserves_exemption_after_unit_changes(sessions):
             assert "[N/A] Asset tagging not required (College/Unit exemption)" in pdf_text
             assert "[PASS] System and all materials packaged properly" in pdf_text
             assert "[FAIL] Boxes labeled" in pdf_text
+            assert "[PASS] Verify any attached services have been completed" in pdf_text
         finally:
             path.unlink()
 

@@ -40,6 +40,7 @@ def test_qa_transition_bug():
         "verifyPackagedProperly": True,
         "verifyPackingSlipSerialsMatch": True,
         "verifyBoxesLabeledCorrectly": True,
+        "verifyAttachedServicesCompleted": True,
     }
 
     print(f"Initial Status: {mock_order.status}")
