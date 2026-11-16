@@ -568,7 +568,7 @@ export default function DeliveryRunDetailPage() {
                     </Badge>
 
                     {order.status === OrderStatus.IN_DELIVERY ? (
-                      <span className="text-xs font-medium text-accent">Pending proof/signature</span>
+                      <span className="text-xs font-medium text-accent">{order.signature_captured_at ? "Pending delivery photo" : "Pending proof/signature"}</span>
                     ) : order.status.toLowerCase() !== "delivered" ? (
                       <span className="text-xs font-medium text-accent">Not yet in delivery</span>
                     ) : null}
@@ -612,7 +612,7 @@ export default function DeliveryRunDetailPage() {
                       <>
                         <Link to={`/document-signing?orderId=${order.id}&returnTo=/delivery/runs/${run.id}`}>
                           <Button variant="default" size="sm" className="bg-emerald-600 hover:bg-emerald-700">
-                            Sign Document
+                            {order.signature_captured_at ? "Delivery Photos" : "Sign Document"}
                           </Button>
                         </Link>
                         <Button variant="outline" size="sm" onClick={() => openRecallDialog(order.id)}>

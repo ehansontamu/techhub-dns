@@ -156,6 +156,27 @@ class PrintJobSummary(BaseModel):
         return _serialize_datetime_utc(value)
 
 
+class DeliveryPhotoResponse(BaseModel):
+    url: str
+    filename: str
+    sha256: str
+    uploaded_at: str
+    uploaded_by: str
+
+
+class DeliveryEvidenceResponse(BaseModel):
+    id: str
+    signed_at: str
+    signed_by: str
+    signed_picklist_path: str
+    bundle_path: str
+    partial_folder_url: Optional[str] = None
+    photos: List[DeliveryPhotoResponse] = Field(default_factory=list)
+    skip_reason: Optional[str] = None
+    completed_at: Optional[str] = None
+    completed_by: Optional[str] = None
+
+
 class OrderResponse(OrderBase):
     college_unit: Optional[str] = None
     asset_tag_exempt: bool = False
@@ -181,6 +202,7 @@ class OrderResponse(OrderBase):
     signature_captured_at: Optional[datetime] = None
     signed_picklist_path: Optional[str] = None
     bundle_path: Optional[str] = None
+    delivery_evidence: Optional[List[DeliveryEvidenceResponse]] = None
     parent_order_id: Optional[str] = None
     has_remainder: Optional[str] = None
     remainder_order_id: Optional[str] = None

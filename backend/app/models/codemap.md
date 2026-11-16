@@ -6,6 +6,7 @@
 - Ensures the ORM layer exposes enough metadata (enumerations, timestamps, computed columns, indexed foreign keys) to let the service layer enforce SLA-driven state machines without leaking implementation details upward.
 
 ## Design
+- `Order.delivery_evidence` is a nullable JSON history of delivery attempts, signature/document references, SharePoint photo links, and completion/skip attribution. It contains no image bytes. Resetting signature fields invalidates old proof for reopened orders while retaining the audit history.
 
 - All models inherit from `app.database.Base` and use explicit UUID primary keys, `datetime.utcnow()` defaults, and deliberate indexes (e.g., `Order` indexes on `status`, `updated_at`, `delivery_run_id`; `OrderStatusHistory` and `AuditLog` indexes on timestamps; `PrintJob` indexes on `status/created_at`). Every lookup that needs case-insensitive matching is supported (`Order.inflow_order_id_lower` computed column) so the services can filter efficiently.
 - `Order` (and its `OrderStatus`/`ShippingWorkflowStatus` enums) defines the canonical fields for tagging, picklists, QA, shipping workflow metadata, delivery run assignment, and remainder handling. Relationships tie it to `AuditLog` (legacy timeline), `OrderStatusHistory` (normalized state transitions), `PrintJob` (picklist/label printing), and `DeliveryRun` (active runner assignments). The audit/history tables keep `changed_by`/`actor_user_id` references, metadata JSON blobs, and UTC timestamps to drive UI timelines and reporting.

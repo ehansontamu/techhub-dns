@@ -8,6 +8,26 @@ export enum OrderStatus {
   ISSUE = "issue",
 }
 
+export interface DeliveryPhoto {
+  url: string;
+  filename: string;
+  sha256: string;
+  uploaded_at: string;
+  uploaded_by: string;
+}
+
+export interface DeliveryEvidence {
+  id: string;
+  signed_at: string;
+  signed_by: string;
+  signed_picklist_path: string;
+  bundle_path: string;
+  photos: DeliveryPhoto[];
+  skip_reason: string | null;
+  completed_at: string | null;
+  completed_by: string | null;
+}
+
 export enum ShippingWorkflowStatus {
   WORK_AREA = "work_area",
   DOCK = "dock",
@@ -89,6 +109,7 @@ export interface Order {
   qa_method?: string;
   signature_captured_at?: string;
   signed_picklist_path?: string;
+  delivery_evidence?: DeliveryEvidence[] | null;
   bundle_path?: string;
   // Shipping workflow fields
   shipping_workflow_status?: ShippingWorkflowStatus;

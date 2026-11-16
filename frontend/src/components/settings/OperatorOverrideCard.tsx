@@ -29,6 +29,7 @@ export function OperatorOverrideCard() {
     const currentUserLabel = user?.email ?? "system";
 
     const [signingOrderId, setSigningOrderId] = useState("");
+    const [photoSkipReason, setPhotoSkipReason] = useState("");
     const [reopenOrderId, setReopenOrderId] = useState("");
     const [reopenTarget, setReopenTarget] = useState<OrderStatus>(OrderStatus.PICKED);
     const [reopenReason, setReopenReason] = useState("");
@@ -38,7 +39,10 @@ export function OperatorOverrideCard() {
     const [pendingAction, setPendingAction] = useState<"sign" | "reopen" | "ownership" | null>(null);
 
     const bypassSigningMutation = useMutation({
-        mutationFn: async ({ orderId }: { orderId: string }) => ordersApi.signOrder(orderId, makeBypassSignatureData()),
+        mutationFn: async ({ orderId }: { orderId: string }) => {
+            const signed = await ordersApi.signOrder(orderId, makeBypassSignatureData());
+            return ordersApi.completeDeliveryEvidence(orderId, signed.delivery_evidence.id, [], photoSkipReason.trim());
+        },
     });
     const reopenOrderMutation = useMutation({
         mutationFn: async ({ orderId, target, reason }: { orderId: string; target: OrderStatus; reason?: string }) =>
@@ -71,7 +75,9 @@ export function OperatorOverrideCard() {
                                 onChange={(event) => setSigningOrderId(event.target.value)}
                                 disabled={busy}
                             />
-                            <Button variant="outline" className="w-full" onClick={() => setPendingAction("sign")} disabled={busy || !signingOrderId.trim()}>
+                            <Input aria-label="Reason for skipping delivery photos" placeholder="Reason for skipping delivery photos"
+                                value={photoSkipReason} maxLength={1000} onChange={event => setPhotoSkipReason(event.target.value)} disabled={busy} />
+                            <Button variant="outline" className="w-full" onClick={() => setPendingAction("sign")} disabled={busy || !signingOrderId.trim() || !photoSkipReason.trim()}>
                                 {bypassSigningMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ShieldAlert className="mr-2 h-4 w-4" />}
                                 Bypass signing
                             </Button>
@@ -160,6 +166,7 @@ export function OperatorOverrideCard() {
                         const result = await bypassSigningMutation.mutateAsync({ orderId });
                         toast.success("Signing bypass completed", { description: result.message || `Order ${orderId} moved to delivered` });
                         setSigningOrderId("");
+                        setPhotoSkipReason("");
                         setPendingAction(null);
                     } catch (error: unknown) {
                         toast.error("Failed to bypass signing", { description: extractApiErrorMessage(error, "Please try again.") });

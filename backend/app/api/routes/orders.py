@@ -10,6 +10,7 @@ from datetime import datetime
 from app.database import get_db
 from app.models.user import User
 from app.services.order_service import OrderService
+from app.services.delivery_evidence_service import DeliveryEvidenceService, MAX_REQUEST_BYTES
 from app.services.order_splitting import OrderSplittingService
 from app.services.inflow_service import InflowService
 from app.services.audit_service import AuditService
@@ -1220,127 +1221,96 @@ def fulfill_order(order_id):
 @bp.route("/<order_id>/sign", methods=["POST"])
 @require_auth
 def sign_order(order_id):
-    """Complete order signing, generate bundled documents, and transition to Delivered status"""
+    """Save the signature; delivery remains pending until photos or a skip reason."""
     data = request.get_json()
+    if data is None:
+        data = {}
+    if not isinstance(data, dict):
+        raise ValidationError("Signature data must be a JSON object")
     signature_data = SignatureData(**data)
-    import logging
-    logging.getLogger(__name__).info(
-        "SIG_ROUTE order_id=%s page_width=%s page_height=%s placements=%s",
-        order_id, signature_data.page_width, signature_data.page_height,
-        [{"p": p.page_number, "x": p.x, "y": p.y, "w": p.width, "h": p.height} for p in signature_data.placements]
-    )
-
-    # Phase 1: generate documents BEFORE locking the order row (no DB lock held during PDF I/O)
+    actor = get_current_user_email() or get_current_user_display_name() or "system"
     with get_db() as db:
-        service = OrderService(db)
-        signed_sp_url, bundle_sp_url, partial_folder_sp_url = service.generate_bundled_documents(
-            order_id=order_id,
-            signature_data=signature_data.model_dump(exclude={"expected_updated_at"}),
-        )
-        order = service.get_order_detail(order_id)
-        if not order:
-            raise NotFoundError("Order", str(order_id))
-
-        updated_inflow_order = None
-        proof_of_delivery_updated = False
-        if order.inflow_sales_order_id:
-            try:
-                inflow_service = InflowService()
-                updated_inflow_order = inflow_service.update_proof_of_delivery_url_sync(
-                    order.inflow_sales_order_id,
-                    partial_folder_sp_url or bundle_sp_url,
-                    preserve_existing=bool(partial_folder_sp_url),
-                )
-                proof_of_delivery_updated = True
-            except Exception as exc:
-                logger.error(
-                    "Failed to update inFlow customFields.custom5 for %s after signing: %s",
-                    order.inflow_order_id or order.id,
-                    exc,
-                )
-        else:
-            logger.warning(
-                "Order %s has no inflow_sales_order_id; skipping Proof of Delivery link update",
-                order.inflow_order_id or order.id,
-            )
-        # generate_bundled_documents now stores signed_picklist_path on the order internally
-        signed_picklist_path = signed_sp_url
-        bundled_path = bundle_sp_url
-
-    # Phase 2: short locking transaction for status update + commit
-    with get_db() as db:
-        service = OrderService(db)
-
-        order = (
-            db.query(Order).filter(Order.id == str(order_id)).with_for_update().first()
-        )
-        if not order:
-            raise NotFoundError("Order", str(order_id))
-
-        if order.status != OrderStatus.IN_DELIVERY.value:
-            raise ValidationError(
-                f"Order must be in In Delivery status to sign. Current status: {order.status}",
-                details={
-                    "current_status": order.status,
-                    "required_status": OrderStatus.IN_DELIVERY.value,
-                },
-            )
-
-        service.assert_not_stale(order, signature_data.expected_updated_at)
-
-        from datetime import datetime
-
-        order = service.transition_status(
-            order_id=order_id, new_status=OrderStatus.DELIVERED, changed_by="system"
-        )
-
-        order.signature_captured_at = datetime.utcnow()
-        order.signed_picklist_path = signed_picklist_path
-        order.bundle_path = bundled_path
-        if updated_inflow_order is not None:
-            # The InFlow response carries the full combined order; merge it so
-            # split partial legs keep their leg-scoped item set.
-            order.inflow_data = service.merge_inflow_snapshot_preserving_split(
-                order, updated_inflow_order
-            )
-        order.updated_at = datetime.utcnow()
-
-        delivery_vehicle = order.delivery_run.vehicle if order.delivery_run else None
-        if delivery_vehicle in {vehicle.value for vehicle in VehicleEnum}:
-            from app.services.vehicle_checkout_service import VehicleCheckoutService
-
-            try:
-                checkout_service = VehicleCheckoutService(db)
-                checkout_service.checkin(
-                    vehicle=delivery_vehicle,
-                    notes=f"Auto check-in after completing delivery for {order.inflow_order_id or order.id}",
-                    allow_active_delivery_run=True,
-                )
-            except Exception as exc:
-                import logging
-
-                logging.warning(
-                    "Auto check-in failed after signing order %s on vehicle %s: %s",
-                    order.inflow_order_id or order.id,
-                    delivery_vehicle,
-                    exc,
-                )
-
-        db.commit()
-        db.refresh(order)
-
-        # Broadcast order update via SocketIO
+        record = DeliveryEvidenceService(db).stage_signature(order_id, signature_data, actor)
         broadcast_dedup.request_broadcast(_broadcast_orders_sync)
+        return jsonify({
+            "success": True,
+            "message": "Signature saved. Add delivery photos or record a skip reason.",
+            "delivery_evidence": record,
+            "signed_picklist_path": record["signed_picklist_path"],
+            "bundled_document_path": record["bundle_path"],
+        })
 
-        return jsonify(
-            {
-                "success": True,
-                "message": "Order signed and bundled documents generated",
-                "bundled_document_path": bundled_path,
-                "signed_picklist_path": signed_picklist_path,
+
+@bp.route("/<order_id>/delivery-evidence/<record_id>/complete", methods=["POST"])
+@require_auth
+def complete_delivery_evidence(order_id, record_id):
+    """Accept multipart photos or a JSON skip reason, then complete delivery."""
+    uploads = []
+    try:
+        if request.mimetype == "multipart/form-data":
+            # Browser multipart requests include a length. Bound the whole request
+            # before Werkzeug parses/spools it; large files remain transient.
+            if request.content_length is None or request.content_length > MAX_REQUEST_BYTES:
+                raise ValidationError("Photo upload request must be no larger than 101 MB")
+            uploads = request.files.getlist("photos")
+            if any(key != "photos" for key in request.files):
+                raise ValidationError("Upload photos using the photos field")
+            skip_reason = request.form.get("skip_reason")
+        else:
+            data = request.get_json()
+            if data is None:
+                data = {}
+            if not isinstance(data, dict):
+                raise ValidationError("Delivery proof data must be a JSON object")
+            skip_reason = data.get("skip_reason")
+        if skip_reason is not None and not isinstance(skip_reason, str):
+            raise ValidationError("Photo skip reason must be text")
+        actor = get_current_user_email() or get_current_user_display_name() or "system"
+        with get_db() as db:
+            order, record = DeliveryEvidenceService(db).complete(
+                order_id, record_id, uploads, skip_reason, actor
+            )
+            proof_of_delivery_updated = False
+            if order.inflow_sales_order_id:
+                try:
+                    updated = InflowService().update_proof_of_delivery_url_sync(
+                        order.inflow_sales_order_id,
+                        record.get("partial_folder_url") or record["bundle_path"],
+                        preserve_existing=bool(record.get("partial_folder_url")),
+                    )
+                    order.inflow_data = OrderService(db).merge_inflow_snapshot_preserving_split(order, updated)
+                    db.commit()
+                    proof_of_delivery_updated = True
+                except Exception:
+                    db.rollback()
+                    logger.exception("Failed to update Inflow Proof of Delivery for %s", order_id)
+            delivery_vehicle = order.delivery_run.vehicle if order.delivery_run else None
+            if delivery_vehicle in {vehicle.value for vehicle in VehicleEnum}:
+                from app.services.vehicle_checkout_service import VehicleCheckoutService
+
+                try:
+                    VehicleCheckoutService(db).checkin(
+                        vehicle=delivery_vehicle,
+                        notes=f"Auto check-in after completing delivery for {order.inflow_order_id or order.id}",
+                        allow_active_delivery_run=True,
+                    )
+                    db.commit()
+                except Exception:
+                    db.rollback()
+                    logger.exception("Auto check-in failed after completing delivery %s", order_id)
+            broadcast_dedup.request_broadcast(_broadcast_orders_sync)
+            return jsonify({
+                "success": True, "message": "Delivery completed",
+                "delivery_evidence": record,
                 "proof_of_delivery_updated": proof_of_delivery_updated,
-            }
-        )
+            })
+    finally:
+        # Close any Werkzeug temporary upload streams even on validation/upload failure.
+        parsed_files = request.__dict__.get("files")
+        if parsed_files is not None:
+            for _key, files in parsed_files.lists():
+                for upload in files:
+                    upload.close()
 
 
 @bp.route("/<order_id>/shipping-workflow", methods=["PATCH"])

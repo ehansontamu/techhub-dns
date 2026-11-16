@@ -42,6 +42,7 @@ def test_scenario(name, order_status, has_tagged_at=True, has_picklist=True, met
         "verifyPackagedProperly": True,
         "verifyPackingSlipSerialsMatch": True,
         "verifyBoxesLabeledCorrectly": True
+        "verifyAttachedServicesCompleted": True,
     }
 
     try:

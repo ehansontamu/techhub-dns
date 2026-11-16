@@ -64,6 +64,7 @@ def test_submit_qa_sets_completed_at_and_transitions_to_pre_delivery(tmp_path, m
         "verifyPackagedProperly": True,
         "verifyPackingSlipSerialsMatch": True,
         "verifyBoxesLabeledCorrectly": True,
+        "verifyAttachedServicesCompleted": True,
     }
 
     result = service.submit_qa(
@@ -126,6 +127,7 @@ def test_submit_qa_routes_shipping_orders_to_shipping(tmp_path, monkeypatch):
         "verifyPackagedProperly": True,
         "verifyPackingSlipSerialsMatch": True,
         "verifyBoxesLabeledCorrectly": True,
+        "verifyAttachedServicesCompleted": True,
     }
 
     result = service.submit_qa(order.id, qa_data, technician="Test Tech")
@@ -185,6 +187,7 @@ def test_submit_qa_treats_college_station_typo_as_delivery(tmp_path, monkeypatch
         "verifyPackagedProperly": True,
         "verifyPackingSlipSerialsMatch": True,
         "verifyBoxesLabeledCorrectly": True,
+        "verifyAttachedServicesCompleted": True,
     }
 
     result = service.submit_qa(order.id, qa_data, technician="Test Tech")
@@ -237,6 +240,7 @@ def test_submit_qa_allows_parent_partial_leg(tmp_path, monkeypatch):
         "verifyPackagedProperly": True,
         "verifyPackingSlipSerialsMatch": True,
         "verifyBoxesLabeledCorrectly": True,
+        "verifyAttachedServicesCompleted": True,
     }
 
     result = service.submit_qa(
@@ -284,6 +288,7 @@ def test_submit_qa_blocks_picker_from_qcing_own_order(tmp_path, monkeypatch):
         "verifyPackagedProperly": True,
         "verifyPackingSlipSerialsMatch": True,
         "verifyBoxesLabeledCorrectly": True,
+        "verifyAttachedServicesCompleted": True,
     }
 
     from app.utils.exceptions import ValidationError
@@ -348,6 +353,7 @@ def test_submit_qa_allows_picker_when_admin_setting_disabled(tmp_path, monkeypat
         "verifyPackagedProperly": True,
         "verifyPackingSlipSerialsMatch": True,
         "verifyBoxesLabeledCorrectly": True,
+        "verifyAttachedServicesCompleted": True,
     }
 
     result = service.submit_qa(
@@ -393,6 +399,7 @@ def test_submit_qa_blocks_compact_display_name_match(tmp_path, monkeypatch):
         "verifyPackagedProperly": True,
         "verifyPackingSlipSerialsMatch": True,
         "verifyBoxesLabeledCorrectly": True,
+        "verifyAttachedServicesCompleted": True,
     }
 
     from app.utils.exceptions import ValidationError

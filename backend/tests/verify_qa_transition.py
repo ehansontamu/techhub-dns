@@ -50,6 +50,7 @@ def run_test(method, expected_status):
         "verifyPackagedProperly": True,
         "verifyPackingSlipSerialsMatch": True,
         "verifyBoxesLabeledCorrectly": True,
+        "verifyAttachedServicesCompleted": True,
     }
 
     # Patch internal methods to avoid side effects

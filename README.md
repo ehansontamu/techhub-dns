@@ -81,9 +81,10 @@ If **QA unavailable** appears because you picked the order, another signed-in pe
 1. Open **Delivery** and select ready orders from **Pre-Delivery Orders**. Review the selected list and arrange the stop sequence in **Dispatch Order**.
 2. Choose the dispatch target and purpose offered by the action bar. For vehicle delivery, choose an available vehicle and a delivery purpose, then use the start action. The app records the current user as runner and checks out an available vehicle as part of starting the run. **Pickup** uses **Start Pickup** without a vehicle checkout.
 3. Open the run under **Active Delivery**. Confirm the recipient and items at each handoff, then select the order's **Sign Document** action.
-4. On **Sign Delivery Document**, choose **Add Signature**, capture the recipient's signature, and position it on the PDF. Select **Finish & Save** and wait for success. Saving the signed document marks the order **Delivered**; drawing or placing a signature alone does not save it. Use **Use Last Signature** only for the same recipient's authorized handoff when the app offers it.
-5. After all remaining orders show **Delivered**, select **Complete Run**. This also attempts fulfillment in Inflow. If it fails, inspect the reported error and confirm the run's state before trying again.
-6. Return a used vehicle and select **Check In** on Delivery. Run completion and vehicle check-in are separate actions; confirm both are recorded.
+4. On **Sign Delivery Document**, choose **Add Signature**, capture the recipient's signature, and position it on the PDF. Select **Save & Continue to Photos** and wait for success. The signature is saved, but the order remains **In Delivery**. Use **Use Last Signature** only for the same recipient's authorized handoff when the app offers it.
+5. On **Delivery photos**, take or upload at least one photo of the delivered packages (maximum 10), review the previews, and select **Complete delivery**. If a photo cannot be taken, select **Skip photos and record a reason**, enter a reason, and complete delivery. Both the reason and operator identity/time are recorded. Reopening the signing page resumes this step without collecting the signature again. If an upload fails, retry; confirmed uploads are retained in SharePoint and deduplicated. Files that have not uploaded must be reselected if the page is reloaded.
+6. After all remaining orders show **Delivered**, select **Complete Run**. This also attempts fulfillment in Inflow. If it fails, inspect the reported error and confirm the run's state before trying again.
+7. Return a used vehicle and select **Check In** on Delivery. Run completion and vehicle check-in are separate actions; confirm both are recorded.
 
 For an undeliverable order, use the run's recall action and enter the reason. Recall marks the order **Issue** and removes it from the active run so the other deliveries can finish. For other problems, the order detail status menu offers **Raise Issue**; record what needs resolving instead of marking an incomplete handoff delivered.
 
@@ -193,6 +194,24 @@ Picked → QA → Shipping → Mark Shipped → Delivered (carrier handoff)
 - **Picklists**: Order items, quantities, serial numbers, signature line
 - **Order Details**: Professional documents matching Inflow format
 - ReportLab-based generation with TAMU branding
+
+### Delivery Photo Evidence
+
+- Customer delivery and pickup handoffs require 1–10 photos after saving the signature, or a nonblank skip reason (maximum 1000 characters). Carrier shipping retains its existing workflow.
+- Photos use the existing SharePoint site, document library, and configured base folder. The app creates `delivery-photos/<original-order-number>/<delivery-record-id>/` automatically. Partial legs use `<leg-number>_<delivery-record-id>` for the final folder, grouped under the original order number.
+- File names are `photo-<SHA-256>.jpg`; retries of the same normalized image do not create duplicate evidence. Order details link to each photo and display delivery/skip history.
+- JPEG, PNG, and WebP inputs are accepted, up to 10 MB and 24 megapixels each. The backend validates actual image content, corrects orientation, strips EXIF/GPS metadata, and resizes to a maximum 2048-pixel dimension before uploading as JPEG. HEIC inputs must be exported as JPEG/PNG/WebP first.
+- Photo bytes are processed in memory. Multipart parsing may use temporary files, which are closed and removed after each request, including failures. No photo archive is written to the web server; only references and audit metadata are stored in the database. Existing PDF retention behavior is unchanged.
+- Completion is enforced by the backend: signing alone and ordinary status updates cannot complete an In Delivery order without the recorded photo/skip step. The advanced signing bypass also requires a photo skip reason.
+- Apply the additive migration with `cd backend` then `alembic upgrade head` before running this version. It adds the nullable `orders.delivery_evidence` JSON column and requires no historical-data backfill. Existing completed orders remain valid.
+- API: `POST /api/orders/<order_id>/sign` saves the signature and returns `delivery_evidence` while keeping the order In Delivery. `POST /api/orders/<order_id>/delivery-evidence/<record_id>/complete` accepts multipart `photos` files (or a `skip_reason` field); a JSON `skip_reason` is also supported. With previously saved photos, an empty JSON object completes the pending delivery. Requests are limited to 101 MiB. Completion then updates the existing Inflow Proof of Delivery link and attempts vehicle check-in.
+
+Testing this feature:
+
+- From `frontend/`: run `npm run lint`, `npx tsc --noEmit`, and `npm run test -- src/components/document-signing/DeliveryPhotoStep.test.tsx src/pages/Settings.test.tsx src/pages/DeliveryRunDetailPage.test.tsx`.
+- From `backend/`, using an isolated test environment: run `python -m pytest tests/test_delivery_evidence.py tests/test_partial_bundle_folder.py tests/test_partial_order_workflow.py tests/test_partial_order_smoke.py tests/test_delivery_run_service.py -q` and `python tests/test_error_handling.py`. The new evidence tests include an additive migration check against SQLite, without contacting SharePoint or a live database.
+- In the testing deployment, apply `alembic upgrade head` and verify on an iPad in Safari: rear-camera capture, existing-library upload, portrait/landscape layout, previews/removal, one-photo completion, the ten-photo limit, and the required skip reason. Confirm the files and audit attribution in SharePoint/order details, including a partial leg.
+- Test a failed upload after signature save, then retry or reopen the page. Confirm the signature remains saved, confirmed photos are not duplicated, and incomplete delivery cannot finish the run. Recalling/reopening the order while an upload is pending must block further completion from the stale screen. Test HEIC selection for a clear conversion message, and verify the carrier-shipping workflow still works.
 
 ### Workstation Printing
 
