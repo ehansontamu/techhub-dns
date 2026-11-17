@@ -30,3 +30,10 @@ python agent.py
 ```
 
 The agent joins the `print_jobs` Socket.IO room, wakes immediately on `print_job_available`, and still polls as a fallback in case the websocket is disconnected.
+# FedEx shipping-label extension
+
+The upgraded agent can also claim `shipping_label` jobs and send their 4 × 6 PDFs
+to a separate Brother QL-1110NWB Windows queue. Set `LABEL_PRINTER_NAME` to that
+queue's exact name; retain `PRINTER_NAME` for picklists. An empty label printer
+setting preserves picklist-only operation. See [FedEx shipping setup](../../docs/fedex-shipping.md)
+for sandbox configuration, media sizing, and failure recovery.

@@ -36,6 +36,7 @@ class Config:
         self.api_base_url = os.environ["API_BASE_URL"].rstrip("/")
         self.agent_token = os.environ["AGENT_TOKEN"]
         self.printer_name = os.environ["PRINTER_NAME"]
+        self.label_printer_name = os.environ.get("LABEL_PRINTER_NAME", "").strip()
         self.sumatra_pdf_path = os.environ.get("SUMATRA_PDF_PATH", "SumatraPDF.exe")
         self.poll_seconds = int(os.environ.get("POLL_SECONDS", "15"))
         self.error_retry_seconds = int(os.environ.get("ERROR_RETRY_SECONDS", "5"))
@@ -79,6 +80,7 @@ class PicklistPrintAgent:
     def claim_next_job(self) -> Optional[dict[str, Any]]:
         response = self.session.post(
             f"{self.config.api_base_url}/api/system/print-agent/claim-next",
+            json={"document_types": ["picklist", "shipping_label"] if self.config.label_printer_name else ["picklist"]},
             timeout=30,
         )
         response.raise_for_status()
@@ -107,14 +109,19 @@ class PicklistPrintAgent:
         )
         response.raise_for_status()
 
-    def print_pdf(self, pdf_path: Path) -> None:
+    def print_pdf(self, pdf_path: Path, *, shipping_label: bool = False) -> None:
+        printer = self.config.label_printer_name if shipping_label else self.config.printer_name
+        if not printer:
+            raise RuntimeError("Configure LABEL_PRINTER_NAME before printing shipping labels")
         command = [
             self.config.sumatra_pdf_path,
             "-print-to",
-            self.config.printer_name,
+            printer,
             "-silent",
             str(pdf_path),
         ]
+        if shipping_label:
+            command[1:1] = ["-print-settings", "noscale"]
         result = subprocess.run(
             command,
             capture_output=True,
@@ -147,7 +154,7 @@ class PicklistPrintAgent:
             try:
                 LOGGER.info("Printing job %s for order %s", job["id"], job["order_id"])
                 pdf_path = self.download_job_file(job)
-                self.print_pdf(pdf_path)
+                self.print_pdf(pdf_path, shipping_label=job.get("document_type") == "shipping_label")
                 self.report_complete(job["id"])
             except Exception as exc:  # noqa: BLE001
                 LOGGER.exception("Print job %s failed", job.get("id"))

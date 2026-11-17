@@ -140,6 +140,11 @@ class PrintJobService:
             .all()
         )
         for job in expired_jobs:
+            if job.document_type == PrintJobDocumentType.SHIPPING_LABEL:
+                job.status = PrintJobStatus.FAILED
+                job.claim_expires_at = None
+                job.last_error = "Printer confirmation expired. Check the Brother output before requesting a reprint."
+                continue
             job.status = PrintJobStatus.PENDING
             job.claimed_at = None
             job.claim_expires_at = None
@@ -147,7 +152,7 @@ class PrintJobService:
         return len(expired_jobs)
 
     def claim_next_pending_job(
-        self, *, claim_timeout_seconds: int
+        self, *, claim_timeout_seconds: int, document_types: tuple[str, ...] = (PrintJobDocumentType.PICKLIST,)
     ) -> Optional[PrintJob]:
         self.release_expired_claims(claim_timeout_seconds=claim_timeout_seconds)
 
@@ -156,7 +161,7 @@ class PrintJobService:
             .options(selectinload(PrintJob.order))
             .filter(
                 PrintJob.status == PrintJobStatus.PENDING,
-                PrintJob.document_type == PrintJobDocumentType.PICKLIST,
+                PrintJob.document_type.in_(document_types),
             )
             .order_by(PrintJob.created_at.asc())
             .with_for_update()
@@ -198,9 +203,9 @@ class PrintJobService:
         audit = AuditService(self.db)
         audit.log_order_action(
             order_id=job.order_id,
-            action="picklist_auto_printed",
+            action="shipping_label_printed" if job.document_type == PrintJobDocumentType.SHIPPING_LABEL else "picklist_auto_printed",
             user_id=job.requested_by,
-            description="Picklist print job completed",
+            description=f"{job.document_type} print job completed",
             audit_metadata={
                 "print_job_id": job.id,
                 "trigger_source": job.trigger_source,
@@ -222,9 +227,9 @@ class PrintJobService:
         audit = AuditService(self.db)
         audit.log_order_action(
             order_id=job.order_id,
-            action="picklist_auto_print_failed",
+            action="shipping_label_print_failed" if job.document_type == PrintJobDocumentType.SHIPPING_LABEL else "picklist_auto_print_failed",
             user_id=job.requested_by,
-            description="Picklist print job failed",
+            description=f"{job.document_type} print job failed",
             audit_metadata={
                 "print_job_id": job.id,
                 "trigger_source": job.trigger_source,

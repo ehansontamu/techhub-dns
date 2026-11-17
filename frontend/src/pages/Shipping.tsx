@@ -1,208 +1,82 @@
-import { useState, useEffect, useRef } from "react";
+import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { isAxiosError } from "axios";
-import { useNavigate } from "react-router-dom";
-import { OrderStatus, ShippingWorkflowStatus, ShippingWorkflowStatusDisplayNames } from "../types/order";
-import { SkeletonTable } from "../components/Skeleton";
-import { PackageSearch, Truck } from "lucide-react";
-import { useOrdersWebSocket } from "../hooks/useOrdersWebSocket";
-import { ordersApi } from "../api/orders";
-import { invalidateOrderQueries } from "../queries/orders";
+import { Link, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
-import { isValidOrderId } from "../utils/orderIds";
+
+import { ordersApi } from "../api/orders";
+import { shippingApi } from "../api/shipping";
+import type { ShippingQueueOrder } from "../api/shipping";
 import { Button } from "../components/ui/button";
-import { Input } from "../components/ui/input";
-import { Badge } from "../components/ui/badge";
+import { invalidateOrderQueries } from "../queries/orders";
+import { ShippingWorkflowStatus } from "../types/order";
+import { extractApiErrorMessage } from "../utils/apiErrors";
 
 export default function Shipping() {
-    const [search, setSearch] = useState("");
-    const [debouncedSearch, setDebouncedSearch] = useState("");
-    const [pendingOrderIds, setPendingOrderIds] = useState<Set<string>>(new Set());
     const navigate = useNavigate();
-    const queryClient = useQueryClient();
-
-    const { orders: websocketOrders } = useOrdersWebSocket();
-    const lastWebSocketUpdate = useRef<number>(0);
-
-    const shipmentQuery = useQuery({
-        queryKey: ["orders", "list", { status: OrderStatus.SHIPPING, search: debouncedSearch }],
-        queryFn: () => ordersApi.getOrders({ status: OrderStatus.SHIPPING, search: debouncedSearch }).then((r) => r.items),
-    });
-
-    const shipmentOrders = shipmentQuery.data ?? [];
-    const loading = shipmentQuery.isPending || shipmentQuery.isFetching;
-
-    const updateShippingWorkflowMutation = useMutation({
-        mutationFn: ({ orderId, status }: { orderId: string; status: ShippingWorkflowStatus }) =>
-            ordersApi.updateShippingWorkflow(orderId, { status }),
-        onSuccess: async (_data, variables) => {
-            setPendingOrderIds((prev) => {
-                const next = new Set(prev);
-                next.delete(variables.orderId);
-                return next;
-            });
-            await invalidateOrderQueries(queryClient, variables.orderId);
-            toast.success("Shipping status updated");
+    const client = useQueryClient();
+    const [cityKey, setCityKey] = useState("");
+    const [locationId, setLocationId] = useState("");
+    const [selected, setSelected] = useState<string[]>([]);
+    const query = useQuery({ queryKey: ["shipping-queue"], queryFn: shippingApi.queue, refetchInterval: 10000 });
+    const city = query.data?.cities.find(item => item.key === cityKey);
+    const location = city?.locations.length === 1 ? city.locations[0] : city?.locations.find(item => item.contact_id === locationId);
+    const available = location?.orders.filter(order => !order.shipment_id) ?? [];
+    const selectedIds = available.filter(order => selected.includes(order.id)).map(order => order.id);
+    const handoff = useMutation({
+        mutationFn: (orderId: string) => ordersApi.updateShippingWorkflow(orderId, { status: ShippingWorkflowStatus.SHIPPED }),
+        onSuccess: async (_data, orderId) => {
+            await Promise.all([client.invalidateQueries({ queryKey: ["shipping-queue"] }), invalidateOrderQueries(client, orderId)]);
+            toast.success("Carrier handoff recorded");
         },
-        onError: async (error: unknown, variables) => {
-            setPendingOrderIds((prev) => {
-                const next = new Set(prev);
-                next.delete(variables.orderId);
-                return next;
-            });
-            console.error("Failed to update shipping workflow:", error);
-            if (isAxiosError(error) && error.response?.status === 409) {
-                toast.error("Order changed by another user. Reloaded.");
-                await invalidateOrderQueries(queryClient, variables.orderId);
-                return;
-            }
-            toast.error("Failed to update shipping status");
-        },
+        onError: (error: unknown) => toast.error(extractApiErrorMessage(error, "Could not update shipping status")),
     });
-
-    useEffect(() => {
-        if (websocketOrders.length > 0) {
-            const updateTime = Date.now();
-            if (lastWebSocketUpdate.current > 0) {
-                void invalidateOrderQueries(queryClient);
-            }
-            lastWebSocketUpdate.current = updateTime;
-        }
-    }, [queryClient, websocketOrders]);
-
-    useEffect(() => {
-        const timeoutId = window.setTimeout(() => setDebouncedSearch(search), 300);
-        return () => window.clearTimeout(timeoutId);
-    }, [search]);
-
-    const handleAdvanceWorkflow = (orderId: string, currentStatus: ShippingWorkflowStatus | undefined) => {
-        // Treat undefined/null as WORK_AREA (default state before any workflow action)
-        const status = currentStatus ?? ShippingWorkflowStatus.WORK_AREA;
-
-        if (status === ShippingWorkflowStatus.SHIPPED) {
-            toast.info("Already shipped");
-            return;
-        }
-
-        setPendingOrderIds((prev) => new Set(prev).add(orderId));
-        updateShippingWorkflowMutation.mutate({ orderId, status: ShippingWorkflowStatus.SHIPPED });
+    const actions = (order: ShippingQueueOrder) => <div className="flex flex-wrap gap-2">
+        <Link className="text-sm underline" to={`/orders/${order.id}`}>Order details</Link>
+        {order.shipment_id && <Button size="sm" variant="outline" onClick={() => navigate(`/shipping/orders/${order.shipment_order_id ?? order.id}`)}>Open shipment · {order.shipment_status?.replace(/_/g, " ")}</Button>}
+        <Button size="sm" variant="outline" disabled={handoff.isPending} onClick={() => handoff.mutate(order.id)}>Mark Shipped</Button>
+    </div>;
+    const pack = () => {
+        if (!location || selectedIds.length === 0) return;
+        const params = new URLSearchParams({ orders: selectedIds.join(","), contact: location.contact_id });
+        navigate(`/shipping/orders/${selectedIds[0]}?${params}`);
     };
-
-    const handleViewDetail = (orderId?: string) => {
-        if (!isValidOrderId(orderId)) {
-            toast.error("Order details unavailable");
-            return;
-        }
-        navigate(`/orders/${orderId}`, { state: { fromShipping: true } });
-    };
-
-    if (shipmentQuery.isError && shipmentOrders.length === 0) {
-        return <div className="p-4">Failed to load shipment queue</div>;
-    }
-
-    return (
-        <div className="h-full min-h-0 overflow-y-auto px-4 py-6 sm:px-6 lg:px-8">
-            <div className="mx-auto max-w-[1600px] space-y-6">
-                <div className="space-y-1">
-                    <h1 className="text-2xl font-semibold tracking-tight text-foreground">
-                        Shipment Queue
-                        {shipmentOrders.length > 0 && (
-                            <span className="ml-2 text-lg font-normal text-muted-foreground">
-                                ({shipmentOrders.length})
-                            </span>
-                        )}
-                    </h1>
-                    <p className="text-sm text-muted-foreground">Orders outside Bryan/College Station, ready to ship.</p>
-                </div>
-
-                <section className="overflow-hidden rounded-2xl border border-border/70 bg-card/80 shadow-none">
-                    <div className="p-5 sm:p-6">
-                        {shipmentOrders.length > 0 && (
-                            <div className="mb-4">
-                                <Input
-                                    placeholder="Search by order ID..."
-                                    value={search}
-                                    onChange={(e) => setSearch(e.target.value)}
-                                    className="max-w-sm"
-                                />
-                            </div>
-                        )}
-                        {loading && shipmentOrders.length === 0 ? (
-                            <div className="transition-opacity duration-150 opacity-100">
-                                <SkeletonTable rows={4} columns={5} />
-                            </div>
-                        ) : shipmentOrders.length === 0 ? (
-                            <div className="flex flex-col items-center justify-center py-16 text-center">
-                                <PackageSearch className="mb-3 h-8 w-8 text-muted-foreground/60" />
-                                <p className="text-sm font-medium text-foreground">No shipments in the queue</p>
-                                <p className="text-xs text-muted-foreground">Orders with &quot;Shipping&quot; status will appear here once QA is complete.</p>
-                            </div>
-                        ) : (
-                            <div className={`transition-opacity duration-150 ${loading ? "opacity-90" : "opacity-100"}`}>
-                                <div className="overflow-x-auto" style={{ scrollbarGutter: "stable" }}>
-                                    <table className="min-w-[960px] w-full text-sm">
-                                        <thead className="sticky top-0 z-20 bg-muted/40">
-                                            <tr>
-                                                <th className="px-4 py-3 text-left font-semibold text-muted-foreground whitespace-nowrap">Order ID</th>
-                                                <th className="px-4 py-3 text-left font-semibold text-muted-foreground whitespace-nowrap">Recipient</th>
-                                                <th className="px-4 py-3 text-left font-semibold text-muted-foreground whitespace-nowrap">Location</th>
-                                                <th className="px-4 py-3 text-left font-semibold text-muted-foreground whitespace-nowrap">Shipping Workflow</th>
-                                                <th className="px-4 py-3 text-left font-semibold text-muted-foreground whitespace-nowrap">Actions</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody className="divide-y divide-border">
-                                            {shipmentOrders.map((order) => (
-                                                <tr
-                                                    key={order.id}
-                                                    onClick={() => handleViewDetail(order.id)}
-                                                    className="cursor-pointer hover:bg-muted/30 transition-colors"
-                                                >
-                                                    <td className="px-4 py-3 break-words font-medium">{order.inflow_order_id}</td>
-                                                    <td className="px-4 py-3 break-words">{order.recipient_name || "N/A"}</td>
-                                                    <td className="px-4 py-3 break-words">{order.delivery_location || "N/A"}</td>
-                                                    <td className="px-4 py-3 whitespace-nowrap">
-                                                        <Badge variant="outline">
-                                                            {order.shipping_workflow_status
-                                                                ? ShippingWorkflowStatusDisplayNames[order.shipping_workflow_status]
-                                                                : ShippingWorkflowStatusDisplayNames[ShippingWorkflowStatus.WORK_AREA]}
-                                                        </Badge>
-                                                    </td>
-                                                    <td className="px-4 py-3 whitespace-nowrap">
-                                                        {(() => {
-                                                            const current = order.shipping_workflow_status as ShippingWorkflowStatus | undefined;
-                                                            // Treat undefined as WORK_AREA
-                                                            const normalized = current ?? ShippingWorkflowStatus.WORK_AREA;
-                                                            const isPending = pendingOrderIds.has(order.id);
-
-                                                            if (normalized !== ShippingWorkflowStatus.SHIPPED) {
-                                                                return (
-                                                                    <Button
-                                                                        size="sm"
-                                                                        variant="default"
-                                                                        onClick={(e) => {
-                                                                            e.stopPropagation();
-                                                                            handleAdvanceWorkflow(order.id, normalized);
-                                                                        }}
-                                                                        disabled={isPending}
-                                                                    >
-                                                                        <Truck className="h-3.5 w-3.5 mr-1" />
-                                                                        Mark Shipped
-                                                                    </Button>
-                                                                );
-                                                            }
-                                                            return <span className="text-xs text-muted-foreground">Shipped</span>;
-                                                        })()}
-                                                    </td>
-                                                </tr>
-                                            ))}
-                                        </tbody>
-                                    </table>
-                                </div>
-                            </div>
-                        )}
-                    </div>
-                </section>
-            </div>
+    return <div className="mx-auto max-w-6xl space-y-6 p-4 sm:p-6">
+        <div className="space-y-2"><h1 className="text-2xl font-semibold">Shipment Queue</h1>
+            <p className="text-sm text-muted-foreground">Orders that completed QA and were marked ready for shipping. Choose a city, then a saved location, and combine the orders you select.</p>
+            <div className="flex flex-wrap gap-2"><Button variant="outline" onClick={() => navigate("/shipping/products")}>Product shipping weights</Button><Button variant="outline" onClick={() => navigate("/shipping/contacts")}>Manage address book</Button></div>
         </div>
-    );
+        {query.isPending && <p>Loading shipping queue…</p>}
+        {query.isError && <p role="alert">Could not load the shipping queue. <Button onClick={() => void query.refetch()}>Retry</Button></p>}
+        {query.data && <>
+            <section className="rounded-xl border border-border bg-card p-5 space-y-4">
+                <h2 className="text-lg font-semibold">1. Choose destination</h2>
+                <label className="block text-sm">City<select aria-label="Destination city" className="mt-1 block w-full rounded-md border border-input bg-background p-3 sm:max-w-sm" value={cityKey} onChange={e => { setCityKey(e.target.value); setLocationId(""); setSelected([]); }}>
+                    <option value="">Choose a city…</option>{query.data.cities.map(item => <option key={item.key} value={item.key}>{item.name} ({item.locations.reduce((sum, place) => sum + place.orders.length, 0)} orders)</option>)}
+                </select></label>
+                {city && city.locations.length > 1 && <label className="block text-sm">Location<select aria-label="Destination location" className="mt-1 block w-full rounded-md border border-input bg-background p-3 sm:max-w-sm" value={locationId} onChange={e => { setLocationId(e.target.value); setSelected([]); }}>
+                    <option value="">Choose a location…</option>{city.locations.map(place => <option key={place.contact_id} value={place.contact_id}>{place.name} ({place.orders.length} orders)</option>)}
+                </select></label>}
+                {location && <div className="rounded-lg bg-muted/40 p-4"><strong>{location.name}</strong><p className="text-sm">{location.recipient.address1}{location.recipient.address2 ? `, ${location.recipient.address2}` : ""} · {location.recipient.city}, {location.recipient.state} {location.recipient.postal_code}</p></div>}
+                {!query.data.cities.length && <p className="text-sm text-muted-foreground">No matched destinations are waiting. Review unmatched orders below, or import your shared FedEx address book.</p>}
+            </section>
+            {location && <section className="rounded-xl border border-border bg-card p-5 space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-3"><h2 className="text-lg font-semibold">2. Select orders for {location.name}</h2>
+                    <Button variant="outline" disabled={!available.length} onClick={() => setSelected(selectedIds.length === available.length ? [] : available.slice(0, 50).map(order => order.id))}>{selectedIds.length === available.length && available.length ? "Clear selection" : "Select available orders"}</Button></div>
+                <p className="text-sm text-muted-foreground">Select up to 50 orders for one shipment. Orders at other locations stay separate, even in the same city.</p>
+                {location.orders.map(order => <div key={order.id} className="rounded-lg border border-border p-4 space-y-3">
+                    <label className="flex items-start gap-3"><input className="mt-1" type="checkbox" aria-label={`Select ${order.order_number}`} checked={selectedIds.includes(order.id)} disabled={!!order.shipment_id || (selectedIds.length >= 50 && !selectedIds.includes(order.id))} onChange={e => setSelected(current => e.target.checked ? [...current, order.id] : current.filter(id => id !== order.id))} />
+                        <span><strong>{order.order_number}</strong><span className="ml-2 text-sm text-muted-foreground">{order.recipient_name}</span>
+                            <span className="mt-1 block text-sm">{order.products.map(product => `${product.quantity} × ${product.name}`).join(" · ") || "No unshipped physical products"}</span></span></label>
+                    {actions(order)}
+                </div>)}
+                <div className="flex flex-wrap items-center gap-3"><Button disabled={!selectedIds.length} onClick={pack}>Pack {selectedIds.length || "selected"} order{selectedIds.length === 1 ? "" : "s"} together</Button><span className="text-sm text-muted-foreground">One saved destination · combined products and boxes</span></div>
+            </section>}
+            {!!query.data.unmatched.length && <section className="rounded-xl border border-amber-500/40 p-5 space-y-4"><h2 className="text-lg font-semibold">Address needs review ({query.data.unmatched.length})</h2>
+                <p className="text-sm text-muted-foreground">These addresses do not identify one saved destination clearly. Review each order and the shared address book before combining. An individual order can use a saved contact or an admin’s one-off override.</p>
+                {query.data.unmatched.map(order => <div key={order.id} className="rounded-lg border border-border p-4 space-y-2"><p><strong>{order.order_number}</strong> · {order.city} · {order.recipient_name}</p>
+                    <Button variant="outline" size="sm" onClick={() => navigate(`/shipping/orders/${order.shipment_order_id ?? order.id}`)}>Review individual shipment</Button>{actions(order)}</div>)}
+            </section>}
+            <p className="text-xs text-muted-foreground">Mark Shipped records the existing carrier-handoff workflow. Creating a sandbox label leaves that status unchanged.</p>
+        </>}
+    </div>;
 }

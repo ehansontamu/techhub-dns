@@ -1,0 +1,58 @@
+feat(shipping): combine orders by destination for FedEx sandbox labels
+
+Add a post-QA shipping workflow so staff can prepare packages, obtain the cheapest
+eligible FedEx account estimate, create a sandbox shipment, and print saved labels
+from the existing workstation queue.
+
+Destination selection and combined orders
+- Select by city, then saved location, and combine up to 50 selected QA-ready orders.
+- Keep Dallas 3300 and Dallas 3302 separate; auto-open a city's only waiting location.
+- Match delivery-address details to saved FedEx contact names and flag ambiguous addresses.
+- Preserve source order IDs and exact quantities when identical products share boxes.
+- Reserve every member against duplicate shipments; open the shared plan from any member.
+- Revalidate every member's QA, handoff state, items, and destination before submission.
+
+Shipping and package weights
+- Assign each picked physical unit to a numbered box or ship one unit in its own carton.
+- Calculate each package's weight from saved product weights and quantities only.
+- Do not collect dimensions, apply packing allowances, or allow manual weight overrides.
+- Validate complete item assignments and keep partial-order legs scoped to their own picks.
+- Offer only the cheapest eligible supported domestic USD service; remove premium selection.
+- Require explicit confirmation when the whole-shipment estimate exceeds $100.
+
+Recipient controls
+- Import the FedEx CSV address book once into persistent shared database storage.
+- Move uploads to Manage address book; ordinary shipments only search/select saved contacts.
+- Enforce saved-contact matching on the backend, not only through read-only form fields.
+- Allow admins an audited one-off address override without adding it to the shared book.
+
+FedEx, documents, and printing
+- Use sandbox-only Ship and Rates API clients with private backend credentials.
+- Preserve shipment requests/results, tracking numbers, PDF labels, and audit history.
+- Prevent duplicate shipment submissions; require review of uncertain carrier outcomes.
+- Reuse the existing print queue and Windows agent with a separate Brother QL-1110NWB label queue.
+- Support saved-label downloads and reprints without creating another shipment.
+- Preserve the separate dock/carrier-handoff workflow; label creation does not mark orders delivered.
+
+Database, documentation, and rollout
+- Add migrations 0023_add_shipments, 0024_shipping_contacts, and 0025_shipment_orders
+  for product weights, packing/shipment records, contacts, and unique order reservations.
+- Add 0026_shipping_delivery_merge to join the upstream delivery-evidence and
+  shipping migration branches without rewriting previously applied revisions.
+- Base the package on dev/main 347d92d6 and preserve the latest delivery-photo
+  evidence and attached-services QA changes.
+- Backfill existing single-order shipment reservations during migration 0025.
+- Document dev-branch cloning, ignore checks, patch application, commit/push steps,
+  automatic dev deployment, server-side secrets, printer setup, and acceptance checks.
+- Keep production FedEx shipping disabled and runtime credentials out of source control.
+
+Validation
+- 92 focused backend tests and 14 frontend regression tests passed, plus existing
+  error-handler checks and frontend lint/build.
+- Browser checks with mocked APIs covered saved contacts, admin restrictions,
+  city/location selection, combined product weights, cheapest-only pricing, and
+  high-cost confirmation/cancellation.
+- Migration upgrades passed from current dev, the previous shipping package, and
+  their common baseline on disposable SQLite databases.
+- Real FedEx sandbox requests, production MySQL deployment, and physical Brother
+  printing still require the configured dev account/server and workstation verification.

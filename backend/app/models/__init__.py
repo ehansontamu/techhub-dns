@@ -11,6 +11,9 @@ from app.models.user import User
 from app.models.session import Session
 from app.models.system_setting import SystemSetting
 from app.models.print_job import PrintJob
+from app.models.shipment import Shipment, ShippingProduct
+from app.models.shipping_contact import ShippingContact
+from app.models.shipment_order import ShipmentOrder
 from app.models.compatibility_editor import (
     CompatibilityCell,
     CompatibilityChangeRequest,
@@ -39,6 +42,10 @@ __all__ = [
     "Session",
     "SystemSetting",
     "PrintJob",
+    "Shipment",
+    "ShippingProduct",
+    "ShippingContact",
+    "ShipmentOrder",
     "CompatibilityCell",
     "CompatibilityChangeRequest",
     "CompatibilityComputer",

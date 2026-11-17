@@ -20,6 +20,9 @@ const DeliveryLayout = lazy(() => import("./pages/delivery/DeliveryLayout"));
 const DeliveryDispatchPage = lazy(() => import("./pages/delivery/Dispatch"));
 const DeliveryHistoryPage = lazy(() => import("./pages/delivery/History"));
 const Shipping = lazy(() => import("./pages/Shipping"));
+const ShippingWorkspace = lazy(() => import("./pages/ShippingWorkspace"));
+const ShippingProducts = lazy(() => import("./pages/ShippingProducts"));
+const ShippingContacts = lazy(() => import("./pages/ShippingContacts"));
 const Admin = lazy(() => import("./pages/Admin"));
 const Settings = lazy(() => import("./pages/Settings"));
 const Audit = lazy(() => import("./pages/audit/Audit"));
@@ -61,6 +64,9 @@ function AppRoutes() {
                 <Route path="runs/:runId" element={<DeliveryRunDetailPage />} />
             </Route>
             <Route path="/shipping" element={<ProtectedRoute><Shipping /></ProtectedRoute>} />
+            <Route path="/shipping/products" element={<ProtectedRoute><ShippingProducts /></ProtectedRoute>} />
+            <Route path="/shipping/contacts" element={<ProtectedRoute><ShippingContacts /></ProtectedRoute>} />
+            <Route path="/shipping/orders/:orderId" element={<ProtectedRoute><ShippingWorkspace /></ProtectedRoute>} />
             <Route path="/document-signing" element={<ProtectedRoute><DocumentSigningPage /></ProtectedRoute>} />
             <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
             <Route path="/admin" element={<ProtectedRoute><Admin /></ProtectedRoute>} />

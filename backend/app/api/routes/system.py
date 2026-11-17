@@ -204,19 +204,18 @@ def _send_picklist_pdf(file_path: str, download_name: str):
             download_name=download_name,
         )
 
-    storage_root = Path(settings.storage_root).resolve()
-    resolved_path = Path(file_path).resolve()
-    if not resolved_path.is_relative_to(storage_root):
-        abort(403, description="Access denied")
-
-    path = Path(file_path)
-    if path.exists():
-        return send_file(
-            path.resolve(),
-            mimetype="application/pdf",
-            as_attachment=False,
-            download_name=path.name,
-        )
+    if file_path:
+        storage_roots = (Path(settings.storage_root).resolve(), Path(settings.local_document_storage).resolve())
+        path = Path(file_path).resolve()
+        if not any(path.is_relative_to(root) for root in storage_roots):
+            abort(403, description="Access denied")
+        if path.is_file():
+            return send_file(
+                path,
+                mimetype="application/pdf",
+                as_attachment=False,
+                download_name=path.name,
+            )
 
     from app.services.sharepoint_service import get_sharepoint_service
 
@@ -1560,8 +1559,14 @@ def claim_next_print_job():
     db = get_db_session()
     try:
         service = PrintJobService(db)
+        payload = request.get_json(silent=True) or {}
+        document_types = payload.get("document_types", ["picklist"])
+        if (not isinstance(document_types, list) or not document_types
+                or any(kind not in ("picklist", "shipping_label") for kind in document_types)):
+            return jsonify({"error": "Invalid print document types"}), 400
         job = service.claim_next_pending_job(
-            claim_timeout_seconds=_get_print_agent_claim_timeout_seconds()
+            claim_timeout_seconds=_get_print_agent_claim_timeout_seconds(),
+            document_types=tuple(document_types),
         )
         if not job:
             db.commit()
@@ -1590,6 +1595,13 @@ def get_print_job_file(job_id: str):
     db = get_db_session()
     try:
         job = PrintJobService(db).get_job(job_id)
+        if getattr(job, "document_type", None) == "shipping_label":
+            from io import BytesIO
+            from app.services.shipment_service import ShipmentService
+
+            shipment_id, index = job.file_path.removeprefix("fedex://").split("/")
+            content = ShipmentService(db).label(shipment_id, int(index))
+            return send_file(BytesIO(content), mimetype="application/pdf", download_name=f"sandbox-box-{int(index) + 1}.pdf")
         file_path = job.file_path or ""
         order = job.order
         download_name = f"{(order.inflow_order_id if order else None) or job.id}.pdf"
