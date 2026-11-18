@@ -17,7 +17,12 @@ export default function ShippingContacts() {
     const query = useQuery({ queryKey: ["shipping-address-book", search], queryFn: () => shippingApi.addressBook(search) });
     const importing = useMutation({
         mutationFn: () => shippingApi.importContacts(file!),
-        onSuccess: result => { toast.success(`Saved ${result.imported} FedEx contacts`); void client.invalidateQueries({ queryKey: ["shipping-address-book"] }); },
+        onSuccess: result => {
+            toast.success(`Saved ${result.imported} FedEx contacts`);
+            for (const queryKey of [["shipping-address-book"], ["shipping-queue"], ["shipping-workspace"]]) {
+                void client.invalidateQueries({ queryKey });
+            }
+        },
         onError: (error: unknown) => toast.error(extractApiErrorMessage(error, "Address-book import failed")),
     });
     return <div className="mx-auto max-w-5xl space-y-6">
@@ -25,6 +30,7 @@ export default function ShippingContacts() {
         <h1 className="text-2xl font-semibold">Manage FedEx address book</h1>
         <p className="text-sm text-muted-foreground">Import once for the whole team. Contacts stay in the database between shipments and server restarts. Upload again only to add or refresh contacts. This is a saved copy of your FedEx address book, not a live sync.</p>
         {isAdmin && <section className="rounded-xl border border-border p-5 space-y-3">
+            <p className="text-sm text-muted-foreground">Upload FedExABExport.csv directly. Saved location nicknames are kept; no column editing is needed.</p>
             <label className="block text-sm">FedEx address-book CSV<Input type="file" accept=".csv,text/csv" onChange={e => setFile(e.target.files?.[0] ?? null)} /></label>
             <Button disabled={!file || importing.isPending} onClick={() => importing.mutate()}>{importing.isPending ? "Importing…" : "Import FedEx CSV"}</Button>
         </section>}

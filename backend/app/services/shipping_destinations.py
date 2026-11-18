@@ -10,6 +10,16 @@ def order_city(order):
     return " ".join(str(((order.inflow_data or {}).get("shippingAddress") or {}).get("city") or "").split())
 
 
+def postal_matches(left, right):
+    left = re.sub(r"[\s-]", "", str(left or ""))
+    right = re.sub(r"[\s-]", "", str(right or ""))
+    if not left or not right:
+        return True
+    if re.fullmatch(r"\d{5}(?:\d{4})?", left) and re.fullmatch(r"\d{5}(?:\d{4})?", right):
+        return left[:5] == right[:5] and (len(left) == 5 or len(right) == 5 or left == right)
+    return normalized(left) == normalized(right)
+
+
 def destination_contact(order, contacts):
     address = (order.inflow_data or {}).get("shippingAddress") or {}
     city = normalized(order_city(order))
@@ -19,10 +29,10 @@ def destination_contact(order, contacts):
     street = normalized(address.get("address1"))
     unit = normalized(address.get("address2"))
     state = normalized(address.get("stateProvince") or address.get("state"))
-    postal = normalized(address.get("postalCode"))
+    postal = address.get("postalCode")
     def compatible(contact):
         r = contact.recipient
-        return (not state or not normalized(r.get("state")) or state == normalized(r.get("state"))) and (not postal or not normalized(r.get("postal_code")) or postal == normalized(r.get("postal_code"))) and (not street or not normalized(r.get("address1")) or street == normalized(r.get("address1")))
+        return (not state or not normalized(r.get("state")) or state == normalized(r.get("state"))) and postal_matches(postal, r.get("postal_code")) and (not street or not normalized(r.get("address1")) or street == normalized(r.get("address1")))
     candidates = [c for c in candidates if compatible(c)]
     if unit:
         exact = [c for c in candidates if normalized(c.recipient.get("address2")) == unit]

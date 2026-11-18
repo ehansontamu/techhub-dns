@@ -20,18 +20,24 @@ from app.services.audit_service import AuditService
 from app.services.fedex_service import FedExRejected, FedExService, shipping_date
 from app.services.inflow_service import InflowService
 from app.services.shipping_destinations import destination_contact, normalized, order_city
+from app.services.shipping_product_identity import product_identity
 from app.utils.exceptions import ConflictError, ExternalServiceError, NotFoundError, ValidationError
 from app.utils.pdf_helpers import filter_picklines
 from app.utils.timezone import to_utc_iso_z
 
-def shipping_items(order: Order) -> list[dict]:
+def shipping_items(order: Order, products: dict | None = None) -> list[dict]:
     """Use only this leg's unshipped physical picks, never the full parent order."""
     data = order.inflow_data or {}
     details = {str(line.get("productId")): line for line in data.get("lines", []) if isinstance(line, dict)}
     items = {}
     for pick in filter_picklines(data, data.get("pickLines", [])):
         product_id = str(pick.get("productId") or "")
-        line = {**details.get(product_id, {}), **pick}
+        detail = details.get(product_id, {})
+        line = {**detail, **pick}
+        # Pick lines can contain only a partial product object (for example, SKU).
+        detail_product = detail.get("product") if isinstance(detail.get("product"), dict) else {}
+        pick_product = pick.get("product") if isinstance(pick.get("product"), dict) else {}
+        line["product"] = {**detail_product, **{key: value for key, value in pick_product.items() if value is not None and value != ""}}
         if not product_id or InflowService._is_service_line(line):
             continue
         quantity = Decimal(str((pick.get("quantity") or {}).get("standardQuantity", 0)))
@@ -39,11 +45,11 @@ def shipping_items(order: Order) -> list[dict]:
             continue
         if not quantity.is_finite() or quantity != int(quantity):
             raise ValidationError("Shipping requires whole-unit product quantities")
-        product = line.get("product") or {}
+        identity = product_identity(product_id, line, (products or {}).get(product_id))
         item = items.setdefault(product_id, {
             "product_id": product_id,
-            "name": line.get("description") or product.get("name") or product_id,
-            "sku": product.get("sku") or "",
+            "name": identity.name,
+            "sku": identity.sku,
             "quantity": 0,
         })
         item["quantity"] += int(quantity)
@@ -108,6 +114,7 @@ class ShipmentService:
         contacts = self.db.query(ShippingContact).all()
         cities = {}
         unmatched = []
+        products = {product.product_id: product for product in self.db.query(ShippingProduct).all()}
         for order in orders:
             if order.shipping_workflow_status == ShippingWorkflowStatus.SHIPPED.value:
                 continue
@@ -115,7 +122,7 @@ class ShipmentService:
             shipment = self.get(order.id)
             row = {"id": order.id, "order_number": order.inflow_order_id, "recipient_name": order.recipient_name,
                    "address": (order.inflow_data or {}).get("shippingAddress") or {},
-                   "products": shipping_items(order), "shipment_id": shipment.id if shipment else None,
+                   "products": shipping_items(order, products), "shipment_id": shipment.id if shipment else None,
                    "shipment_order_id": shipment.order_id if shipment else None,
                    "shipment_status": shipment.status if shipment else None, "shipping_workflow_status": order.shipping_workflow_status}
             if matched is None:
@@ -165,7 +172,7 @@ class ShipmentService:
         products = {p.product_id: p for p in self.db.query(ShippingProduct).all()}
         items = [{**item, "weight_lb": float(products[item["product_id"]].weight_lb)
                   if item["product_id"] in products and products[item["product_id"]].weight_lb is not None else None}
-                 for member in members for item in [{**picked, "order_id": member.id, "order_number": member.inflow_order_id} for picked in shipping_items(member)]]
+                 for member in members for item in [{**picked, "order_id": member.id, "order_number": member.inflow_order_id} for picked in shipping_items(member, products)]]
         address = (order.inflow_data or {}).get("shippingAddress") or {}
         customer = (order.inflow_data or {}).get("customer") or {}
         country = str(address.get("country") or "US").strip()
@@ -195,24 +202,37 @@ class ShipmentService:
         return result
 
     def catalog(self) -> list[dict]:
-        # Reading this catalog doesn't sync or modify external systems.
+        # Local reads do not call Inflow or rewrite stored product identities/weights.
         products = {}
+        priorities = {}
         for (data,) in self.db.query(Order.inflow_data).filter(Order.inflow_data.isnot(None)).yield_per(200):
             for line in (data or {}).get("lines", []):
                 if not isinstance(line, dict) or InflowService._is_service_line(line):
                     continue
                 product_id = str(line.get("productId") or "")
-                product = line.get("product") or {}
-                if product_id:
-                    products[product_id] = {"product_id": product_id, "name": line.get("description") or product.get("name") or product_id,
-                                            "sku": product.get("sku") or "", "weight_lb": None, "updated_at": None}
+                if not product_id:
+                    continue
+                identity = product_identity(product_id, line)
+                previous = products.get(product_id)
+                if previous is None or identity.name_priority > priorities[product_id]:
+                    products[product_id] = {"product_id": product_id, "name": identity.name,
+                        "sku": identity.sku or (previous or {}).get("sku", ""),
+                        "weight_lb": None, "updated_at": None}
+                    priorities[product_id] = identity.name_priority
+                elif not previous["sku"] and identity.sku:
+                    previous["sku"] = identity.sku
         for product in self.db.query(ShippingProduct).all():
+            previous = products.get(product.product_id)
+            identity = product_identity(product.product_id, saved=product)
+            use_saved = previous is None or identity.name_priority >= priorities[product.product_id]
             products[product.product_id] = {
-                "product_id": product.product_id, "name": product.name, "sku": product.sku,
+                "product_id": product.product_id,
+                "name": identity.name if use_saved else previous["name"],
+                "sku": identity.sku or (previous or {}).get("sku", ""),
                 "weight_lb": float(product.weight_lb) if product.weight_lb is not None else None,
                 "updated_at": to_utc_iso_z(product.updated_at),
             }
-        return sorted(products.values(), key=lambda product: product["name"].lower())
+        return sorted(products.values(), key=lambda product: product["name"].casefold())
 
     def save_weight(self, product_id: str, update: ProductWeightUpdate, actor: str):
         if len(product_id) > 255 or not product_id.strip():
@@ -221,7 +241,8 @@ class ShipmentService:
         if product is None:
             product = ShippingProduct(product_id=product_id)
             self.db.add(product)
-        product.name, product.sku = update.name, update.sku
+        identity = product_identity(product_id, {"name": update.name, "sku": update.sku})
+        product.name, product.sku = identity.name, identity.sku
         product.weight_lb = Decimal(str(update.weight_lb)).quantize(Decimal("0.001"), rounding=ROUND_UP)
         product.updated_by, product.updated_at = actor, datetime.utcnow()
         AuditService(self.db).log_action("shipping_product", product_id, "weight_updated", actor,
@@ -253,8 +274,8 @@ class ShipmentService:
                         if product is None:
                             product = ShippingProduct(product_id=product_id)
                             self.db.add(product)
-                        product.name = record.get("name") or product_id
-                        product.sku = record.get("sku") or ""
+                        identity = product_identity(product_id, record)
+                        product.name, product.sku = identity.name, identity.sku
                         product.updated_by = actor
                         self.db.flush()
                         count += 1

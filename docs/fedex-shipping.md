@@ -71,6 +71,24 @@ fields, move it to the dock, fulfill Inflow, notify a customer, or book a pickup
 The existing manual carrier-handoff action remains available for normal operations.
 The sandbox request specifies an existing scheduled pickup; it does not create one.
 
+## Product names, SKUs, and saved weights
+
+The product list combines identities from locally synced order lines with any
+products imported from the active Inflow catalog. Products and unit weights are
+keyed by the Inflow product ID: the same product shares one weight across orders,
+while two different product IDs stay separate even if they have the same SKU.
+
+Product names use catalog/embedded product identity before short plain-text order
+labels. HTML specifications and long description bodies are never used as titles.
+When no usable name is available, the SKU (or product ID) appears until an admin
+uses **Import full Inflow catalog** to refresh product names. Importing preserves
+saved unit weights. The app does not extract or guess shipping weights from a
+specification's advertised product weight.
+
+Previously stored HTML names are resolved safely on read without deleting products
+or weights. No data migration is required for this naming correction. Names are
+shown as ordinary React text; the app does not render description HTML.
+
 ## Server setup
 
 Apply the additive migration using the existing deployment process:
@@ -186,6 +204,22 @@ contact. Without an ID, matching uses name/company/address. CSV formats without
 recognized headers are rejected with an explanation rather than guessing column
 positions. All rows are checked before database writes. The importer does not
 require FedEx API credentials and can be tested offline with fictional contacts.
+
+The native **FedExABExport.csv** format is also supported without editing:
+`Nickname`, `FullName`, `FirstName`, `LastName`, `AddressOne`, `AddressTwo`, `Zip`,
+`PhoneNumber`, `CountryCode`, and `ResidentialFlag` map to the saved contact.
+Nickname is the displayed/searchable location label (for example, Dallas 3302),
+while FullName remains the recipient printed on the shipment. If FullName is
+blank, first/last name, company, or nickname can provide the recipient name.
+
+Native `ResidentialFlag=R` means residential and `C` means commercial. Nine-digit
+US ZIPs are formatted as ZIP+4 with leading zeroes preserved; city/location
+matching accepts equivalent postal formatting and an omitted ZIP+4 extension.
+Extra empty trailing columns from FedEx are allowed; unexpected non-empty extra
+cells still stop the import. Unused billing, service, and notification preferences
+are ignored: shipments continue to use the app's configured account and cheapest
+eligible quoted service. Reimporting the same nickname updates its contact rather
+than creating another record. No new database migration is needed.
 
 Official FedEx address-book information: https://www.fedex.com/en-us/address-book.html
 

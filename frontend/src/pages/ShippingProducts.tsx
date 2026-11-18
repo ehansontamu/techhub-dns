@@ -18,7 +18,7 @@ function WeightRow({ product, canEdit, saved }: { product: ShippingProduct; canE
         onError: (error: unknown) => toast.error(extractApiErrorMessage(error, "Could not save weight")),
     });
     return <tr className="border-t border-border">
-        <td className="p-3"><div className="font-medium">{product.name}</div><div className="text-xs text-muted-foreground">{product.sku || product.product_id}</div></td>
+        <td className="p-3"><div className="font-medium break-words">{product.name}</div><div className="text-xs text-muted-foreground">{product.sku || product.product_id}</div></td>
         <td className="p-3"><Input aria-label={`Weight in pounds for ${product.name}`} type="number" min="0.001" max="150" step="0.001" value={weight} onChange={e => setWeight(e.target.value)} disabled={!canEdit} className="w-32" /></td>
         <td className="p-3">{product.weight_lb === null ? <span className="text-amber-600">Weight needed</span> : `${product.weight_lb} lb`}</td>
         <td className="p-3">{canEdit && <Button size="sm" disabled={mutation.isPending || !weight || Number(weight) <= 0 || Number(weight) > 150} onClick={() => mutation.mutate()}>Save weight</Button>}</td>
@@ -48,7 +48,7 @@ export default function ShippingProducts() {
             <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={missingOnly} onChange={e => setMissingOnly(e.target.checked)} />Missing weights only</label>
             {isAdmin && <Button variant="outline" disabled={importing.isPending} onClick={() => importing.mutate()}>{importing.isPending ? "Importing…" : "Import full Inflow catalog"}</Button>}
         </div>
-        <p className="text-xs text-muted-foreground">Products from synced orders appear automatically. Import adds the full active Inflow catalog without guessing weights. {isAdmin ? "" : "Ask an admin to maintain weights."}</p>
+        <p className="text-xs text-muted-foreground">Products from synced orders appear automatically. Import fills in Inflow product names and SKUs while keeping saved weights. A product shown by SKU is waiting for its name; weights are never guessed. {isAdmin ? "" : "Ask an admin to maintain weights."}</p>
         {query.isPending ? <p>Loading products…</p> : query.isError ? <p role="alert">Could not load products. <Button onClick={() => void query.refetch()}>Retry</Button></p> :
             <div className="overflow-x-auto rounded-xl border border-border"><table className="w-full text-left text-sm">
                 <thead className="bg-muted/40"><tr><th className="p-3">Product</th><th className="p-3">Unit weight (lb)</th><th className="p-3">Saved weight</th><th className="p-3">Action</th></tr></thead>

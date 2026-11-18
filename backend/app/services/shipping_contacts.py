@@ -13,15 +13,18 @@ from app.utils.exceptions import ValidationError
 MAX_CSV_BYTES = 4 * 1024 * 1024
 ALIASES = {
     "name": ("contactname", "recipientname", "fullname", "name"),
+    "nickname": ("nickname",),
+    "first_name": ("firstname", "givenname"),
+    "last_name": ("lastname", "surname"),
     "company": ("companyname", "company", "organization"),
     "phone": ("phonenumber", "phone", "telephone", "telephone1"),
-    "address1": ("addressline1", "address1", "streetaddress1", "streetaddress", "street"),
-    "address2": ("addressline2", "address2", "streetaddress2", "suite"),
+    "address1": ("addressline1", "address1", "addressone", "streetaddress1", "streetaddress", "street"),
+    "address2": ("addressline2", "address2", "addresstwo", "streetaddress2", "suite"),
     "city": ("city", "town"),
     "state": ("stateprovince", "stateprovincecode", "state", "province"),
     "postal_code": ("postalcode", "zipostalcode", "zippostalcode", "zipcode", "zip"),
     "country": ("countryterritory", "countrycode", "country"),
-    "residential": ("residential", "residentialaddress", "isresidential", "addresstype"),
+    "residential": ("residential", "residentialflag", "residentialaddress", "isresidential", "addresstype"),
     "source_id": ("contactid", "recipientid", "addressid", "nickname"),
 }
 
@@ -44,7 +47,7 @@ def parse_fedex_csv(content: bytes) -> list[dict]:
         mapping = {key: next((headers[normalized.index(alias)] for alias in aliases if alias in normalized), None)
                    for key, aliases in ALIASES.items()}
         missing = [key for key in ("address1", "city", "state", "postal_code", "country") if not mapping[key]]
-        if not mapping["name"] and not mapping["company"]:
+        if not any(mapping[key] for key in ("name", "company", "first_name", "last_name", "nickname")):
             missing.append("contact name or company")
         if missing:
             raise ValidationError("CSV columns were not recognized: " + ", ".join(missing)
@@ -53,25 +56,32 @@ def parse_fedex_csv(content: bytes) -> list[dict]:
         for row_number, row in enumerate(reader, 2):
             if row_number > 10001:
                 raise ValidationError("Import at most 10,000 contacts at once")
-            if None in row:
+            # Native FedEx exports can add unlabelled, empty trailing cells.
+            # Non-empty extras still indicate data that cannot be mapped safely.
+            extras = row.pop(None, [])
+            if any(str(value or "").strip() for value in extras):
                 raise ValidationError(f"CSV row {row_number} has too many columns; quote addresses containing commas")
             def value(key):
                 return (row.get(mapping[key]) or "").strip() if mapping[key] else ""
             if not any(str(v or "").strip() for v in row.values()):
                 continue
             recipient = {key: value(key) for key in ("name", "company", "phone", "address1", "address2", "city", "state", "postal_code", "country")}
-            recipient["name"] = recipient["name"] or recipient["company"]
+            nickname = value("nickname")
+            full_name = " ".join(part for part in (value("first_name"), value("last_name")) if part)
+            recipient["name"] = recipient["name"] or full_name or recipient["company"] or nickname
             if not recipient["name"] or not recipient["address1"]:
                 raise ValidationError(f"CSV row {row_number} needs a contact/company name and street address")
-            if any(len(v) > 500 for v in recipient.values()):
+            if any(len(v) > 500 for v in [*recipient.values(), nickname]):
                 raise ValidationError(f"CSV row {row_number} has a field longer than 500 characters")
             country = recipient["country"].upper()
             recipient["country"] = "US" if country in {"USA", "US", "UNITED STATES", "UNITED STATES OF AMERICA"} else country
             recipient["state"] = recipient["state"].upper()
+            if recipient["country"] == "US" and re.fullmatch(r"\d{9}", recipient["postal_code"]):
+                recipient["postal_code"] = recipient["postal_code"][:5] + "-" + recipient["postal_code"][5:]
             recipient["residential"] = value("residential").lower() in {"y", "yes", "true", "1", "residential", "r"}
             identity = value("source_id") or json.dumps({key: recipient[key].casefold() for key in ("name", "company", "address1", "address2", "city", "state", "postal_code", "country")}, sort_keys=True)
             contact_id = hashlib.sha256(identity.encode()).hexdigest()
-            label = (recipient["name"] + (" — " + recipient["company"] if recipient["company"] and recipient["company"] != recipient["name"] else ""))[:500]
+            label = (nickname or (recipient["name"] + (" — " + recipient["company"] if recipient["company"] and recipient["company"] != recipient["name"] else "")))[:500]
             contacts[contact_id] = {"id": contact_id, "label": label, "recipient": recipient}
     except csv.Error as exc:
         raise ValidationError("The file is not a valid comma-separated CSV") from exc
@@ -87,7 +97,7 @@ def import_fedex_contacts(db, content: bytes, actor: str) -> int:
             record = ShippingContact(id=item["id"])
             db.add(record)
         record.label, record.recipient = item["label"], item["recipient"]
-        record.search_text = " ".join(str(v) for v in item["recipient"].values()).lower()
+        record.search_text = " ".join([record.label, *(str(v) for v in item["recipient"].values())]).lower()
         record.imported_by, record.imported_at = actor, datetime.utcnow()
     AuditService(db).log_system_action("fedex_contacts_imported", user_id=actor, audit_metadata={"count": len(contacts)})
     db.commit()
