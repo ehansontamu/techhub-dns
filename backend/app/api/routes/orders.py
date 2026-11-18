@@ -1,3 +1,6 @@
+import io
+import json
+
 from flask import Blueprint, request, jsonify, abort, send_file, current_app, g
 from flask_socketio import emit
 from sqlalchemy import or_, func
@@ -1241,6 +1244,21 @@ def sign_order(order_id):
         })
 
 
+@bp.route("/<order_id>/reusable-delivery-photos", methods=["GET"])
+@require_auth
+def reusable_delivery_photos(order_id):
+    with get_db() as db:
+        return jsonify(DeliveryEvidenceService(db).reusable_photos(order_id))
+
+
+@bp.route("/<order_id>/reusable-delivery-photos/<source_id>/<checksum>", methods=["GET"])
+@require_auth
+def reusable_delivery_photo(order_id, source_id, checksum):
+    with get_db() as db:
+        content = DeliveryEvidenceService(db).reusable_photo_content(order_id, source_id, checksum)
+        return send_file(io.BytesIO(content), mimetype="image/jpeg", max_age=0)
+
+
 @bp.route("/<order_id>/delivery-evidence/<record_id>/complete", methods=["POST"])
 @require_auth
 def complete_delivery_evidence(order_id, record_id):
@@ -1256,6 +1274,13 @@ def complete_delivery_evidence(order_id, record_id):
             if any(key != "photos" for key in request.files):
                 raise ValidationError("Upload photos using the photos field")
             skip_reason = request.form.get("skip_reason")
+            reuse_raw = request.form.get("reuse_photos", "[]")
+            if len(reuse_raw) > 10000:
+                raise ValidationError("Too many reusable photo references")
+            try:
+                reuse_photos = json.loads(reuse_raw)
+            except ValueError as exc:
+                raise ValidationError("Invalid reusable photo references") from exc
         else:
             data = request.get_json()
             if data is None:
@@ -1263,12 +1288,15 @@ def complete_delivery_evidence(order_id, record_id):
             if not isinstance(data, dict):
                 raise ValidationError("Delivery proof data must be a JSON object")
             skip_reason = data.get("skip_reason")
+            reuse_photos = data.get("reuse_photos", [])
+        if not isinstance(reuse_photos, list) or len(reuse_photos) > 10:
+            raise ValidationError("A delivery can reuse at most 10 photos")
         if skip_reason is not None and not isinstance(skip_reason, str):
             raise ValidationError("Photo skip reason must be text")
         actor = get_current_user_email() or get_current_user_display_name() or "system"
         with get_db() as db:
             order, record = DeliveryEvidenceService(db).complete(
-                order_id, record_id, uploads, skip_reason, actor
+                order_id, record_id, uploads, skip_reason, actor, reuse_photos
             )
             proof_of_delivery_updated = False
             if order.inflow_sales_order_id:

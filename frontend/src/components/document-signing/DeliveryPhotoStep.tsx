@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Camera, Upload, X } from "lucide-react";
 
-import { ordersApi } from "../../api/orders";
+import { ordersApi, type ReusableDeliveryPhotoOrder } from "../../api/orders";
 import type { DeliveryEvidence } from "../../types/order";
 import { OrderStatus } from "../../types/order";
 import { extractApiErrorMessage } from "../../utils/apiErrors";
@@ -22,9 +22,19 @@ export function DeliveryPhotoStep({ orderId, evidence, onComplete }: Props) {
     const [saving, setSaving] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [orderChanged, setOrderChanged] = useState(false);
+    const [previousOrders, setPreviousOrders] = useState<ReusableDeliveryPhotoOrder[]>([]);
+    const [selectedPrevious, setSelectedPrevious] = useState<Array<{ source_order_id: string; sha256: string }>>([]);
     const cameraRef = useRef<HTMLInputElement>(null);
     const uploadRef = useRef<HTMLInputElement>(null);
-    const selectionLimit = 10 - evidence.photos.length;
+    const selectionLimit = 10 - record.photos.length;
+
+    useEffect(() => {
+        let active = true;
+        void ordersApi.getReusableDeliveryPhotos(orderId)
+            .then(items => { if (active) setPreviousOrders(items); })
+            .catch(() => { if (active) setPreviousOrders([]); });
+        return () => { active = false; };
+    }, [orderId]);
 
     useEffect(() => {
         const urls = photos.map(photo => URL.createObjectURL(photo));
@@ -35,7 +45,7 @@ export function DeliveryPhotoStep({ orderId, evidence, onComplete }: Props) {
     function addPhotos(input: HTMLInputElement) {
         const selected = Array.from(input.files || []);
         input.value = "";
-        if (photos.length + selected.length > selectionLimit) {
+        if (photos.length + selectedPrevious.length + selected.length > selectionLimit) {
             setError("A delivery can have at most 10 photos.");
             return;
         }
@@ -51,11 +61,26 @@ export function DeliveryPhotoStep({ orderId, evidence, onComplete }: Props) {
         setPhotos(previous => [...previous, ...selected]);
     }
 
+    function togglePrevious(source_order_id: string, sha256: string) {
+        const exists = selectedPrevious.some(item => item.source_order_id === source_order_id && item.sha256 === sha256);
+        if (exists) {
+            setSelectedPrevious(items => items.filter(item => item.source_order_id !== source_order_id || item.sha256 !== sha256));
+            return;
+        }
+        if (photos.length + selectedPrevious.length >= selectionLimit) {
+            setError("A delivery can have at most 10 photos.");
+            return;
+        }
+        setError(null);
+        setSelectedPrevious(items => [...items, { source_order_id, sha256 }]);
+    }
+
     async function complete() {
         setSaving(true);
         setError(null);
         try {
-            await ordersApi.completeDeliveryEvidence(orderId, record.id, skip ? [] : photos, skip ? reason.trim() : undefined);
+            await ordersApi.completeDeliveryEvidence(orderId, record.id, skip ? [] : photos,
+                skip ? reason.trim() : undefined, skip ? [] : selectedPrevious);
             onComplete();
         } catch (uploadError: unknown) {
             setError(extractApiErrorMessage(uploadError, "Unable to complete delivery. Your signature is saved; retry the photo upload."));
@@ -82,7 +107,7 @@ export function DeliveryPhotoStep({ orderId, evidence, onComplete }: Props) {
         }
     }
 
-    const canComplete = skip ? reason.trim().length > 0 : photos.length + record.photos.length > 0;
+    const canComplete = skip ? reason.trim().length > 0 : photos.length + selectedPrevious.length + record.photos.length > 0;
 
     return (
         <section className="mx-auto max-w-3xl space-y-5 rounded-2xl border border-border/70 bg-card p-6">
@@ -104,14 +129,38 @@ export function DeliveryPhotoStep({ orderId, evidence, onComplete }: Props) {
                         aria-label="Upload delivery photos" className="sr-only" disabled={saving || orderChanged}
                         onChange={event => addPhotos(event.currentTarget)} />
                     <div className="flex flex-wrap gap-2">
-                        <Button variant="outline" disabled={saving || orderChanged || photos.length >= selectionLimit} onClick={() => cameraRef.current?.click()}>
+                        <Button variant="outline" disabled={saving || orderChanged || photos.length + selectedPrevious.length >= selectionLimit} onClick={() => cameraRef.current?.click()}>
                             <Camera className="mr-2 h-4 w-4" />Take photo
                         </Button>
-                        <Button variant="outline" disabled={saving || orderChanged || photos.length >= selectionLimit} onClick={() => uploadRef.current?.click()}>
+                        <Button variant="outline" disabled={saving || orderChanged || photos.length + selectedPrevious.length >= selectionLimit} onClick={() => uploadRef.current?.click()}>
                             <Upload className="mr-2 h-4 w-4" />Upload photos
                         </Button>
                     </div>
-                    <p className="text-sm">{photos.length} selected · {record.photos.length} saved in the delivery bundle</p>
+                    <p className="text-sm">{photos.length + selectedPrevious.length} selected · {record.photos.length} saved in the delivery bundle</p>
+                    {previousOrders.length > 0 && (
+                        <div className="space-y-3 rounded-lg border p-3">
+                            <h2 className="text-sm font-semibold">Use photos from this delivery run</h2>
+                            {previousOrders.map(previous => (
+                                <div key={previous.order_id} className="space-y-2">
+                                    <p className="text-xs text-muted-foreground">Order {previous.order_number}{previous.delivery_location ? ` · ${previous.delivery_location}` : ""}</p>
+                                    <div className="flex flex-wrap gap-2">
+                                        {previous.photos.map((photo, index) => {
+                                            const selected = selectedPrevious.some(item => item.source_order_id === previous.order_id && item.sha256 === photo.sha256);
+                                            return <button key={photo.sha256} type="button" aria-pressed={selected}
+                                                aria-label={`Use photo ${index + 1} from order ${previous.order_number}`}
+                                                disabled={saving || orderChanged}
+                                                onClick={() => togglePrevious(previous.order_id, photo.sha256)}
+                                                className={`rounded border p-1 text-xs ${selected ? "border-primary ring-2 ring-primary" : "border-border"}`}>
+                                                <img src={`/api/orders/${orderId}/reusable-delivery-photos/${previous.order_id}/${photo.sha256}`}
+                                                    alt="" className="h-24 w-24 object-cover" />
+                                                {selected ? "Selected" : "Select"}
+                                            </button>;
+                                        })}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
                     {record.photos.length > 0 && (
                         <div className="flex flex-wrap gap-3">
                             {record.photos.every(photo => photo.url === record.bundle_path) ? (
@@ -139,7 +188,7 @@ export function DeliveryPhotoStep({ orderId, evidence, onComplete }: Props) {
                     </div>
                 </>
             )}
-            {record.photos.length === 0 && (
+            {record.photos.length === 0 && photos.length === 0 && selectedPrevious.length === 0 && (
                 <label className="flex items-center gap-2 text-sm">
                     <input type="checkbox" checked={skip} disabled={saving || orderChanged} onChange={event => setSkip(event.target.checked)} />
                     Skip photos and record a reason

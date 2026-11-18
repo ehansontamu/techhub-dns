@@ -20,6 +20,7 @@ from werkzeug.datastructures import FileStorage
 from app.database import Base
 from app.models.audit_log import AuditLog
 from app.models.order import Order, OrderStatus
+from app.models.delivery_run import DeliveryRun
 from app.schemas.order import OrderDetailResponse, SignatureData
 from app.schemas.delivery_run import OrderSummary
 from app.services.delivery_evidence_service import (
@@ -149,16 +150,17 @@ def test_photo_completion_and_no_local_archive(delivery, monkeypatch):
     assert len(result["photos"]) == 1
     assert result["photos"][0]["uploaded_by"] == "runner@example.test"
     assert sharepoint.folders == []
-    assert len(sharepoint.uploads) == 1
-    assert sharepoint.uploads[0][1:] == ("bundles", "TH1001_bundle.pdf")
-    assert len(PdfReader(io.BytesIO(sharepoint.uploads[0][0])).pages) == 3
-    assert result["photos"][0]["url"] == result["bundle_path"]
+    assert len(sharepoint.uploads) == 2
+    assert sharepoint.uploads[0][1] == "bundles"
+    assert sharepoint.uploads[1][1:] == ("bundles", "TH1001_bundle.pdf")
+    assert len(PdfReader(io.BytesIO(sharepoint.uploads[1][0])).pages) == 3
+    assert result["photos"][0]["url"] == f"https://sharepoint.test/bundles/{result['photos'][0]['filename']}"
     assert list(path.iterdir()) == []
 
 
 def test_bundle_upload_failure_retains_signature_and_retries(delivery, monkeypatch):
     db, order, record, service, path = delivery
-    sharepoint = SharePoint(fail_on=1)
+    sharepoint = SharePoint(fail_on=3)
     monkeypatch.setattr("app.services.delivery_evidence_service.get_sharepoint_service", lambda: sharepoint)
     with pytest.raises(ExternalServiceError, match="update delivery bundle"):
         service.complete(order.id, record["id"], [photo("red"), photo("blue")], None, "runner@example.test")
@@ -171,7 +173,7 @@ def test_bundle_upload_failure_retains_signature_and_retries(delivery, monkeypat
     order, result = service.complete(order.id, record["id"], [photo("red"), photo("blue")], None, "runner@example.test")
     assert order.status == "delivered"
     assert len(result["photos"]) == 2
-    assert len(sharepoint.uploads) == 1
+    assert len(sharepoint.uploads) == 5
     assert len(PdfReader(io.BytesIO(sharepoint.uploads[-1][0])).pages) == 4
 
 
@@ -222,8 +224,53 @@ def test_partial_leg_uses_original_order_folder(delivery, monkeypatch):
     monkeypatch.setattr("app.services.delivery_evidence_service.get_sharepoint_service", lambda: sharepoint)
     service.complete(order.id, record["id"], [photo()], None, "runner@example.test")
     assert sharepoint.uploads[0][1] == "bundles/TH1000_bundles"
-    assert len(sharepoint.uploads) == 1
+    assert len(sharepoint.uploads) == 2
     assert sharepoint.uploads[-1][1:] == ("bundles/TH1000_bundles", "TH1000-P1_bundle.pdf")
+
+
+def test_reuse_photos_only_from_completed_order_in_same_active_run(delivery, monkeypatch):
+    db, source, source_record, service, _path = delivery
+    run = DeliveryRun(name="Morning", runner="runner", vehicle="van", status="Active")
+    db.add(run)
+    db.flush()
+    source.delivery_run_id = run.id
+    target = Order(inflow_order_id="TH1002", status="in-delivery", qa_method="Delivery", delivery_run_id=run.id)
+    db.add(target)
+    db.commit()
+    sharepoint = SharePoint()
+    for folder in ("signed", "qa"):
+        sharepoint.files[(folder, f"TH1002_{folder}.pdf")] = sharepoint.files[(folder, f"TH1001_{folder}.pdf")]
+    monkeypatch.setattr("app.services.delivery_evidence_service.get_sharepoint_service", lambda: sharepoint)
+    assert service.reusable_photos(target.id) == []
+    service.complete(source.id, source_record["id"], [photo()], None, "runner@example.test")
+    choices = service.reusable_photos(target.id)
+    assert len(choices) == 1
+    checksum = choices[0]["photos"][0]["sha256"]
+    assert service.reusable_photo_content(target.id, source.id, checksum)
+    other_run = DeliveryRun(name="Afternoon", runner="runner", vehicle="van", status="Active")
+    db.add(other_run)
+    db.flush()
+    outsider = Order(inflow_order_id="TH1003", status="in-delivery", delivery_run_id=other_run.id)
+    db.add(outsider)
+    db.commit()
+    assert service.reusable_photos(outsider.id) == []
+    with pytest.raises(ValidationError, match="same|this delivery run"):
+        service.reusable_photo_content(outsider.id, source.id, checksum)
+    run.status = "Completed"
+    db.commit()
+    with pytest.raises(ValidationError, match="active delivery run"):
+        service.reusable_photo_content(target.id, source.id, checksum)
+    run.status = "Active"
+    db.commit()
+    monkeypatch.setattr(OrderService, "generate_bundled_documents", lambda *_args: (
+        "https://sharepoint.test/signed/TH1002_signed.pdf", "https://sharepoint.test/bundles/TH1002_bundle.pdf", None,
+    ))
+    target_record = service.stage_signature(target.id, SignatureData(signature_image="sig"), "runner@example.test")
+    target, result = service.complete(target.id, target_record["id"], [], None, "runner@example.test",
+                                      [{"source_order_id": source.id, "sha256": checksum}])
+    assert target.status == "delivered"
+    assert result["photos"][0]["source_order_id"] == source.id
+    assert len(PdfReader(io.BytesIO(sharepoint.uploads[-1][0])).pages) == 3
 
 
 def test_old_proof_cannot_complete_reopened_order(delivery):

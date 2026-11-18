@@ -6,7 +6,7 @@ import type { DeliveryEvidence } from "../../types/order";
 import { OrderStatus } from "../../types/order";
 import { DeliveryPhotoStep } from "./DeliveryPhotoStep";
 
-vi.mock("../../api/orders", () => ({ ordersApi: { completeDeliveryEvidence: vi.fn(), getOrder: vi.fn() } }));
+vi.mock("../../api/orders", () => ({ ordersApi: { completeDeliveryEvidence: vi.fn(), getOrder: vi.fn(), getReusableDeliveryPhotos: vi.fn() } }));
 
 const evidence: DeliveryEvidence = {
     id: "proof-1", signed_at: "2026-10-23T14:00:00Z", signed_by: "runner@example.test",
@@ -25,9 +25,25 @@ beforeEach(() => {
     Object.defineProperty(URL, "createObjectURL", { configurable: true, value: vi.fn(() => "blob:photo") });
     Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: vi.fn() });
     vi.mocked(ordersApi.completeDeliveryEvidence).mockResolvedValue({ success: true, message: "Delivered", delivery_evidence: evidence });
+    vi.mocked(ordersApi.getReusableDeliveryPhotos).mockResolvedValue([]);
 });
 
 describe("DeliveryPhotoStep", () => {
+    it("reuses a selected photo from the current run", async () => {
+        vi.mocked(ordersApi.getReusableDeliveryPhotos).mockResolvedValueOnce([{
+            order_id: "source-1", order_number: "TH1001", delivery_location: "Building A",
+            photos: [{ sha256: "abc", url: "https://sharepoint.test/photo.jpg" }],
+        }]);
+        const onComplete = setup();
+        fireEvent.click(await screen.findByRole("button", { name: "Use photo 1 from order TH1001" }));
+        expect(screen.getByRole("button", { name: "Complete delivery" })).toBeEnabled();
+        fireEvent.click(screen.getByRole("button", { name: "Complete delivery" }));
+        await waitFor(() => expect(onComplete).toHaveBeenCalledOnce());
+        expect(ordersApi.completeDeliveryEvidence).toHaveBeenCalledWith(
+            "order-1", "proof-1", [], undefined, [{ source_order_id: "source-1", sha256: "abc" }],
+        );
+    });
+
     it("requires a photo or nonblank skip reason, and submits the trimmed reason", async () => {
         const onComplete = setup();
         expect(screen.getByRole("button", { name: "Complete delivery" })).toBeDisabled();
@@ -38,7 +54,7 @@ describe("DeliveryPhotoStep", () => {
         fireEvent.change(reason, { target: { value: " Camera unavailable " } });
         fireEvent.click(screen.getByRole("button", { name: "Complete delivery" }));
         await waitFor(() => expect(onComplete).toHaveBeenCalledOnce());
-        expect(ordersApi.completeDeliveryEvidence).toHaveBeenCalledWith("order-1", "proof-1", [], "Camera unavailable");
+        expect(ordersApi.completeDeliveryEvidence).toHaveBeenCalledWith("order-1", "proof-1", [], "Camera unavailable", []);
     });
 
     it("previews and removes selected photos, accepts ten, and rejects eleven", () => {
@@ -73,7 +89,7 @@ describe("DeliveryPhotoStep", () => {
         expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
         fireEvent.click(screen.getByRole("button", { name: "Complete delivery" }));
         await waitFor(() => expect(onComplete).toHaveBeenCalledOnce());
-        expect(ordersApi.completeDeliveryEvidence).toHaveBeenLastCalledWith("order-1", "proof-1", files, undefined);
+        expect(ordersApi.completeDeliveryEvidence).toHaveBeenLastCalledWith("order-1", "proof-1", files, undefined, []);
     });
 
     it("allows a resumed delivery to complete with its already uploaded photo", async () => {
@@ -82,7 +98,7 @@ describe("DeliveryPhotoStep", () => {
         expect(screen.getByRole("button", { name: "Complete delivery" })).toBeEnabled();
         fireEvent.click(screen.getByRole("button", { name: "Complete delivery" }));
         await waitFor(() => expect(onComplete).toHaveBeenCalledOnce());
-        expect(ordersApi.completeDeliveryEvidence).toHaveBeenCalledWith("order-1", "proof-1", [], undefined);
+        expect(ordersApi.completeDeliveryEvidence).toHaveBeenCalledWith("order-1", "proof-1", [], undefined, []);
     });
 
     it("blocks retry when the order was reopened instead of reporting old proof as completion", async () => {

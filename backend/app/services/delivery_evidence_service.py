@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from werkzeug.datastructures import FileStorage
 
 from app.models.audit_log import AuditLog
+from app.models.delivery_run import DeliveryRunStatus
 from app.models.order import Order, OrderStatus
 from app.schemas.order import SignatureData
 from app.services.audit_service import AuditService
@@ -152,6 +153,53 @@ class DeliveryEvidenceService:
             description=description, audit_metadata=record,
         )
 
+    def reusable_photos(self, order_id: str) -> list[dict]:
+        target = self._order(order_id)
+        self._require_in_delivery(target)
+        if not target.delivery_run_id or not target.delivery_run or target.delivery_run.status != DeliveryRunStatus.ACTIVE.value:
+            return []
+        sources = self.db.query(Order).filter(
+            Order.delivery_run_id == target.delivery_run_id,
+            Order.id != target.id,
+            Order.status == OrderStatus.DELIVERED.value,
+        ).order_by(Order.updated_at.desc()).all()
+        result = []
+        for source in sources:
+            record = next((item for item in reversed(source.delivery_evidence or []) if item.get("completed_at") and item.get("photos")), None)
+            if not record:
+                continue
+            photos = [{"sha256": photo["sha256"], "url": photo["url"]}
+                      for photo in record["photos"] if photo.get("stored_file")]
+            if photos:
+                result.append({"order_id": source.id, "order_number": source.inflow_order_id or source.id,
+                               "delivery_location": source.delivery_location, "photos": photos})
+        return result
+
+    def _source_photo(self, target: Order, source_id: str, checksum: str) -> tuple[dict, str]:
+        if not target.delivery_run_id or not target.delivery_run or target.delivery_run.status != DeliveryRunStatus.ACTIVE.value:
+            raise ValidationError("Photo reuse is available only during an active delivery run")
+        source = self.db.query(Order).filter(
+            Order.id == source_id, Order.delivery_run_id == target.delivery_run_id,
+            Order.status == OrderStatus.DELIVERED.value,
+        ).first()
+        if not source or source.id == target.id:
+            raise ValidationError("Source order is not a completed order in this delivery run")
+        record = next((item for item in reversed(source.delivery_evidence or []) if item.get("completed_at") and item.get("photos")), None)
+        photo = next((item for item in record["photos"] if item.get("sha256") == checksum and item.get("stored_file")), None) if record else None
+        if not photo:
+            raise ValidationError("Source photo is not available for reuse")
+        folder, _ = self.orders._bundle_storage_location(source)
+        return photo, folder
+
+    def reusable_photo_content(self, order_id: str, source_id: str, checksum: str) -> bytes:
+        target = self._order(order_id)
+        self._require_in_delivery(target)
+        photo, folder = self._source_photo(target, source_id, checksum)
+        content = get_sharepoint_service().download_file(folder, photo["filename"])
+        if not content or hashlib.sha256(content).hexdigest() != checksum:
+            raise ExternalServiceError("SharePoint", "download reusable delivery photo")
+        return content
+
     @staticmethod
     def _attach_photos_to_bundle(order: Order, record: dict, photo_contents: dict[str, bytes],
                                  sharepoint, subfolder: str, legacy_subfolder: str):
@@ -201,13 +249,14 @@ class DeliveryEvidenceService:
             raise ExternalServiceError("SharePoint", "confirm delivery bundle update")
 
     def complete(self, order_id: str, record_id: str, uploads: list[FileStorage],
-                 skip_reason: str | None, actor: str) -> tuple[Order, dict]:
+                 skip_reason: str | None, actor: str, reuse_photos: list[dict] | None = None) -> tuple[Order, dict]:
+        reuse_photos = reuse_photos or []
         reason = (skip_reason or "").strip()
         if len(reason) > 1000:
             raise ValidationError("Photo skip reason must be 1000 characters or fewer")
-        if uploads and reason:
+        if (uploads or reuse_photos) and reason:
             raise ValidationError("Choose photos or a skip reason, not both")
-        if len(uploads) > MAX_PHOTOS:
+        if len(uploads) + len(reuse_photos) > MAX_PHOTOS:
             raise ValidationError("A delivery can have at most 10 photos")
 
         order = self._order(order_id)
@@ -218,7 +267,7 @@ class DeliveryEvidenceService:
         self._require_in_delivery(order)
         if reason and record["photos"]:
             raise ValidationError("Photos are already saved; complete delivery using those photos")
-        if not uploads and not reason and not record["photos"]:
+        if not uploads and not reuse_photos and not reason and not record["photos"]:
             raise ValidationError("At least one photo or a recorded skip reason is required")
         resolved_id = order.id
         subfolder, _family = self.orders._bundle_storage_location(order)
@@ -231,17 +280,36 @@ class DeliveryEvidenceService:
 
         # Validate every selected file before the first external write. No disk archive.
         photos = dict(normalize_photo(upload) for upload in uploads)
+        reused_sources = {}
+        for reference in reuse_photos:
+            if not isinstance(reference, dict) or not isinstance(reference.get("source_order_id"), str) or not isinstance(reference.get("sha256"), str):
+                raise ValidationError("Invalid reusable photo reference")
+            checksum = reference["sha256"]
+            source_id = reference["source_order_id"]
+            content = self.reusable_photo_content(resolved_id, source_id, checksum)
+            photos[checksum] = content
+            reused_sources[checksum] = source_id
         existing_hashes = {photo["sha256"] for photo in record["photos"]}
         if len(existing_hashes | photos.keys()) > MAX_PHOTOS:
             raise ValidationError("A delivery can have at most 10 photos")
         new_photos = {key: value for key, value in photos.items() if key not in existing_hashes}
-        for checksum in new_photos:
+        sharepoint = get_sharepoint_service() if new_photos else None
+        for checksum, content in new_photos.items():
+            filename = f"{safe_leg}_{record_id}_photo-{checksum}.jpg"
+            try:
+                photo_url = sharepoint.upload_file(content, subfolder, filename)
+            except Exception as exc:
+                raise ExternalServiceError("SharePoint", "save delivery photo") from exc
+            if not photo_url:
+                raise ExternalServiceError("SharePoint", "save delivery photo")
             record["photos"].append({
-                "url": record["bundle_path"],
-                "filename": f"{safe_leg}_{record_id}_photo-{checksum}.jpg",
+                "url": photo_url,
+                "filename": filename,
                 "sha256": checksum,
                 "uploaded_at": to_utc_iso_z(datetime.utcnow()),
                 "uploaded_by": actor,
+                "stored_file": True,
+                **({"source_order_id": reused_sources[checksum]} if checksum in reused_sources else {}),
             })
 
         order = self._order(resolved_id)
@@ -264,6 +332,8 @@ class DeliveryEvidenceService:
         record["completed_by"] = actor
         self._save_record(order, record)
         description = f"Delivery photos skipped: {reason}" if reason else "Delivery photo requirement completed"
+        if reused_sources:
+            description += f"; reused photos from order(s) {', '.join(sorted(set(reused_sources.values())))}"
         self._audit(order, actor, description, record)
         # transition_status commits the proof, audit, and status in one transaction.
         order = self.orders.transition_status(

@@ -3,6 +3,13 @@ import { Order, OrderDetail, OrderStatus, OrderStatusUpdate, OrderRollbackUpdate
 import { normalizeExpectedUpdatedAt } from "./expectedUpdatedAt";
 import type { DeliveryEvidence } from "../types/order";
 
+export interface ReusableDeliveryPhotoOrder {
+  order_id: string;
+  order_number: string;
+  delivery_location: string | null;
+  photos: Array<{ sha256: string; url: string }>;
+}
+
 function safeArray<T>(value: unknown): T[] {
   return Array.isArray(value) ? value : [];
 }
@@ -21,6 +28,11 @@ export const ordersApi = {
 
   getOrder: async (orderId: string): Promise<OrderDetail> => {
     const response = await apiClient.get<OrderDetail>(`/orders/${orderId}`);
+    return response.data;
+  },
+
+  getReusableDeliveryPhotos: async (orderId: string): Promise<ReusableDeliveryPhotoOrder[]> => {
+    const response = await apiClient.get<ReusableDeliveryPhotoOrder[]>(`/orders/${orderId}/reusable-delivery-photos`);
     return response.data;
   },
 
@@ -173,10 +185,12 @@ export const ordersApi = {
     return response.data;
   },
 
-  completeDeliveryEvidence: async (orderId: string, recordId: string, photos: File[], skipReason?: string) => {
+  completeDeliveryEvidence: async (orderId: string, recordId: string, photos: File[], skipReason?: string,
+    reusePhotos: Array<{ source_order_id: string; sha256: string }> = []) => {
     const payload = new FormData();
     photos.forEach(photo => payload.append("photos", photo));
     if (skipReason) payload.append("skip_reason", skipReason);
+      if (reusePhotos.length) payload.append("reuse_photos", JSON.stringify(reusePhotos));
     const response = await apiClient.post<{ success: boolean; message: string; delivery_evidence: DeliveryEvidence }>(
       `/orders/${orderId}/delivery-evidence/${recordId}/complete`, payload,
       { headers: { "Content-Type": "multipart/form-data" }, timeout: 10 * 60 * 1000 },
