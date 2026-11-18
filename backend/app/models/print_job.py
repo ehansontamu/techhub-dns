@@ -21,6 +21,7 @@ class PrintJobTriggerSource:
 
 class PrintJobDocumentType:
     PICKLIST = "picklist"
+    SHIPPING_LABEL = "shipping_label"
 
 
 class PrintJob(Base):

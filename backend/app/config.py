@@ -62,6 +62,13 @@ class Settings(BaseSettings):
     allowed_user_emails: Optional[str] = None
     picklist_print_agent_token: Optional[str] = None
 
+    # Initial FedEx rollout is sandbox-only. Production cannot be selected by a browser.
+    fedex_enabled: bool = False
+    fedex_client_id: Optional[str] = None
+    fedex_client_secret: Optional[str] = None
+    fedex_account_number: Optional[str] = None
+    fedex_shipper_json: Optional[str] = None
+
     # TAMU SMTP Email Configuration
     smtp_enabled: bool = False  # Safety: disabled by default
     smtp_host: str = "relay.tamu.edu"

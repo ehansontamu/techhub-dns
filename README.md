@@ -9,6 +9,7 @@ A comprehensive order fulfillment and delivery management system for Texas A&M U
 - [Overview](#overview)
 - [Using the App](#using-the-app)
 - [Features](#features)
+- [FedEx Sandbox Shipping and Pushing to Dev](#fedex-sandbox-shipping-and-pushing-to-dev)
 - [Architecture](#architecture)
 - [Quick Start](#quick-start)
 - [Configuration](#configuration)
@@ -185,6 +186,11 @@ Picked → QA → Shipping → Mark Shipped → Delivered (carrier handoff)
 
 ### Shipping Workflow
 
+The [FedEx sandbox shipping pilot](docs/fedex-shipping.md) adds a post-QA packing
+workspace with saved product weights, numbered boxes or product cartons,
+multi-package FedEx label creation, and Brother label printing through the existing
+workstation agent. Sandbox labels do not change real carrier-handoff records.
+
 - Work Area, Dock, and Shipped states; the queue provides a direct Mark Shipped action from Work Area or Dock
 - The API supports carrier and tracking fields, but the current Shipment Queue does not collect them
 - Marking an order Shipped to Carrier automatically sets its overall status to Delivered; this records carrier handoff, not confirmed arrival at the recipient
@@ -310,6 +316,61 @@ See [Product Checker](docs/product-checker.md) for comparison scope, exclusions,
 - Document storage for picklists, QA records, signed documents
 - Microsoft Graph API integration
 - Folder-based organization
+
+---
+
+## FedEx Sandbox Shipping and Pushing to Dev
+
+The shipping pilot adds a post-QA packing workspace. In **Shipping**, choose a
+**City**, then a named **Location** if the city has several destinations. Galveston
+can open its only saved location automatically; Dallas 3302 and Dallas 3300 stay
+separate. Select up to 50 orders for that location and **Pack N orders together**.
+Order delivery addresses match saved FedEx contact names; ambiguous addresses
+require review. Each product stays tied to its source order even inside shared boxes.
+Staff assign products to boxes or their own cartons; package weights use saved product weights
+and quantities only. There are no packing allowances, dimension inputs, or manual
+weight overrides. Only the cheapest eligible supported FedEx USD account estimate
+is offered. Quotes over $100 require an explicit confirmation before shipment creation.
+
+An admin imports the FedEx CSV address book once under **Shipping → Manage address
+book**. Contacts remain in the database between shipments. Standard users must
+select a saved contact and cannot edit recipient fields. Admins may enable an
+**audited one-off address override** without adding that destination to the book.
+
+FedEx shipment creation is **sandbox-only**. Saved 4 × 6 PDF labels are sent through
+the existing Windows print agent to a separately configured Brother QL-1110NWB
+queue; the existing picklist printer remains separate. Downloads/reprints reuse
+saved labels. Creating labels does not record a real carrier handoff or mark an
+order Delivered. A lost/uncertain carrier response blocks automatic resubmission.
+
+### Apply the package and push it to dev
+
+If you only have the change-files ZIP, first clone this repository and select
+**dev**. Check `.gitignore` before applying changes: `backend/.env` must be ignored
+and untracked. The ZIP is not itself a Git repository.
+
+Follow [the direct dev-push instructions](docs/setup/fedex-dev-push.md) for GitHub
+Desktop and terminal steps, selecting the correct patch, reviewing changed files,
+and using the supplied detailed commit message. The message is also available at
+[docs/setup/fedex-commit-message.txt](docs/setup/fedex-commit-message.txt). A push has
+no independent name/description; the commit Summary and Description carry that information.
+
+**A push to dev automatically triggers the development deployment**, after its
+required checks, at https://dev-techhub.pythonanywhere.com. Main has a separate
+production deployment. Watch the matching GitHub Actions run; do not assume a
+successful push means the deployment or FedEx/printer setup has succeeded.
+
+The deployment script runs Alembic and builds the frontend. This feature adds
+`0023_add_shipments`, `0024_shipping_contacts`, `0025_shipment_orders`, and
+`0026_shipping_delivery_merge`. On the dev server, configure
+sandbox credentials privately in `backend/.env`, enable Ship and Rates API access,
+and configure/restart the test print agent for the dev URL and Brother queue.
+Do not put real API keys, `.env`, or agent tokens in a commit.
+
+See [FedEx shipping setup and recovery](docs/fedex-shipping.md) for environment
+variables, CSV import rules, printer setup, quote expiry, and manual reconciliation.
+Automated checks cover mocked integrations; real sandbox API access and physical
+label printing still require acceptance testing with the configured dev systems.
 
 ---
 

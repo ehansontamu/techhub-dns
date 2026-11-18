@@ -43,3 +43,7 @@ tasks/todo.md
 
 # Legacy Scripts
 legacy/
+
+# Workstation print-agent secrets and Python cache
+ops/print_agent/.env
+ops/print_agent/__pycache__/
