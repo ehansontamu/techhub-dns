@@ -582,25 +582,25 @@ def combined_plan(db):
             {"order_id": "order-2", "product_id": "laptop", "quantity": 1}])])
 
 
-def test_queue_separates_named_locations_and_excludes_unready_and_handed_off(db):
+def test_queue_lists_all_ready_orders_without_a_contact_match(db):
     first, second = destination_orders(db, "3300")
+    db.query(ShippingContact).delete()
+    db.commit()
     svc = service(db)
-    locations = svc.shipping_queue()["cities"][0]["locations"]
-    assert {row["name"]: [order["id"] for order in row["orders"]] for row in locations} == {
-        "Dallas 3300": ["order-2"], "Dallas 3302": ["order-1"]}
+    assert {row["id"] for row in svc.shipping_queue()["orders"]} == {"order-1", "order-2"}
     second.qa_completed_at = None
     first.shipping_workflow_status = "shipped"
     db.commit()
-    assert svc.shipping_queue() == {"cities": [], "unmatched": []}
+    assert svc.shipping_queue()["orders"] == []
 
 
-def test_ambiguous_city_goes_to_review_instead_of_guessing(db):
-    first, _ = destination_orders(db)
-    first.inflow_data = {**first.inflow_data, "shippingAddress": {"city": "Dallas", "address1": RECIPIENT["address1"]}}
+def test_incomplete_and_different_source_addresses_do_not_hide_orders(db):
+    first, second = destination_orders(db)
+    first.inflow_data = {**first.inflow_data, "shippingAddress": {"city": "Houston"}}
+    second.inflow_data = {**second.inflow_data, "shippingAddress": {"city": "Galveston"}}
     db.commit()
-    queue = service(db).shipping_queue()
-    assert [row["id"] for row in queue["unmatched"]] == ["order-1"]
-    assert len(queue["cities"][0]["locations"]) == 1
+    rows = service(db).shipping_queue()["orders"]
+    assert {row["id"]: row["city"] for row in rows} == {"order-1": "Houston", "order-2": "Galveston"}
 
 
 def test_location_identifier_can_match_contact_name(db):
@@ -612,7 +612,7 @@ def test_location_identifier_can_match_contact_name(db):
     assert destination_contact(first, db.query(ShippingContact).all()).id == "contact-1"
 
 
-def test_single_location_city_matches_and_prefills_saved_recipient(db):
+def test_order_selection_does_not_choose_contact_until_explicit_selection(db):
     first = db.get(Order, "order-1")
     contact = db.get(ShippingContact, "contact-1")
     contact.label = "Galveston"
@@ -621,8 +621,8 @@ def test_single_location_city_matches_and_prefills_saved_recipient(db):
     db.commit()
     svc = service(db)
     queue = svc.shipping_queue()
-    assert queue["cities"][0]["name"] == "Galveston"
-    assert len(queue["cities"][0]["locations"]) == 1
+    assert queue["orders"][0]["city"] == "Galveston"
+    assert svc.workspace(first.id, [first.id])["contact_id"] is None
     workspace = svc.workspace(first.id, [first.id], contact.id)
     assert workspace["contact_id"] == contact.id
     assert workspace["recipient"] == contact.recipient
@@ -662,13 +662,17 @@ def test_combined_products_require_exact_per_order_quantities(db, wrong_owner):
 
 
 @pytest.mark.parametrize("admin_override", [False, True])
-def test_different_locations_cannot_be_combined_even_by_admin(db, admin_override):
-    destination_orders(db, "3300")
+def test_selected_orders_with_different_source_locations_use_one_explicit_recipient(db, admin_override):
+    _, second = destination_orders(db, "3300")
+    second.inflow_data = {**second.inflow_data, "shippingAddress": {"city": "Galveston"}}
+    db.commit()
     draft = combined_plan(db)
     draft.manual_address_override = admin_override
-    with pytest.raises(ValidationError, match="same saved location"):
-        service(db, is_admin=admin_override).save_draft("order-1", draft, "staff")
-    assert db.query(Shipment).count() == 0
+    shipment = service(db, is_admin=admin_override).save_draft("order-1", draft, "staff")
+    assert shipment.draft["recipient"] == draft.recipient.model_dump()
+    assert shipment.draft["computed_boxes"][0]["shipping_weight_lb"] == 9.375
+    assert set(shipment.draft["order_ids"]) == {"order-1", "order-2"}
+    assert db.query(Shipment).count() == 1
 
 
 def test_member_already_reserved_rejects_entire_group(db):
@@ -685,7 +689,7 @@ def test_member_already_reserved_rejects_entire_group(db):
     assert svc.get("order-1") is None
 
 
-@pytest.mark.parametrize("change", ["qa", "location", "handoff"])
+@pytest.mark.parametrize("change", ["qa", "items", "handoff"])
 def test_each_member_is_revalidated_before_carrier_submission(db, change):
     _, second = destination_orders(db)
     svc = service(db)
@@ -696,7 +700,7 @@ def test_each_member_is_revalidated_before_carrier_submission(db, change):
     elif change == "handoff":
         second.shipping_workflow_status = "shipped"
     else:
-        second.inflow_data = {**second.inflow_data, "shippingAddress": {**second.inflow_data["shippingAddress"], "address2": "3300"}}
+        second.inflow_data = {**second.inflow_data, "pickLines": [line("laptop", 2)]}
     db.commit()
     with pytest.raises(ValidationError):
         svc.create("order-1", shipment.revision, "staff")
@@ -713,3 +717,73 @@ def test_removing_member_releases_only_that_order_reservation(db):
     svc.save_draft("order-1", single, "staff")
     assert svc.get("order-2") is None
     assert db.query(ShipmentOrder).count() == 1
+
+
+@pytest.mark.parametrize("explicit_order_ids", [False, True])
+def test_regular_user_can_choose_saved_recipient_for_unmatched_individual_order(db, explicit_order_ids):
+    """A different order requester/address must not block an explicit saved contact."""
+    csv = b"Contact ID,Contact Name,Phone Number,Address Line 1,City,State,Postal Code,Country\nGalveston,Saved Galveston Receiver,4095550100,100 Example Dock,Galveston,TX,77550,US\n"
+    import_fedex_contacts(db, csv, "admin")
+    chosen = saved_fedex_contacts(db, "Galveston")[0]
+    order = db.get(Order, "order-1")
+    order.recipient_name = "Different Order Requester"
+    order.inflow_data = {**order.inflow_data, "shippingAddress": {"city": "Houston", "address1": ""}}
+    db.commit()
+    draft = plan()
+    draft.contact_id = chosen["id"]
+    draft.recipient = type(draft.recipient).model_validate(chosen["recipient"])
+    if explicit_order_ids:
+        draft.order_ids = [order.id]
+    svc = service(db, is_admin=False)
+    shipment = svc.save_draft(order.id, draft, "regular-staff")
+    assert shipment.draft["recipient"] == chosen["recipient"]
+    assert shipment.draft["manual_address_override"] is False
+    assert svc.workspace(order.id)["shipment"]["draft"]["contact_id"] == chosen["id"]
+    svc.quote_rates(order.id, shipment.revision, "regular-staff")
+    assert svc.create(order.id, shipment.revision, "regular-staff").status == "created"
+    sent_draft = svc.carrier.build_request.call_args.args[0]
+    assert sent_draft["recipient"] == chosen["recipient"]
+    assert db.get(Order, order.id).recipient_name == "Different Order Requester"
+
+
+def test_source_address_change_does_not_retarget_an_explicit_batch_destination(db):
+    _, second = destination_orders(db)
+    svc = service(db)
+    shipment = svc.save_draft("order-1", combined_plan(db), "staff")
+    chosen = shipment.draft["recipient"]
+    svc.quote_rates("order-1", shipment.revision, "staff")
+    second.inflow_data = {**second.inflow_data, "shippingAddress": {"city": "Another City"}}
+    second.recipient_name = "Different Source Requester"
+    db.commit()
+    assert svc.create("order-1", shipment.revision, "staff").status == "created"
+    assert svc.carrier.build_request.call_args.args[0]["recipient"] == chosen
+
+
+def test_combined_orders_still_require_saved_contact_or_admin_override(db):
+    destination_orders(db)
+    draft = combined_plan(db)
+    draft.contact_id = None
+    with pytest.raises(ValidationError, match="Select a saved"):
+        service(db).save_draft("order-1", draft, "staff")
+    draft.manual_address_override = True
+    with pytest.raises(ValidationError, match="Only an admin"):
+        service(db, is_admin=False).save_draft("order-1", draft, "staff")
+
+
+def test_queue_marks_every_member_of_a_saved_batch_as_reserved(db):
+    destination_orders(db)
+    svc = service(db)
+    shipment = svc.save_draft("order-1", combined_plan(db), "staff")
+    rows = svc.shipping_queue()["orders"]
+    assert len(rows) == 2
+    assert {row["shipment_id"] for row in rows} == {shipment.id}
+    assert {row["shipment_order_id"] for row in rows} == {"order-1"}
+
+
+def test_detailed_setup_missing_fields_are_only_exposed_to_admins(db):
+    regular = service(db, is_admin=False)
+    regular.carrier.config_status.return_value = {"configured": False, "environment": "sandbox", "missing": ["fedex_client_id", "fedex_client_secret"]}
+    assert regular.workspace("order-1")["config"] == {"configured": False, "environment": "sandbox", "missing": []}
+    admin = service(db, is_admin=True)
+    admin.carrier.config_status.return_value = regular.carrier.config_status.return_value
+    assert admin.workspace("order-1")["config"]["missing"] == ["fedex_client_id", "fedex_client_secret"]

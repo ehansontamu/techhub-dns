@@ -66,6 +66,7 @@ export interface ShippingQueueOrder {
     id: string;
     order_number: string;
     recipient_name: string | null;
+    city: string;
     products: Array<{ product_id: string; name: string; quantity: number }>;
     shipment_id: string | null;
     shipment_order_id: string | null;
@@ -73,10 +74,7 @@ export interface ShippingQueueOrder {
     shipping_workflow_status: string | null;
 }
 export interface ShippingQueue {
-    cities: Array<{ key: string; name: string; locations: Array<{
-        contact_id: string; name: string; recipient: Recipient; orders: ShippingQueueOrder[];
-    }> }>;
-    unmatched: Array<ShippingQueueOrder & { city: string }>;
+    orders: ShippingQueueOrder[];
 }
 
 export interface ShippingWorkspace {

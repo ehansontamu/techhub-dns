@@ -27,13 +27,16 @@ export function SystemHealthCard({
               systemStatus.graph_api,
               systemStatus.sharepoint,
               systemStatus.inflow_sync,
+              ...(systemStatus.fedex ? [systemStatus.fedex] : []),
           ])
         : [];
 
     return (
         <Card className="border-border/70 bg-card/80">
             <CardHeader>
-                <CardTitle className="text-base">System status</CardTitle>
+                <div className="flex flex-wrap items-center justify-between gap-3"><CardTitle className="text-base">System status</CardTitle>
+                    {onRetry && <Button variant="outline" size="sm" onClick={onRetry} disabled={isLoading}>Refresh system status</Button>}
+                </div>
                 <CardDescription>Safe feature visibility without exposing credentials or secrets.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -80,6 +83,9 @@ export function SystemHealthCard({
                                     </div>
                                     <Badge variant={getStatusBadgeVariant(item.status)}>{formatStatusLabel(item.status)}</Badge>
                                 </div>
+                                {item.checks && <dl className="mt-3 space-y-2">{item.checks.map(check => <div key={check.setting} className="flex items-center justify-between gap-3 text-sm">
+                                    <dt>{check.label}</dt><dd className="font-medium">{formatStatusLabel(check.status)}</dd>
+                                </div>)}</dl>}
                                 <div className="mt-3 flex flex-wrap gap-2 text-xs text-muted-foreground">
                                     <span>Enabled: {item.enabled ? "Yes" : "No"}</span>
                                     <span>Configured: {item.configured ? "Yes" : "No"}</span>

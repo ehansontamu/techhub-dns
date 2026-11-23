@@ -41,7 +41,10 @@ export interface SystemFeatureStatus {
     name: string;
     enabled: boolean;
     configured: boolean;
-    status: "active" | "warning" | "disabled" | "error";
+    status: "active" | "warning" | "disabled" | "error" | "configured";
+    environment?: string;
+    connection_verified?: boolean;
+    checks?: Array<{ setting: string; label: string; status: "enabled" | "disabled" | "set" | "missing" | "valid" | "invalid" }>;
     details: string;
 }
 
@@ -50,6 +53,7 @@ export interface SystemStatusResponse {
     graph_api: SystemFeatureStatus;
     sharepoint: SystemFeatureStatus;
     inflow_sync: SystemFeatureStatus;
+    fedex?: SystemFeatureStatus;
 }
 
 export interface PrintJobRecord {

@@ -156,13 +156,21 @@ the dev URL and its matching agent token, keep the picklist printer under
 name. Use correctly sized stock and validate physical label fit/barcode scanning.
 Keep testing isolated from the production print worker.
 
+First, sign in as an admin and open **Settings → Overview → System status →
+FedEx Sandbox**, beside SharePoint. After the dev backend reloads, use **Refresh
+system status**. Check enabled, key/secret/account set, and sender valid without
+exposing values. Confirm a regular user cannot see or request the system-status
+report. **Configured** checks loaded settings only; getting a price tests FedEx
+authentication and Rates access.
+
 After deployment, verify with non-production order data:
 
-1. Choose City → saved Location → selected QA-completed orders. Galveston's single
-   waiting location opens automatically; Dallas 3300 and Dallas 3302 stay separate.
-   Combine two orders for one location and verify their products, source order
-   numbers, quantities, shared box weights, and existing-shipment links. Unmatched
-   addresses require review. A mixed-location request must be rejected by the API.
+1. Select several QA-completed orders directly by order number, including orders
+   with incomplete or different original destinations. Open their combined packing
+   workspace, choose the one saved shipping contact for the batch, and verify each
+   order's units, quantities and ownership. Create Box 3, Box 4 and further boxes
+   repeatedly and verify all product selectors offer them. Empty boxes must not
+   generate labels. Existing shipment members must reopen their shared shipment.
 2. Weights are the sum of saved per-product weights; no packing allowance or manual weight/dimension inputs.
 3. An admin imports FedEx contacts once through **Manage address book**. The contacts
    remain available on another shipment without another upload.
@@ -181,18 +189,17 @@ headers, sandbox variables, printer configuration, quote expiry, and handling
 uncertain carrier outcomes. Public/private `.env` settings and real hardware were
 not verified by the automated development checks.
 
-## November 17 refresh: current GitHub baseline
+## November 23 update: order-first selection and dynamic boxes
 
-The refreshed full patch targets dev/main commit
-`347d92d60617671dd247e7aa11be1cda38181636` (November 16). Pull the current dev
-branch before applying it. Delivery-photo evidence and attached-services QA remain
-included from upstream. Migration `0026_shipping_delivery_merge` joins the
-upstream delivery-evidence branch to the shipping branch; keep all migration files
-and run the usual `alembic upgrade head`.
+The current update targets dev commit
+`0ddabd3f7ed9cbefcbb658d4f6e10d7c8bc1ddc8`. Pull dev before applying the supplied
+order-first patch. This includes the automatic saved-contact picker, order-number
+multi-selection, explicit batch recipient, repeated numbered-box creation, and admin-only FedEx
+configuration diagnostics in Settings System status.
+It uses existing shipment/member storage and adds no database migration. Existing
+migrations through `0026_shipping_delivery_merge` remain necessary for shipping.
 
-If you already applied the preceding shipping ZIP, first bring your local dev up
-to this GitHub baseline while preserving your shipping changes. Then use only the
-incremental update patch. It was verified against that combined starting point.
-If your README has local edits, review any patch conflict instead of replacing it
-with an older copy. The ZIP does not include unrelated upstream files: obtain
-those by updating dev, rather than overlaying old versions from an earlier ZIP.
+Use the new order-first commit message supplied with the ZIP. If you already
+applied the preceding saved-contact-picker ZIP locally, use the incremental patch
+for that starting point; do not reapply both full patches. Preserve local work and
+resolve patch-check errors before continuing.

@@ -10,15 +10,17 @@ import { dedupeByName, formatStatusLabel, getStatusBadgeVariant } from "./utils"
 interface SettingsHeaderProps {
     syncHealth?: SyncHealthResponse | null;
     systemStatus?: SystemStatusResponse | null;
+    showSystemStatus?: boolean;
 }
 
-export function SettingsHeader({ syncHealth, systemStatus }: SettingsHeaderProps) {
-    const statusItems = systemStatus
+export function SettingsHeader({ syncHealth, systemStatus, showSystemStatus = true }: SettingsHeaderProps) {
+    const statusItems = showSystemStatus && systemStatus
         ? dedupeByName([
               systemStatus.saml_auth,
               systemStatus.graph_api,
               systemStatus.sharepoint,
               systemStatus.inflow_sync,
+              ...(systemStatus.fedex ? [systemStatus.fedex] : []),
           ])
         : [];
 
@@ -37,7 +39,7 @@ export function SettingsHeader({ syncHealth, systemStatus }: SettingsHeaderProps
                             <Badge variant={failedWebhook ? "warning" : "success"}>
                                 {failedWebhook ? "Webhook attention needed" : "Live operations"}
                             </Badge>
-                            <Badge variant="outline">{statusSummary}</Badge>
+                            {showSystemStatus && <Badge variant="outline">{statusSummary}</Badge>}
                             {systemStatus && warningCount ? <Badge variant="warning">{warningCount} warning{warningCount === 1 ? "" : "s"}</Badge> : null}
                         </div>
                         <h1 className="text-[clamp(1.75rem,4vw,2.5rem)] leading-none tracking-tight">Settings</h1>

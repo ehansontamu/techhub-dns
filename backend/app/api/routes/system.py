@@ -2249,6 +2249,7 @@ def get_system_status():
         "graph_api": _get_graph_status(),
         "sharepoint": _get_sharepoint_status(),
         "inflow_sync": _get_inflow_sync_status(),
+        "fedex": _get_fedex_status(),
     }
 
     return jsonify(status)
@@ -2725,6 +2726,21 @@ def deploy_webhook():
         ),
         410,
     )
+
+
+def _get_fedex_status():
+    """Admin-only system diagnostics; report presence, never credential values."""
+    from app.services.fedex_service import FedExService
+    setup = FedExService().setup_status()
+    enabled = bool(settings.fedex_enabled)
+    return {
+        "name": "FedEx Sandbox", "enabled": enabled, "configured": setup["configured"],
+        "status": "configured" if setup["configured"] else "warning" if enabled else "disabled",
+        "details": ("Configuration loaded. Authentication and Rates API access are verified by getting a price in packing."
+                    if setup["configured"] else "Setup incomplete. Update the dev server's backend/.env and reload the web app."),
+        "environment": setup["environment"], "connection_verified": setup["connection_verified"],
+        "checks": setup["checks"],
+    }
 
 
 def _get_saml_status():

@@ -1,11 +1,12 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { inflowApi } from "../api/inflow";
 import { ordersApi } from "../api/orders";
+import type { SystemStatusResponse } from "../api/settings";
 import { settingsApi } from "../api/settings";
 import { useAuth } from "../contexts/AuthContext";
 import { OperatorOverrideCard } from "../components/settings/OperatorOverrideCard";
@@ -52,6 +53,22 @@ const mockedInflowApi = vi.mocked(inflowApi);
 const mockedOrdersApi = vi.mocked(ordersApi);
 const mockedSettingsApi = vi.mocked(settingsApi);
 const mockedUseAuth = vi.mocked(useAuth);
+const fedexStatusFixture: SystemStatusResponse = {
+    saml_auth: { name: "TAMU SSO", enabled: true, configured: true, status: "active", details: "SSO ready" },
+    graph_api: { name: "Microsoft Graph", enabled: true, configured: true, status: "active", details: "Graph ready" },
+    sharepoint: { name: "SharePoint", enabled: true, configured: true, status: "active", details: "Connected to example SharePoint" },
+    inflow_sync: { name: "Inflow Sync", enabled: true, configured: true, status: "active", details: "Sync ready" },
+    fedex: { name: "FedEx Sandbox", enabled: true, configured: true, status: "configured",
+        details: "Configuration loaded. Authentication is verified by getting a price in packing.", environment: "sandbox", connection_verified: false,
+        checks: [
+            { setting: "FEDEX_ENABLED", label: "Shipping enabled", status: "enabled" },
+            { setting: "FEDEX_CLIENT_ID", label: "Sandbox API key", status: "set" },
+            { setting: "FEDEX_CLIENT_SECRET", label: "Sandbox API secret", status: "set" },
+            { setting: "FEDEX_ACCOUNT_NUMBER", label: "FedEx test account", status: "set" },
+            { setting: "FEDEX_SHIPPER_JSON", label: "Sender address and phone", status: "valid" },
+        ] },
+};
+
 
 function renderWithProviders(ui: ReactElement) {
     const client = new QueryClient({
@@ -200,6 +217,39 @@ describe("Settings", () => {
             inflow_order_id: "TH3001",
             assigned_deliverer: "New Driver",
         } as never);
+    });
+
+    it("shows redacted FedEx setup beside other admin system statuses", async () => {
+        mockedSettingsApi.getSystemStatus.mockResolvedValue(fedexStatusFixture);
+        renderWithProviders(<Settings />);
+        const key = await screen.findByText("Sandbox API key");
+        expect(within(key.parentElement!).getByText("Set")).toBeInTheDocument();
+        expect(screen.getAllByText("FedEx Sandbox")).toHaveLength(2);
+        expect(screen.getAllByText(/Authentication is verified/).length).toBeGreaterThan(0);
+        expect(screen.queryByPlaceholderText(/API key/i)).not.toBeInTheDocument();
+        fireEvent.click(screen.getByRole("button", { name: "Refresh system status" }));
+        await waitFor(() => expect(mockedSettingsApi.getSystemStatus).toHaveBeenCalledTimes(2));
+    });
+
+    it("shows a missing key explicitly to admins", async () => {
+        mockedSettingsApi.getSystemStatus.mockResolvedValue({ ...fedexStatusFixture, fedex: {
+            ...fedexStatusFixture.fedex!, configured: false, status: "warning",
+            checks: [{ setting: "FEDEX_CLIENT_ID", label: "Sandbox API key", status: "missing" }],
+        } });
+        renderWithProviders(<Settings />);
+        const key = await screen.findByText("Sandbox API key");
+        expect(within(key.parentElement!).getByText("Missing")).toBeInTheDocument();
+    });
+
+    it("does not request or display system credential diagnostics for non-admin users", async () => {
+        mockedUseAuth.mockReturnValue({ ...mockedUseAuth(), isAdmin: false });
+        mockedSettingsApi.getSystemStatus.mockResolvedValue(fedexStatusFixture);
+        renderWithProviders(<Settings />);
+        await screen.findByRole("heading", { name: "Settings" });
+        expect(mockedSettingsApi.getSystemStatus).not.toHaveBeenCalled();
+        expect(screen.queryByText("FedEx Sandbox")).not.toBeInTheDocument();
+        expect(screen.queryByText("Sandbox API key")).not.toBeInTheDocument();
+        expect(screen.queryByText("System status")).not.toBeInTheDocument();
     });
 
     it("renders the refined settings dashboard and major sections", async () => {

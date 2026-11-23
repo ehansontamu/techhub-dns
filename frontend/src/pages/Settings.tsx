@@ -13,7 +13,7 @@ import { RecoveryCard } from "../components/settings/RecoveryCard";
 import { OperatorOverrideCard } from "../components/settings/OperatorOverrideCard";
 
 export default function Settings() {
-    const { isLoading: authLoading } = useAuth();
+    const { isLoading: authLoading, isAdmin } = useAuth();
 
     const syncHealthQuery = useQuery({
         queryKey: ["settings", "sync-health"],
@@ -22,6 +22,7 @@ export default function Settings() {
     });
     const systemStatusQuery = useQuery({
         queryKey: ["settings", "system-status"],
+        enabled: !authLoading && isAdmin,
         queryFn: async () => settingsApi.getSystemStatus(),
         refetchInterval: 60_000,
     });
@@ -40,14 +41,14 @@ export default function Settings() {
     const overview = (
         <div className="grid gap-6 xl:grid-cols-[1.22fr_0.78fr]">
             <div className="space-y-6">
-                <SystemHealthCard
+                {isAdmin && <SystemHealthCard
                     syncHealth={syncHealthQuery.data}
                     systemStatus={systemStatusQuery.data}
                     isLoading={systemStatusQuery.isLoading}
                     isError={systemStatusQuery.isError}
                     errorMessage={systemStatusQuery.error instanceof Error ? systemStatusQuery.error.message : undefined}
                     onRetry={() => void systemStatusQuery.refetch()}
-                />
+                />}
                 <IntegrationSmokeTestsCard />
                 <RecoveryCard />
             </div>
@@ -69,7 +70,7 @@ export default function Settings() {
         <div className="relative mx-auto w-full max-w-7xl space-y-6 py-6 sm:py-8">
             <div className="pointer-events-none absolute inset-x-0 top-0 -z-10 h-72 bg-[radial-gradient(circle_at_top_left,rgba(194,154,74,0.16),transparent_42%),radial-gradient(circle_at_top_right,rgba(89,76,54,0.14),transparent_32%)]" />
 
-            <SettingsHeader syncHealth={syncHealthQuery.data} systemStatus={systemStatusQuery.data} />
+            <SettingsHeader syncHealth={syncHealthQuery.data} systemStatus={isAdmin ? systemStatusQuery.data : undefined} showSystemStatus={isAdmin} />
 
             <SettingsTabs overview={overview} advanced={advanced} />
         </div>

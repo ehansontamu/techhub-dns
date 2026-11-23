@@ -1,7 +1,7 @@
 # FedEx shipping pilot
 
 This change adds a packing workspace under **Shipping** after orders complete shipping QA.
-Staff choose a city, then a named saved destination, and select orders to pack together. It uses **FedEx sandbox only**.
+Staff select one or more orders first, pack their products, and choose the shared shipment recipient. It uses **FedEx sandbox only**.
 Sandbox tracking numbers and labels must not be used for real deliveries.
 
 ## Staff workflow
@@ -12,24 +12,21 @@ Sandbox tracking numbers and labels must not be used for real deliveries.
 2. Save each product's weight **per unit in pounds**, including manufacturer
    packaging that remains on the item. The catalog is keyed by Inflow product ID,
    so different products with the same name are independent.
-3. In **Shipping**, choose the destination **City**. If the city has one waiting
-   saved location, it opens automatically (for example, Galveston). If there are
-   several, choose the **Location**, such as **Dallas 3302** or **Dallas 3300**.
-   Locations are matched from order delivery-address fields and FedEx contact names.
-   Select the orders to combine, then click **Pack N orders together**. This is the
-   only selection method; order numbers identify the displayed rows.
-   Assign each unit to
-   Box 1, Box 2, etc., or **Use as box** for one product in its own shipping carton.
-   Two monitors shipped in their own cartons require two packages, not one package
-   containing two monitors. Partial orders use only that leg's unshipped picks;
-   service/imaging lines are excluded. Up to 50 orders for the same saved location
-   can share boxes and one FedEx shipment. Identical products on different orders
-   retain their own order IDs and quantities. Orders at different locations cannot
-   be combined, even when an admin uses a manual recipient override.
-   Ambiguous or unmatched destinations appear under **Address needs review**;
-   review the source order/shared book or prepare an individual shipment. The app
-   never combines all orders merely because their city names match. Existing
-   shipment members are reserved and reopen the same shipment from any member.
+3. In **Shipping**, select the ready orders by order number. All QA-completed
+   Shipping orders appear directly, including those with missing, ambiguous, or
+   different original addresses. Search by order number, select individual rows,
+   or use **Select shown orders**. Select up to 50 orders and choose **Pack N orders
+   together**. Existing shipment members reopen their saved shipment and cannot be
+   selected into a second shipment.
+   In packing, assign each unit to Box 1, Box 2, and further numbered boxes as
+   needed. Use **Add another box** repeatedly, or choose **New numbered box** in a
+   product's selector to create the next box and assign that unit immediately.
+   Every created box appears in every product selector; numbering is dynamic.
+   Unused boxes are omitted from the saved shipment and do not generate labels.
+   **Use as box** puts one product unit in its own carton. Two monitors in their
+   own cartons need two packages. Partial orders use only that leg's unshipped
+   picks; service/imaging lines are excluded. Units remain tied to their original
+   order IDs and exact quantities, including when the same SKU spans orders.
 4. Review package weights. Each package uses only `saved product weight × quantity`
    summed across its assigned items. No packing allowances, dimensions, or manual
    package-weight override are used. The calculated weight must be more than zero
@@ -37,15 +34,29 @@ Sandbox tracking numbers and labels must not be used for real deliveries.
 5. An admin imports the FedEx CSV once under **Shipping → Manage address book**.
    Contacts persist in the database across shipments and server restarts. The
    shipment screen has no upload field: staff search and choose saved contacts.
+   In **Confirm recipient**, saved contacts load automatically and the **Ship to
+   saved FedEx contact** selector is always shown. Search by city, location,
+   contact name, or address. Any staff member preparing a shipment can choose the
+   actual saved destination for all selected orders, even when the source orders
+   list different requesters, cities, or incomplete/unmatched addresses. For example, choose the saved
+   Galveston contact when orders use different requester names but ship to the
+   same receiver. Selecting it fills in that contact's recipient, phone, and
+   complete address without an admin override. All selected orders ship to that
+   one chosen recipient. The selection persists with the packing draft
+   and leaves original order/source details intact.
    Normal users cannot edit the recipient, phone, address, or residential flag.
    The backend checks the chosen contact exists and all recipient fields match
    before saving packing, requesting prices, or creating the shipment. If a saved
-   contact changes, reselect it and refresh the packing and quote.
+   contact changes, use **Use updated contact** to review its new details, then
+   save packing and refresh the quote.
    Admins can enable **One-off address override (admin only)** for exceptional
    destinations. This permits manual fields for that shipment without adding or
    editing the shared book; the override and actor are audited. An admin must
    complete that shipment. Ordinary users cannot enable this through the API.
    The address book is an imported copy, not a live FedEx synchronization.
+   Changing the chosen contact requires saving packing again and getting a fresh
+   price before shipment creation. Process orders for different actual recipients
+   as separate shipments; one packing batch has one explicit recipient.
 6. Select **Save packing & review totals**, then **Get FedEx prices**. Only the cheapest eligible whole-shipment USD account estimate is shown.
    The backend selects it automatically; operators cannot choose a higher-priced
    service. Previous multi-service quotes must be refreshed before shipping. Supported domestic parcel services include Ground/Home Delivery,
@@ -114,6 +125,24 @@ Do not put credentials into source control, frontend variables, or chat. The hos
 is fixed to `https://apis-sandbox.fedex.com`; browser requests cannot choose another
 account, sender, or endpoint. Production activation is deliberately outside this pilot.
 Without configuration, staff can still maintain weights and save packing plans.
+
+### Check loaded FedEx settings (admins only)
+
+Open **Settings → Overview → System status → FedEx Sandbox**, beside the existing
+SharePoint and Microsoft integration entries. **Refresh system status** reloads
+the backend's current configuration report. This entry is not on the Shipping page.
+
+The checks show shipping enabled/disabled, API key/secret/test account set/missing,
+and sender address/phone valid/invalid/missing. They never return credential values,
+account numbers, or sender details. The API enforces admin access, and ordinary
+users do not request or see these diagnostics.
+
+**Configured** means required settings are loaded and the sender structure is
+valid; it does not claim FedEx accepted the credentials. After a coworker edits the
+dev server's private `backend/.env`, reload the web app before refreshing this
+panel. Changing a local `.env` does not change the deployed server. Save a packing
+plan and choose **Get FedEx prices** to test OAuth and Rates API access. Create a
+sandbox shipment to verify Ship API access; printing needs the test workstation.
 
 ## Brother QL-1110NWB setup
 
@@ -213,8 +242,7 @@ while FullName remains the recipient printed on the shipment. If FullName is
 blank, first/last name, company, or nickname can provide the recipient name.
 
 Native `ResidentialFlag=R` means residential and `C` means commercial. Nine-digit
-US ZIPs are formatted as ZIP+4 with leading zeroes preserved; city/location
-matching accepts equivalent postal formatting and an omitted ZIP+4 extension.
+US ZIPs are formatted as ZIP+4 with leading zeroes preserved.
 Extra empty trailing columns from FedEx are allowed; unexpected non-empty extra
 cells still stop the import. Unused billing, service, and notification preferences
 are ignored: shipments continue to use the app's configured account and cheapest
@@ -223,29 +251,30 @@ than creating another record. No new database migration is needed.
 
 Official FedEx address-book information: https://www.fedex.com/en-us/address-book.html
 
-Packing allowance settings from older versions are ignored. Existing drafts must be saved again with a saved-contact selection or an authorized admin override before requesting new prices. Apply migration `0025_shipment_orders` before using city/location selection. It adds a unique reservation for each member order and backfills existing shipments.
+Packing allowance settings from older versions are ignored. Existing drafts must be saved again with a saved-contact selection or an authorized admin override before requesting new prices. Apply migration `0025_shipment_orders` before combining orders. It adds a unique reservation for each member order and backfills existing shipments.
 
-## Matching named destinations
+## Order-first batches and recipient choice
 
-City matching ignores case, punctuation, and repeated spaces. State, ZIP, and
-street details must agree when present; unit/address-line-2 matches take priority.
-A location identifier such as 3302 can match the saved contact name when carried
-in the delivery address or location text. A single compatible street-level contact
-can match without a unit; multiple candidates or conflicting details require review.
-The matcher intentionally does not fuzzy-match street abbreviations or guess a
-building from city alone. Keep order addresses and imported contact names consistent.
+The queue is based on shipping QA eligibility, not destination matching. Staff
+choose the orders first and select the actual saved recipient in the workspace.
+The source city/name/address remains available for reference, but does not gate
+selection or decide where the shipment goes. The final saved contact applies to
+every selected order and package. Staff can also use an admin-authorized one-off
+recipient for the batch. No automatic city or contact assignment is performed for
+new batches. Recipient choice is explicit and persisted with packing.
 
 Before quoting or submitting, the server rechecks every selected order's shipping
-QA, unshipped quantities, and saved location. Changes require review. A member can
-belong to only one shipment, and opening any member shows the complete shared plan.
+QA, handoff state, unshipped quantities, product weights, and saved recipient.
+Changed quantities or recipient details require review. A member can belong to
+only one shipment, and opening any member shows the complete shared plan.
 Saving a draft without a member releases that member's reservation; submitted or
 uncertain shipments cannot be edited to release orders. Label creation records
 shared tracking in every member's audit history and leaves carrier handoff separate.
 
-## Compatibility with current dev/main
+## Compatibility and migrations
 
-This package is based on commit `347d92d60617671dd247e7aa11be1cda38181636`
-(November 16, 2026), shared by dev and main when checked November 17. It preserves
+This order-first update targets dev commit
+`0ddabd3f7ed9cbefcbb658d4f6e10d7c8bc1ddc8`, checked November 23, 2026. It preserves
 the new delivery-photo evidence and attached-services QA features.
 
 The upstream `0023_delivery_evidence` migration and the existing shipping
@@ -254,3 +283,5 @@ migrations form two branches from `0022_compat_bundle_ready`.
 rewriting existing revisions. Run `alembic upgrade head` normally. This supports
 both a current dev database and a database that already tested the older shipping
 ZIP. Do not remove, stamp over, or manually rerun either branch.
+
+Order-first selection, the saved-contact picker, and dynamic box creation use existing shipment JSON and member reservations. This update adds no database migration.

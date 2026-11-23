@@ -19,7 +19,7 @@ from app.schemas.shipment import PackingDraft, ProductWeightUpdate, ShipmentReci
 from app.services.audit_service import AuditService
 from app.services.fedex_service import FedExRejected, FedExService, shipping_date
 from app.services.inflow_service import InflowService
-from app.services.shipping_destinations import destination_contact, normalized, order_city
+from app.services.shipping_destinations import order_city
 from app.services.shipping_product_identity import product_identity
 from app.utils.exceptions import ConflictError, ExternalServiceError, NotFoundError, ValidationError
 from app.utils.pdf_helpers import filter_picklines
@@ -97,44 +97,26 @@ class ShipmentService:
         if len(ids) != len(set(ids)) or order.id not in ids:
             raise ValidationError("Select distinct orders including the primary order")
         orders = [self.order(order_id, ready=True) for order_id in sorted(ids)]
-        if len(orders) > 1:
-            cities = {normalized(order_city(item)) for item in orders}
-            if len(cities) != 1 or not next(iter(cities)):
-                raise ValidationError("Combined orders must have the same destination city")
-            contacts = self.db.query(ShippingContact).all()
-            matches = [destination_contact(item, contacts) for item in orders]
-            matched_ids = {match.id for match in matches if match is not None}
-            if any(match is None for match in matches) or len(matched_ids) != 1 or (not draft.manual_address_override and draft.contact_id not in matched_ids):
-                raise ValidationError("Orders can only be combined for the same saved location; review unmatched addresses")
         return orders
 
     def shipping_queue(self) -> dict:
         orders = self.db.query(Order).filter(Order.status == "shipping", Order.qa_completed_at.isnot(None),
                     Order.qa_method == "Shipping", Order.hidden_from_ops.is_(False)).order_by(Order.inflow_order_id).all()
-        contacts = self.db.query(ShippingContact).all()
-        cities = {}
-        unmatched = []
         products = {product.product_id: product for product in self.db.query(ShippingProduct).all()}
+        rows = []
         for order in orders:
             if order.shipping_workflow_status == ShippingWorkflowStatus.SHIPPED.value:
                 continue
-            matched = destination_contact(order, contacts)
             shipment = self.get(order.id)
-            row = {"id": order.id, "order_number": order.inflow_order_id, "recipient_name": order.recipient_name,
-                   "address": (order.inflow_data or {}).get("shippingAddress") or {},
-                   "products": shipping_items(order, products), "shipment_id": shipment.id if shipment else None,
-                   "shipment_order_id": shipment.order_id if shipment else None,
-                   "shipment_status": shipment.status if shipment else None, "shipping_workflow_status": order.shipping_workflow_status}
-            if matched is None:
-                unmatched.append({**row, "city": order_city(order) or "City missing"})
-                continue
-            key = normalized(order_city(order))
-            city = cities.setdefault(key, {"key": key, "name": order_city(order), "locations": {}})
-            location = city["locations"].setdefault(matched.id, {"contact_id": matched.id, "name": matched.label,
-                                 "recipient": matched.recipient, "orders": []})
-            location["orders"].append(row)
-        return {"cities": [{**city, "locations": sorted(city["locations"].values(), key=lambda row: row["name"].casefold())}
-                           for city in sorted(cities.values(), key=lambda row: row["name"].casefold())], "unmatched": unmatched}
+            rows.append({"id": order.id, "order_number": order.inflow_order_id, "recipient_name": order.recipient_name,
+                "city": order_city(order), "address": (order.inflow_data or {}).get("shippingAddress") or {},
+                "products": shipping_items(order, products), "shipment_id": shipment.id if shipment else None,
+                "shipment_order_id": shipment.order_id if shipment else None,
+                "shipment_status": shipment.status if shipment else None,
+                "shipping_workflow_status": order.shipping_workflow_status})
+        # Keep former response keys for open browser tabs from before this deployment.
+        # New clients use the flat orders list and choose a shipment recipient explicitly.
+        return {"orders": rows, "cities": [], "unmatched": rows}
 
     @staticmethod
     def serialize(shipment: Shipment | None, db=None) -> dict | None:
@@ -186,7 +168,7 @@ class ShipmentService:
             "shipping_workflow_status": order.shipping_workflow_status,
             "eligible": all(member.status == "shipping" and bool(member.qa_completed_at) and member.qa_method == "Shipping" and member.shipping_workflow_status != ShippingWorkflowStatus.SHIPPED.value for member in members),
             "items": items, "shipment": self.serialize(self.get(order_id), self.db),
-            "config": self.carrier.config_status(),
+            "config": {**self.carrier.config_status(), **({} if self.is_admin else {"missing": []})},
             "recipient": {
                 "name": order.recipient_name or customer.get("name") or "",
                 "company": address.get("companyName") or "",

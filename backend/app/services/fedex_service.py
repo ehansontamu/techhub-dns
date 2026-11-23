@@ -52,7 +52,7 @@ class FedExService:
 
     def config_status(self) -> dict:
         missing = [name for name in ("fedex_client_id", "fedex_client_secret", "fedex_account_number", "fedex_shipper_json")
-                   if not getattr(settings, name, None)]
+                   if not str(getattr(settings, name, None) or "").strip()]
         if not settings.fedex_enabled:
             missing.append("fedex_enabled")
         if not missing:
@@ -61,6 +61,26 @@ class FedExService:
             except ValidationError:
                 missing.append("valid fedex_shipper_json")
         return {"configured": not missing, "missing": missing, "environment": self.environment}
+
+    def setup_status(self) -> dict:
+        """Report loaded configuration only; never expose values or contact FedEx."""
+        config = self.config_status()
+        checks = [{"setting": "FEDEX_ENABLED", "label": "Shipping enabled",
+                   "status": "enabled" if settings.fedex_enabled else "disabled"}]
+        for name, label in (("fedex_client_id", "Sandbox API key"),
+                            ("fedex_client_secret", "Sandbox API secret"),
+                            ("fedex_account_number", "FedEx test account")):
+            checks.append({"setting": name.upper(), "label": label,
+                           "status": "set" if str(getattr(settings, name, None) or "").strip() else "missing"})
+        sender_status = "missing"
+        if str(settings.fedex_shipper_json or "").strip():
+            try:
+                self.shipper()
+                sender_status = "valid"
+            except ValidationError:
+                sender_status = "invalid"
+        checks.append({"setting": "FEDEX_SHIPPER_JSON", "label": "Sender address and phone", "status": sender_status})
+        return {**config, "checks": checks, "connection_verified": False}
 
     def shipper(self) -> dict:
         try:

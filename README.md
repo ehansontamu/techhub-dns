@@ -321,21 +321,42 @@ See [Product Checker](docs/product-checker.md) for comparison scope, exclusions,
 
 ## FedEx Sandbox Shipping and Pushing to Dev
 
-The shipping pilot adds a post-QA packing workspace. In **Shipping**, choose a
-**City**, then a named **Location** if the city has several destinations. Galveston
-can open its only saved location automatically; Dallas 3302 and Dallas 3300 stay
-separate. Select up to 50 orders for that location and **Pack N orders together**.
-Order delivery addresses match saved FedEx contact names; ambiguous addresses
-require review. Each product stays tied to its source order even inside shared boxes.
-Staff assign products to boxes or their own cartons; package weights use saved product weights
-and quantities only. There are no packing allowances, dimension inputs, or manual
-weight overrides. Only the cheapest eligible supported FedEx USD account estimate
-is offered. Quotes over $100 require an explicit confirmation before shipment creation.
+The shipping pilot adds a post-QA packing workspace. In **Shipping**, select ready
+orders by order number, then **Pack N orders together**. All QA-completed shipping
+orders appear directly; matching an order's original address to the contact book
+is not required. Select up to 50 orders, pack their products, and choose the one
+saved FedEx recipient for that shipment. Source requester names/cities can differ;
+the explicitly selected recipient supplies the actual shipping address.
+
+Assign units to Box 1, Box 2, and additional numbered boxes as needed. **Add another
+box** creates the next number, and **New numbered box** in any product selector
+creates and assigns a new box in one step. Boxes are available to every product;
+empty boxes are omitted from the shipment. Products can also ship in their own
+cartons with **Use as box**. Per-order product ownership and saved weights remain
+intact when orders share packages. Weights use product quantities only, with no
+packing allowances, dimension inputs, or manual weight overrides. The cheapest
+eligible supported USD estimate is selected; quotes over $100 need confirmation.
 
 An admin imports the FedEx CSV address book once under **Shipping → Manage address
 book**. Contacts remain in the database between shipments. Standard users must
 select a saved contact and cannot edit recipient fields. Admins may enable an
 **audited one-off address override** without adding that destination to the book.
+Saved contacts load automatically in the packing workspace. Staff can choose the
+actual destination for the selected orders even when their requester names or source
+addresses differ, such as selecting the usual Galveston receiver. The selected
+contact fills in the recipient, phone, and address; typing a one-off address stays
+admin-only. Changing the chosen contact requires saving packing and refreshing
+prices before shipment creation.
+
+
+Admins can check loaded FedEx settings under **Settings → Overview → System status
+→ FedEx Sandbox**, alongside SharePoint and the other integrations. API key, secret
+and account show **Set** or **Missing**; sender details show **Valid**, **Invalid**
+or **Missing**. Values are never displayed. **Configured** confirms local setup,
+not FedEx authentication. Reload the dev backend after changing its private
+`backend/.env`, then use **Refresh system status**. Getting a price in packing
+verifies authentication and Rates API access. Regular users cannot view or request
+these diagnostics.
 
 FedEx shipment creation is **sandbox-only**. Saved 4 × 6 PDF labels are sent through
 the existing Windows print agent to a separately configured Brother QL-1110NWB

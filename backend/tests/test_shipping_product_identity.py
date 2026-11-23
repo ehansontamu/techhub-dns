@@ -96,7 +96,7 @@ def test_imported_catalog_name_is_used_in_queue_and_packing(db):
     svc = ShipmentService(db)
     assert svc.workspace(order.id)["items"][0]["name"] == "Dell UltraSharp 49 Monitor"
     assert svc.workspace(order.id)["items"][0]["weight_lb"] == 35.93
-    assert svc.shipping_queue()["unmatched"][0]["products"][0]["name"] == "Dell UltraSharp 49 Monitor"
+    assert svc.shipping_queue()["orders"][0]["products"][0]["name"] == "Dell UltraSharp 49 Monitor"
 
 
 def test_catalog_import_replaces_legacy_html_but_keeps_weight(db, monkeypatch):

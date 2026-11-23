@@ -1,0 +1,41 @@
+feat(shipping): add order batches, dynamic boxes and admin setup status
+
+Replace destination-first selection with a flat QA-ready order queue. Staff can
+select multiple orders even when Inflow addresses are incomplete or differ, pack
+them together, and explicitly choose the saved recipient for that shipment.
+
+Order selection and recipient
+- Show ready orders directly, search order numbers, and select up to 50 at once.
+- Remove automatic city/contact matching as a prerequisite for a combined batch.
+- Load saved contacts automatically; apply the chosen contact to every selected order.
+- Keep manual one-off address entry admin-only and preserve original source details.
+- Revalidate every member's QA, handoff state, quantities and recipient before shipping.
+- Preserve unique member reservations and links to existing shared shipments.
+
+Dynamic packing boxes
+- Offer Box 1 and Box 2 immediately and keep adding Box 3, Box 4 and further boxes.
+- Add numbered boxes repeatedly or create/assign one from a product's package selector.
+- Show available numbered boxes in every selector and omit unused boxes from labels.
+- Keep units linked to their source orders and calculate weights from saved products.
+
+Admin-only FedEx system status
+- Add FedEx Sandbox alongside SharePoint in Settings > Overview > System status.
+- Report enablement, key/secret/account presence and sender validity without values.
+- Reuse the admin-protected system API and hide the panel/query for regular users.
+- Refresh loaded settings without calling FedEx or claiming authentication succeeded.
+- Keep operational packing notices generic for regular users.
+
+Documentation and validation
+- Rewrite README and setup/workflow instructions around the final order-first flow.
+- Document Git Bash push steps, explicit batch recipient choice and dynamic boxes.
+- Preserve cheapest-only quotes, over-$100 confirmation and existing printer routing.
+- No new database migration. Integrations and printer output remain sandbox-tested
+  through mocks; real account/workstation acceptance still applies.
+
+Validation: 138 focused backend tests and 22 frontend settings/queue/packing tests passed,
+plus frontend lint/build, existing error-handler checks and a mocked Chromium
+flow through three orders, Box 1/2/3/7, an own carton, saved per-order quantities,
+19.5 lb combined weight, persisted box contents and the over-$100 confirmation.
+
+A separate mocked Chromium Settings check verified admin visibility, refresh,
+missing-key reporting and absence of system-status requests for regular users.

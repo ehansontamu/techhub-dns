@@ -19,7 +19,7 @@ export default function ShippingContacts() {
         mutationFn: () => shippingApi.importContacts(file!),
         onSuccess: result => {
             toast.success(`Saved ${result.imported} FedEx contacts`);
-            for (const queryKey of [["shipping-address-book"], ["shipping-queue"], ["shipping-workspace"]]) {
+            for (const queryKey of [["shipping-address-book"], ["shipping-order-contacts"], ["shipping-queue"], ["shipping-workspace"]]) {
                 void client.invalidateQueries({ queryKey });
             }
         },

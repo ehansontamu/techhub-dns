@@ -56,7 +56,7 @@ def import_products():
 def workspace(order_id):
     with get_db() as db:
         selected_ids = [value for value in request.args.get("orders", "").split(",") if value]
-        return jsonify(ShipmentService(db).workspace(order_id, selected_ids or None, request.args.get("contact")))
+        return jsonify(ShipmentService(db, is_admin=is_current_user_admin()).workspace(order_id, selected_ids or None, request.args.get("contact")))
 
 
 @bp.get("/queue")
